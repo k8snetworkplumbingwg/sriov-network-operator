@@ -71,7 +71,7 @@ spec:
                 properties:
                   deviceID:
                     description: The device hex code of SR-IoV device. Allowed value
-                      "0d58", "1572", "158b", "1013", "1015", "1017", "101b".
+                      "0d58", "1572", "158b", "1013", "1015", "1017", "101b", "1589".
                     type: string
                   netFilter:
                     description: Infrastructure Networking selection filter. Allowed
