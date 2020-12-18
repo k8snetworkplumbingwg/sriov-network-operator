@@ -29,6 +29,8 @@ jobs:
 
     - name: test pkg
       run: make test-pkg
+      shell: bash
     
     - name: test controllers on opensfhit
       run: CLUSTER_TYPE=openshift make test-controllers
+      shell: bash
