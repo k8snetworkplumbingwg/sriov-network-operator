@@ -28,9 +28,7 @@ jobs:
       run: IS_CONTAINER=yes make fmt
 
     - name: test pkg
-      run: make test-pkg
-      shell: bash
+      run: /bin/bash make test-pkg
     
     - name: test controllers on opensfhit
-      run: CLUSTER_TYPE=openshift make test-controllers
-      shell: bash
+      run: /bin/bash CLUSTER_TYPE=openshift make test-controllers
