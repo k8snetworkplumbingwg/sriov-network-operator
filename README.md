@@ -196,7 +196,7 @@ In this example, user selected the nic from vendor '8086' which is intel, device
 In a virtual deployment: 
 - The mtu of the PF is set by the underlying virtualization platform and cannot be changed by the sriov-network-operator.
 - The numVfs parameter has no effect as there is always 1 VF
-- The deviceType field depends upon whether the underlying device/driver is [native-bifurcating or non-bifurcating](https://doc.dpdk.org/guides/howto/flow_bifurcation.html) For example, the supported Mellanox devices support native-bifurcating drivers and therefore deviceType should be netdevice (default).  The support Intel devices are non-bifurcating and should be set to vfio-pci.
+- The deviceType field depends upon whether the underlying device/driver is [native-bifurcating or non-bifurcating](https://doc.dpdk.org/guides/howto/flow_bifurcation.html). For example, the supported Mellanox devices support native-bifurcating drivers and therefore deviceType should be netdevice (default).  The support Intel devices are non-bifurcating and should be set to vfio-pci.
 
 ## Components and design
 

@@ -10,8 +10,17 @@ jobs:
   label:
     runs-on: ubuntu-latest
     steps:
-      - uses: mheap/github-action-required-labels@v1.1.2
+      - uses: zwaldowski/match-label-action@v1
         with:
-          mode: exactly
-          count: 1
-          labels: "lgtm"
+          allowed: >
+            lgtm
+  mergepal-merge: # run merge pal in the end
+    runs-on: ubuntu-latest
+    needs:
+      # make sure all required jobs are listed here
+      - label
+    steps:
+      - uses: actions/checkout@v1
+      - uses: maxkomarychev/merge-pal-action@vX.Y.Z
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
