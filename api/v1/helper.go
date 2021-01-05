@@ -294,10 +294,11 @@ func UniqueAppend(inSlice []string, strings ...string) []string {
 func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, merge bool) {
 	s := p.Spec.NicSelector
 	if s.Vendor == "" && s.DeviceID == "" && len(s.RootDevices) == 0 && len(s.PfNames) == 0 &&
-		len(s.NetFilter) == 0 {
-		// Empty NicSelector match none
+		len(s.NetFilter) == 0 && p.Spec.RdmaMode == "" {
+		// Empty NicSelector match none and No RDMA namespace change
 		return
 	}
+	state.Spec.RdmaMode = p.Spec.RdmaMode
 	for _, iface := range state.Status.Interfaces {
 		if s.Selected(&iface) {
 			log.Info("Update interface", "name:", iface.Name)
@@ -521,6 +522,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	// TODO: this needs to be expanded if we want to support
 	// metaplugins for the infiniband cni
 	data.Data["MetaPluginsConfigured"] = false
+	data.Data["RdmaIsolation"] = cr.Spec.RdmaIsolation
 
 	objs, err = render.RenderDir(MANIFESTS_PATH, &data)
 	if err != nil {
@@ -647,6 +649,7 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPluginsConfigured"] = true
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
+	data.Data["RdmaIsolation"] = cr.Spec.RdmaIsolation
 
 	objs, err = render.RenderDir(MANIFESTS_PATH, &data)
 	if err != nil {

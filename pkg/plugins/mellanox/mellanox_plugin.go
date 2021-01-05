@@ -1,15 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/golang/glog"
+
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
 type MellanoxPlugin struct {
@@ -36,10 +36,18 @@ const (
 	MellanoxVendorId      = "15b3"
 )
 
+const (
+	rdmaServiceRunScriptPath = "/etc/init.d/sriov-network-rdma.sh"
+
+	rdmaSharedMode    = "shared"
+	rdmaExclusiveMode = "exclusive"
+)
+
 var Plugin MellanoxPlugin
 var attributesToChange map[string]mlnxNic
 var mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt
 var mellanoxNicsSpec map[string]sriovnetworkv1.Interface
+var newRdmaMode string
 
 // Initialize our plugin and set up initial values
 func init() {
@@ -93,6 +101,16 @@ func (p *MellanoxPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetwork
 		}
 	}
 
+	// Handle RDMA namespace mode change
+	needRdmaChange, err := handleRdmaMode(new.Spec.RdmaMode, new.Status.RdmaMode)
+	if err != nil {
+		return false, false, err
+	}
+	if needRdmaChange {
+		newRdmaMode = new.Spec.RdmaMode
+		needReboot = true
+	}
+
 	// Add only mellanox cards that required changes in the map, to help track dual port NICs
 	for _, iface := range new.Spec.Interfaces {
 		pciPrefix := getPciAddressPrefix(iface.PciAddress)
@@ -119,21 +137,24 @@ func (p *MellanoxPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetwork
 		isDualPort := isDualPort(ifaceSpec.PciAddress)
 		// Attributes to change
 		attrs := &mlnxNic{totalVfs: -1}
+		var changeWithReboot bool
 		var changeWithoutReboot bool
 
 		var totalVfs int
-		totalVfs, needReboot, changeWithoutReboot = handleTotalVfs(fwCurrent, fwNext, attrs, ifaceSpec, isDualPort)
-		sriovEnNeedReboot, sriovEnChangeWithoutReboot := handleEnableSriov(totalVfs, fwCurrent, fwNext, attrs)
-		needReboot = needReboot || sriovEnNeedReboot
+		totalVfs, changeWithReboot, changeWithoutReboot = handleTotalVfs(fwCurrent, fwNext, attrs, ifaceSpec, isDualPort)
+		needReboot = needReboot || changeWithReboot
+		changeWithReboot, sriovEnChangeWithoutReboot := handleEnableSriov(totalVfs, fwCurrent, fwNext, attrs)
+		needReboot = needReboot || changeWithReboot
 		changeWithoutReboot = changeWithoutReboot || sriovEnChangeWithoutReboot
 
 		needLinkChange, err := handleLinkType(pciPrefix, fwCurrent, attrs)
 		if err != nil {
 			return false, false, err
 		}
+		changeWithReboot = changeWithReboot || needLinkChange
 
 		needReboot = needReboot || needLinkChange
-		if needReboot || changeWithoutReboot {
+		if changeWithReboot || changeWithoutReboot {
 			attributesToChange[ifaceSpec.PciAddress] = *attrs
 		}
 	}
@@ -174,6 +195,12 @@ func (p *MellanoxPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetwork
 // Apply config change
 func (p *MellanoxPlugin) Apply() error {
 	glog.Info("mellanox-plugin Apply()")
+	if newRdmaMode != "" {
+		if err := changeRdmaMode(newRdmaMode); err != nil {
+			return err
+		}
+		newRdmaMode = ""
+	}
 	return configFW()
 }
 
@@ -200,7 +227,8 @@ func configFW() error {
 		if len(cmdArgs) <= 4 {
 			continue
 		}
-		_, err := runCommand("mstconfig", cmdArgs...)
+		stdout, _, err := utils.RunCommand("mstconfig", cmdArgs...)
+		glog.V(2).Infof("mellanox-plugin: configFW(): %s", stdout)
 		if err != nil {
 			glog.Errorf("mellanox-plugin configFW(): failed : %v", err)
 			return err
@@ -212,22 +240,9 @@ func configFW() error {
 func mstConfigReadData(pciAddress string) (string, error) {
 	glog.Infof("mellanox-plugin mstConfigReadData(): device %s", pciAddress)
 	args := []string{"-e", "-d", pciAddress, "q"}
-	out, err := runCommand("mstconfig", args...)
-	return out, err
-}
-
-func runCommand(command string, args ...string) (string, error) {
-	glog.Infof("mellanox-plugin runCommand(): %s %v", command, args)
-	var stdout, stderr bytes.Buffer
-
-	cmd := exec.Command(command, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	glog.V(2).Infof("mellanox-plugin: runCommand(): %s, %v", command, args)
-	err := cmd.Run()
-	glog.V(2).Infof("mellanox-plugin: runCommand(): %s", stdout.String())
-	return stdout.String(), err
+	stdout, _, err := utils.RunCommand("mstconfig", args...)
+	glog.V(2).Infof("mellanox-plugin: mstConfigReadData(): %s", stdout)
+	return stdout, err
 }
 
 func getMlnxNicFwData(pciAddress string) (current, next *mlnxNic, err error) {
@@ -440,4 +455,33 @@ func handleLinkType(pciPrefix string, fwData, attr *mlnxNic) (bool, error) {
 	}
 
 	return needReboot, nil
+}
+
+// handleRdmaMode change the rdma mode to shared or exclusive
+func handleRdmaMode(newRdmaMode, currentRdmaMode string) (bool, error) {
+	glog.Infof("mellanox-plugin handleRdmaMode(): newRdmaMode %s, currentRdmaMode %s", newRdmaMode, currentRdmaMode)
+	if newRdmaMode == "" || newRdmaMode == currentRdmaMode {
+		return false, nil
+	} else if newRdmaMode != rdmaSharedMode && newRdmaMode != rdmaExclusiveMode {
+		return false, fmt.Errorf("mellanox-plugin handleRdmaMode(): Unsupported RDMA mode %s, supported rdma modes are [shared, exclusive]", newRdmaMode)
+	}
+
+	glog.V(2).Infof("mellanox-plugin handleRdmaMode(): changing RdmaMode %s to %s, needs reboot", currentRdmaMode, newRdmaMode)
+	return true, nil
+}
+
+func changeRdmaMode(mode string) error {
+	if mode != rdmaSharedMode && mode != rdmaExclusiveMode {
+		return fmt.Errorf("mellanox-plugin changeRdmaMode(): unsupported RDMA mode %s, supported rdma modes are [shared, exclusive]", mode)
+	}
+	exit, err := utils.Chroot("/host")
+	if err != nil {
+		return err
+	}
+	defer exit()
+
+	sedCommand := fmt.Sprintf("sed -i 's/new_rdma_mode=.*/new_rdma_mode=%s/g' %s", mode, rdmaServiceRunScriptPath)
+	_, _, err = utils.RunCommand("/bin/sh", "-c", sedCommand)
+
+	return err
 }

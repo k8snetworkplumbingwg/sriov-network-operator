@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -462,8 +463,7 @@ func getVfInfo(pciAddr string, devices []*ghw.PCIDevice) sriovnetworkv1.VirtualF
 
 func LoadKernelModule(name string) error {
 	glog.Infof("LoadKernelModule(): try to load kernel module %s", name)
-	cmd := exec.Command("/bin/sh", scriptsPath, name)
-	err := cmd.Run()
+	_, _, err := RunCommand("/bin/sh", scriptsPath, name)
 	if err != nil {
 		glog.Errorf("LoadKernelModule(): fail to load kernel module %s: %v", name, err)
 		return err
@@ -619,4 +619,31 @@ func GetNicSriovMode(pciAddress string) (string, error) {
 		return "", err
 	}
 	return devLink.Attrs.Eswitch.Mode, nil
+}
+
+// RunCommand runs command line and returns the output
+func RunCommand(command string, args ...string) (string, string, error) {
+	glog.Infof("RunCommand(): %s %v", command, args)
+	var stdout, stderr bytes.Buffer
+
+	cmd := exec.Command(command, args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// GetRdmaMode return the current network namespace rdma mode
+func GetRdmaMode() string {
+	glog.Info("getRdmaMode():")
+
+	out, _, err := RunCommand("rdma", "system", "show", "netns")
+
+	if err != nil {
+		glog.Warningf("failed to get RDMA mode with error: %s", err)
+		return ""
+	}
+
+	return strings.TrimSpace(out[6:])
 }

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"os"
 	"os/exec"
 	"reflect"
 	"strconv"
@@ -21,7 +21,12 @@ type GenericPlugin struct {
 	LoadVfioDriver uint
 }
 
-const scriptsPath = "bindata/scripts/enable-kargs.sh"
+const (
+	scriptsPath        = "bindata/scripts/enable-kargs.sh"
+	addRdmaScriptsPath = "bindata/scripts/add-rdma-service.sh"
+
+	rdmaServicePath = "/usr/lib/systemd/system/sriov-network-operator-rdma.service"
+)
 
 const (
 	unloaded = iota
@@ -60,6 +65,10 @@ func (p *GenericPlugin) OnNodeStateAdd(state *sriovnetworkv1.SriovNetworkNodeSta
 
 	needDrain = needDrainNode(state.Spec.Interfaces, state.Status.Interfaces)
 
+	if err = handleRdmaService(); err != nil {
+		return false, false, err
+	}
+
 	if p.LoadVfioDriver != loaded {
 		if needVfioDriver(state) {
 			p.LoadVfioDriver = loading
@@ -84,6 +93,10 @@ func (p *GenericPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetworkN
 	p.DesireState = new
 
 	needDrain = needDrainNode(new.Spec.Interfaces, new.Status.Interfaces)
+
+	if err = handleRdmaService(); err != nil {
+		return false, false, err
+	}
 
 	if p.LoadVfioDriver != loaded {
 		if needVfioDriver(new) {
@@ -145,12 +158,9 @@ func needVfioDriver(state *sriovnetworkv1.SriovNetworkNodeState) bool {
 func tryEnableIommuInKernelArgs() (bool, error) {
 	glog.Info("generic-plugin tryEnableIommuInKernelArgs()")
 	args := [2]string{"intel_iommu=on", "iommu=pt"}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("/bin/sh", scriptsPath, args[0], args[1])
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	stdout, _, err := utils.RunCommand("/bin/sh", scriptsPath, args[0], args[1])
+	if err != nil {
 		// if grubby is not there log and assume kernel args are set correctly.
 		if isCommandNotFound(err) {
 			glog.Error("generic-plugin tryEnableIommuInKernelArgs(): grubby command not found. Please ensure that kernel args intel_iommu=on iommu=pt are set")
@@ -160,7 +170,7 @@ func tryEnableIommuInKernelArgs() (bool, error) {
 		return false, err
 	}
 
-	i, err := strconv.Atoi(strings.TrimSpace(stdout.String()))
+	i, err := strconv.Atoi(strings.TrimSpace(stdout))
 	if err == nil {
 		if i > 0 {
 			glog.Infof("generic-plugin tryEnableIommuInKernelArgs(): need to reboot node")
@@ -209,4 +219,42 @@ func needDrainNode(desired sriovnetworkv1.Interfaces, current sriovnetworkv1.Int
 		}
 	}
 	return
+}
+
+func isRdmaServiceExists() (bool, error) {
+	exit, err := utils.Chroot("/host")
+	if err != nil {
+		return false, err
+	}
+	defer exit()
+
+	if _, err := os.Stat(rdmaServicePath); err != nil {
+		return false, nil
+	}
+	return true, nil
+}
+
+func addRdmaService() error {
+	exit, err := utils.Chroot("/host")
+	if err != nil {
+		return err
+	}
+	defer exit()
+
+	_, _, err = utils.RunCommand("/bin/sh", "-c", addRdmaScriptsPath)
+	return err
+}
+
+func handleRdmaService() error {
+	if exist, err := isRdmaServiceExists(); err != nil {
+		glog.Errorf("generic-plugin handleRdmaService() failed to check Rdma Service with error: %v", err)
+		return err
+	} else if !exist {
+		if err := addRdmaService(); err != nil {
+			glog.Errorf("generic-plugin handleRdmaService() failed to add Rdma Service with error: %v", err)
+			return err
+		}
+	}
+
+	return nil
 }
