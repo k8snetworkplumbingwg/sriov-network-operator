@@ -171,6 +171,10 @@ func needUpdate(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetworkv1.Int
 		glog.V(2).Infof("needUpdate(): NumVfs needs update desired=%d, current=%d", iface.NumVfs, ifaceStatus.NumVfs)
 		return true
 	}
+	if iface.EswitchMode != sriovnetworkv1.ESWITCHMODE_SWITCHDEV && ifaceStatus.EswitchMode == sriovnetworkv1.ESWITCHMODE_SWITCHDEV {
+		glog.V(2).Infof("needUpdate(): EswitchMode needs update desired=%s, current=%s", ifaceStatus.EswitchMode, sriovnetworkv1.ESWITCHMODE_LEGACY)
+		return true
+	}
 	if iface.NumVfs > 0 {
 		for _, vf := range ifaceStatus.VFs {
 			ingroup := false
@@ -209,7 +213,8 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 		return err
 	}
 	// set numVFs
-	if iface.NumVfs != ifaceStatus.NumVfs {
+	if iface.NumVfs != ifaceStatus.NumVfs || iface.EswitchMode != sriovnetworkv1.ESWITCHMODE_SWITCHDEV &&
+		ifaceStatus.EswitchMode == sriovnetworkv1.ESWITCHMODE_SWITCHDEV {
 		err = setSriovNumVfs(iface.PciAddress, iface.NumVfs)
 		if err != nil {
 			glog.Errorf("configSriovDevice(): fail to set NumVfs for device %s", iface.PciAddress)

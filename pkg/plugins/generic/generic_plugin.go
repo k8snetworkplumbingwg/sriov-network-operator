@@ -195,6 +195,11 @@ func needDrainNode(desired sriovnetworkv1.Interfaces, current sriovnetworkv1.Int
 					needDrain = true
 					return
 				}
+				if ifaceStatus.EswitchMode == sriovnetworkv1.ESWITCHMODE_SWITCHDEV {
+					glog.V(2).Infof("generic-plugin needDrainNode(): need drain, expected EswitchMode %s, current EswitchMode %s", sriovnetworkv1.ESWITCHMODE_LEGACY, ifaceStatus.EswitchMode)
+					needDrain = true
+					return
+				}
 				if iface.Mtu != 0 && iface.Mtu != ifaceStatus.Mtu {
 					glog.V(2).Infof("generic-plugin needDrainNode(): need drain, expect MTU %v, current MTU %v", iface.Mtu, ifaceStatus.Mtu)
 					needDrain = true
