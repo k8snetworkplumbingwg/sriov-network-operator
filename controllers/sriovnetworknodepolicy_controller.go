@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 	dptypes "github.com/intel/sriov-network-device-plugin/pkg/types"
+	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	errs "github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -138,6 +139,10 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(req ctrl.Request) (ctrl.Res
 	if err = r.syncAllSriovNetworkNodeStates(defaultPolicy, policyList, nodeList); err != nil {
 		return reconcile.Result{}, err
 	}
+	// Sync ovn net-attach-def objects
+	if err = r.syncOvnNetAttachDefs(policyList); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	// All was successful. Request that this be re-triggered after ResyncPeriod,
 	// so we can reconcile state again.
@@ -150,6 +155,47 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&sriovnetworkv1.SriovNetworkNodeState{}).
 		Complete(r)
+}
+
+func (r *SriovNetworkNodePolicyReconciler) syncOvnNetAttachDefs(pl *sriovnetworkv1.SriovNetworkNodePolicyList) error {
+	logger := r.Log.WithName("syncOvnNetAttachDefs")
+	logger.Info("Start to sync default ovn net-attach-defs")
+
+	for _, p := range pl.Items {
+		if p.Name == "default" {
+			continue
+		}
+		if p.Spec.EswitchMode == sriovnetworkv1.ESWITCHMODE_SWITCHDEV {
+			raw, err := p.RenderNetAttDef()
+			if err != nil {
+				return err
+			}
+			netAttDef := &netattdefv1.NetworkAttachmentDefinition{}
+			err = r.Scheme.Convert(raw, netAttDef, nil)
+			if err != nil {
+				return err
+			}
+			if err := controllerutil.SetControllerReference(&p, netAttDef, r.Scheme); err != nil {
+				return err
+			}
+			found := &netattdefv1.NetworkAttachmentDefinition{}
+			logger.Info("Rendered ovn net-attach-def", netAttDef.Name, netAttDef.Namespace)
+			err = r.Get(context.TODO(), types.NamespacedName{Name: netAttDef.Name, Namespace: netAttDef.Namespace}, found)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					logger.Info("NetworkAttachmentDefinition CR doesn't exist, creating", netAttDef.Name, netAttDef.Namespace)
+					err = r.Create(context.TODO(), netAttDef)
+					if err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			}
+			logger.Info("ovn net-attach-def already exists", netAttDef.Name, netAttDef.Namespace)
+		}
+	}
+	return nil
 }
 
 func (r *SriovNetworkNodePolicyReconciler) syncDevicePluginConfigMap(pl *sriovnetworkv1.SriovNetworkNodePolicyList, nl *corev1.NodeList) error {

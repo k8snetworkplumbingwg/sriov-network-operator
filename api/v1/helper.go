@@ -30,7 +30,8 @@ const (
 
 const invalidVfIndex = -1
 
-var MANIFESTS_PATH = "./bindata/manifests/cni-config"
+var SRIOV_NET_ATTACH_DEF_PATH = "./bindata/manifests/cni-config/sriov"
+var OVNKUBE_NET_ATTACH_DEF_PATH = "./bindata/manifests/cni-config/ovnkube"
 var log = logf.Log.WithName("sriovnetwork")
 var VfIds = []string{}
 
@@ -525,7 +526,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
-	objs, err = render.RenderDir(MANIFESTS_PATH, &data)
+	objs, err = render.RenderDir(SRIOV_NET_ATTACH_DEF_PATH, &data)
 	if err != nil {
 		return nil, err
 	}
@@ -651,7 +652,7 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
-	objs, err = render.RenderDir(MANIFESTS_PATH, &data)
+	objs, err = render.RenderDir(SRIOV_NET_ATTACH_DEF_PATH, &data)
 	if err != nil {
 		return nil, err
 	}
@@ -682,6 +683,29 @@ func (cr *SriovNetwork) DeleteNetAttDef(c client.Client) error {
 		return err
 	}
 	return nil
+}
+
+// RenderNetAttDef renders a net-att-def for OVN CNI
+func (cr *SriovNetworkNodePolicy) RenderNetAttDef() (*uns.Unstructured, error) {
+	logger := log.WithName("renderNetAttDef")
+	logger.Info("Start to render OVN CNI NetworkAttachementDefinition")
+	var err error
+	objs := []*uns.Unstructured{}
+
+	// render RawCNIConfig manifests
+	data := render.MakeRenderData()
+	data.Data["SriovResourceName"] = cr.Spec.ResourceName
+	data.Data["SriovNetworkNodePolicyNamespace"] = cr.Namespace
+
+	objs, err = render.RenderDir(OVNKUBE_NET_ATTACH_DEF_PATH, &data)
+	if err != nil {
+		return nil, err
+	}
+	for _, obj := range objs {
+		raw, _ := json.Marshal(obj)
+		logger.Info("render NetworkAttachementDefinition output", "raw", string(raw))
+	}
+	return objs[0], nil
 }
 
 // NetFilterMatch -- parse netFilter and check for a match

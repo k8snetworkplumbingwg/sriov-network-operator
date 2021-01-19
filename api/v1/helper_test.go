@@ -16,7 +16,7 @@ var update = flag.Bool("updategolden", false, "update .golden files")
 
 func init() {
 	// when running go tests path is local to the file, overriding it.
-	v1.MANIFESTS_PATH = "../../bindata/manifests/cni-config"
+	v1.SRIOV_NET_ATTACH_DEF_PATH = "../../bindata/manifests/cni-config/sriov"
 }
 
 func TestRendering(t *testing.T) {

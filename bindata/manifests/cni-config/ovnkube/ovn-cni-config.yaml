@@ -1,0 +1,9 @@
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{.SriovResourceName}}
+  namespace: {{.SriovNetworkNodePolicyNamespace}}
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: {{.SriovResourceName}}
+spec:
+  config: '{"cniVersion":"0.3.1","name":"ovn-kubernetes","type":"ovn-k8s-cni-overlay","ipam":{},"dns":{}}'
