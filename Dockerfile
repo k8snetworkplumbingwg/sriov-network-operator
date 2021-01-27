@@ -7,4 +7,5 @@ FROM centos:7
 COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/sriov-network-operator/build/_output/cmd/manager /usr/bin/sriov-network-operator
 COPY bindata /bindata
 ENV OPERATOR_NAME=sriov-network-operator
+ENV CLUSTER_TYPE=kubernetes
 CMD ["/usr/bin/sriov-network-operator"]
