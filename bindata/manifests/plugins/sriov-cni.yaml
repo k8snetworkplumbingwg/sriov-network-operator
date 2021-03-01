@@ -36,6 +36,7 @@ spec:
         volumeMounts:
         - name: cnibin
           mountPath: /host/opt/cni/bin
+{{- if eq .SRIOVInfiniBandCNIEnable "true" }}
       - name: sriov-infiniband-cni
         image: {{.SRIOVInfiniBandCNIImage}}
         securityContext:
@@ -43,6 +44,7 @@ spec:
         volumeMounts:
         - name: cnibin
           mountPath: /host/opt/cni/bin
+{{- end }}
       volumes:
         - name: cnibin
           hostPath:

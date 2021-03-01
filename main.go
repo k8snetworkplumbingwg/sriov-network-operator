@@ -85,14 +85,15 @@ func main() {
 		setupLog.Error(err, "unable to start global manager")
 		os.Exit(1)
 	}
-
-	if err = (&controllers.SriovIBNetworkReconciler{
-		Client: mgrGlobal.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("SriovIBNetwork"),
-		Scheme: mgrGlobal.GetScheme(),
-	}).SetupWithManager(mgrGlobal); err != nil {
-		setupLog.Error(err, "unable to create controllers", "controllers", "SriovIBNetwork")
-		os.Exit(1)
+	if os.Getenv("SRIOV_INFINIBAND_CNI_ENABLE") == "true" {
+		if err = (&controllers.SriovIBNetworkReconciler{
+			Client: mgrGlobal.GetClient(),
+			Log:    ctrl.Log.WithName("controllers").WithName("SriovIBNetwork"),
+			Scheme: mgrGlobal.GetScheme(),
+		}).SetupWithManager(mgrGlobal); err != nil {
+			setupLog.Error(err, "unable to create controllers", "controllers", "SriovIBNetwork")
+			os.Exit(1)
+		}
 	}
 	if err = (&controllers.SriovNetworkReconciler{
 		Client: mgrGlobal.GetClient(),

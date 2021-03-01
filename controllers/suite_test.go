@@ -123,6 +123,7 @@ var _ = BeforeSuite(func(done Done) {
 	os.Setenv("ENABLE_ADMISSION_CONTROLLER", "true")
 	os.Setenv("SRIOV_CNI_IMAGE", "mock-image")
 	os.Setenv("SRIOV_INFINIBAND_CNI_IMAGE", "mock-image")
+	os.Setenv("SRIOV_INFINIBAND_CNI_ENABLE", "true")
 	os.Setenv("SRIOV_DEVICE_PLUGIN_IMAGE", "mock-image")
 	os.Setenv("NETWORK_RESOURCES_INJECTOR_IMAGE", "mock-image")
 	os.Setenv("SRIOV_NETWORK_CONFIG_DAEMON_IMAGE", "mock-image")
