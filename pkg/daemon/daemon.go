@@ -40,6 +40,7 @@ import (
 	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
 	sninformer "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/informers/externalversions"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
+	mcdconst "github.com/openshift/machine-config-operator/pkg/daemon/constants"
 )
 
 const (
@@ -90,6 +91,8 @@ type Daemon struct {
 	drainer *drain.Helper
 
 	node *corev1.Node
+
+	nodes []*corev1.Node
 
 	drainable bool
 
@@ -408,11 +411,11 @@ func (dn *Daemon) nodeUpdateHandler(old, new interface{}) {
 		return
 	}
 	dn.node = node.DeepCopy()
-	nodes, err := dn.nodeLister.List(labels.Everything())
+	dn.nodes, err = dn.nodeLister.List(labels.Everything())
 	if err != nil {
 		return
 	}
-	for _, node := range nodes {
+	for _, node := range dn.nodes {
 		if node.GetName() != dn.name && node.Annotations[annoKey] == annoDraining {
 			glog.V(2).Infof("nodeUpdateHandler(): node %s is draining", node.Name)
 			dn.drainable = false
@@ -539,8 +542,27 @@ func (dn *Daemon) nodeStateSyncHandler(generation int64) error {
 	}
 
 	if reqReboot {
-		glog.Info("nodeStateSyncHandler(): reboot node")
-		rebootNode()
+		if err := wait.PollImmediateUntil(3*time.Second, func() (bool, error) {
+			if utils.ClusterType == utils.ClusterTypeOpenshift {
+				for _, node := range dn.nodes {
+					cmc, _ := node.Annotations[mcdconst.CurrentMachineConfigAnnotationKey]
+					dmc, _ := node.Annotations[mcdconst.DesiredMachineConfigAnnotationKey]
+					mcdState, _ := node.Annotations[mcdconst.MachineConfigDaemonStateAnnotationKey]
+					if cmc == "" || cmc != dmc || mcdState != mcdconst.MachineConfigDaemonStateDone {
+						glog.Infof("nodeStateSyncHandler(): MCO is configuring node %v, wait...", node.GetName())
+						return false, nil
+					}
+				}
+			}
+
+			glog.Info("nodeStateSyncHandler(): reboot node")
+			rebootNode()
+			return true, nil
+		}, dn.stopCh); err != nil {
+			glog.Errorf("nodeStateSyncHandler(): failed to wait for node getting ready for reboot: %v", err)
+			return err
+		}
+
 		return nil
 	}
 
