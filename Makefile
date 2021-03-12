@@ -21,6 +21,7 @@ export WATCH_NAMESPACE?=openshift-sriov-network-operator
 export ENABLE_ADMISSION_CONTROLLER?=true
 export GOFLAGS=-mod=vendor
 export GO111MODULE=on
+export SRIOV_INFINIBAND_CNI_ENABLE?=true
 PKGS=$(shell go list ./... | grep -v -E '/vendor/|/test|/examples')
 
 # go source files, ignore vendor directory
@@ -90,11 +91,19 @@ run: vet skopeo install
 
 # Install CRDs into a cluster
 install: manifests kustomize
-	$(KUSTOMIZE) build config/crd | kubectl apply -f -
+	@if [ ${SRIOV_INFINIBAND_CNI_ENABLE} == true ]; then \
+	$(KUSTOMIZE) build config/crd/overlays/infiniband | kubectl apply -f -; \
+	else \
+	$(KUSTOMIZE) build config/crd/base | kubectl apply -f -; \
+	fi
 
 # Uninstall CRDs from a cluster
 uninstall: manifests kustomize
-	$(KUSTOMIZE) build config/crd | kubectl delete -f -
+	@if [ ${SRIOV_INFINIBAND_CNI_ENABLE} == true ]; then \
+	$(KUSTOMIZE) build config/crd/overlays/infiniband | kubectl delete -f -; \
+	else \
+	$(KUSTOMIZE) build config/crd/base | kubectl delete -f -; \
+	fi
 
 # Deploy controller in the configured Kubernetes cluster in ~/.kube/config
 # deploy: manifests kustomize

@@ -320,6 +320,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncPluginDaemonObjs(dp *sriovnetwork
 	data.Data["Namespace"] = namespace
 	data.Data["SRIOVCNIImage"] = os.Getenv("SRIOV_CNI_IMAGE")
 	data.Data["SRIOVInfiniBandCNIImage"] = os.Getenv("SRIOV_INFINIBAND_CNI_IMAGE")
+	data.Data["SRIOVInfiniBandCNIEnable"] = os.Getenv("SRIOV_INFINIBAND_CNI_ENABLE")
 	data.Data["SRIOVDevicePluginImage"] = os.Getenv("SRIOV_DEVICE_PLUGIN_IMAGE")
 	data.Data["ReleaseVersion"] = os.Getenv("RELEASEVERSION")
 	data.Data["ResourcePrefix"] = os.Getenv("RESOURCE_PREFIX")
