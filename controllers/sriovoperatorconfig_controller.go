@@ -23,14 +23,15 @@ import (
 	"os"
 
 	"github.com/go-logr/logr"
-	"github.com/openshift/machine-config-operator/lib/resourcemerge"
-	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	kscheme "k8s.io/client-go/kubernetes/scheme"
@@ -43,6 +44,7 @@ import (
 	apply "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/apply"
 	render "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
+	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 )
 
 // SriovOperatorConfigReconciler reconciles a SriovOperatorConfig object
@@ -113,7 +115,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(req ctrl.Request) (ctrl.Result
 	}
 
 	if utils.ClusterType == utils.ClusterTypeOpenshift {
-		if err = r.syncOffloadMachineConfig(defaultConfig); err != nil {
+		if err = r.syncOvsHardwareOffloadMachineConfig(defaultConfig); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -409,101 +411,118 @@ func (r *SriovOperatorConfigReconciler) syncK8sResource(cr *sriovnetworkv1.Sriov
 	return nil
 }
 
-func (r *SriovOperatorConfigReconciler) syncOffloadMachineConfig(dc *sriovnetworkv1.SriovOperatorConfig) error {
-	logger := r.Log.WithName("syncOffloadMachineConfig")
+func (r *SriovOperatorConfigReconciler) syncOvsHardwareOffloadMachineConfig(dc *sriovnetworkv1.SriovOperatorConfig) error {
+	logger := r.Log.WithName("syncOvsHardwareOffloadMachineConfig")
 	var err error
 
 	logger.Info("Start to render MachineConfig and MachineConfigPool for OVS HW offloading")
+
 	data := render.MakeRenderData()
-	data.Data["HwOffloadNodeLabel"] = HwOffloadNodeLabel
-	mcName := "00-" + HwOffloadNodeLabel
-	mcpName := HwOffloadNodeLabel
-	mc, err := render.GenerateMachineConfig("bindata/manifests/switchdev-config", mcName, HwOffloadNodeLabel, dc.Spec.EnableOvsOffload, &data)
+	mcpMap := make(map[string]bool)
+	nodeOffloadStatus := []sriovnetworkv1.OvsHardwareOffloadConfigStatus{}
+
+	mcpList := &mcfgv1.MachineConfigPoolList{}
+	err = r.List(context.TODO(), mcpList, &client.ListOptions{})
 	if err != nil {
-		return err
-	}
-	mcpRaw, err := render.RenderTemplate("bindata/manifests/switchdev-config/machineconfigpool.yaml", &data)
-	if err != nil {
-		return err
-	}
-	mcp := &mcfgv1.MachineConfigPool{}
-	if len(mcpRaw) != 1 {
-		return fmt.Errorf("Invalid MachineConfigPool CR template")
-	}
-	err = r.Scheme.Convert(mcpRaw[0], mcp, context.TODO())
-	if err != nil {
-		return err
+		return fmt.Errorf("Failed to get MachineConfigPoolList: %v", err)
 	}
 
-	foundMC := &mcfgv1.MachineConfig{}
-	foundMCP := &mcfgv1.MachineConfigPool{}
-
-	err = r.Get(context.TODO(), types.NamespacedName{Name: mcName}, foundMC)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			if dc.Spec.EnableOvsOffload {
-				err = r.Create(context.TODO(), mc)
-				if err != nil {
-					return fmt.Errorf("Couldn't create MachineConfig: %v", err)
-				}
-				logger.Info("Created MachineConfig CR")
-			}
-		} else {
-			return fmt.Errorf("Failed to get MachineConfig: %v", err)
+	for _, mcp := range mcpList.Items {
+		selector, err := metav1.LabelSelectorAsSelector(mcp.Spec.NodeSelector)
+		if err != nil {
+			return fmt.Errorf("Invalid label selector in MachineConfigPool: %s, %v", mcp.GetName(), err)
 		}
-	} else {
-		if dc.Spec.EnableOvsOffload {
-			if bytes.Compare(foundMC.Spec.Config.Raw, mc.Spec.Config.Raw) == 0 {
-				logger.Info("MachineConfig already exists, updating")
-				err = r.Update(context.TODO(), foundMC)
-				if err != nil {
-					return fmt.Errorf("Couldn't update MachineConfig: %v", err)
+		// Node is selected when its label(s) are included in NodeSelector
+		for _, ovsHWOLConfig := range dc.Spec.OvsHardwareOffload {
+			if selector.Matches(labels.Set(ovsHWOLConfig.NodeSelector)) {
+				// OVS Hardware Offload is not supported on master nodes
+				if mcp.GetName() == "master" {
+					logger.Info("OVS Hardware Offload is configured on master nodes which is not supported, ignoring.")
+					continue
+				}
+				mcpMap[mcp.GetName()] = true
+				nodeOffloadStatus = append(nodeOffloadStatus, sriovnetworkv1.OvsHardwareOffloadConfigStatus{Nodes: []string{mcp.GetName()}})
+				break
+			}
+		}
+	}
+
+	for mcpName, enable := range mcpMap {
+		mcName := "00-" + mcpName + "-" + OVS_HWOL_MACHINE_CONFIG_NAME_SUFFIX
+		mc, err := render.GenerateMachineConfig("bindata/manifests/switchdev-config", mcName, mcpName, dc.Spec.EnableOvsOffload, &data)
+		if err != nil {
+			return err
+		}
+
+		foundMC := &mcfgv1.MachineConfig{}
+		err = r.Get(context.TODO(), types.NamespacedName{Name: mcName}, foundMC)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				if dc.Spec.EnableOvsOffload && enable {
+					err = r.Create(context.TODO(), mc)
+					if err != nil {
+						return fmt.Errorf("Couldn't create MachineConfig: %v", err)
+					}
+					logger.Info("Created MachineConfig CR in MachineConfigPool", mcName, mcpName)
 				}
 			} else {
-				logger.Info("No content change, skip updating MC")
+				return fmt.Errorf("Failed to get MachineConfig: %v", err)
 			}
 		} else {
-			logger.Info("offload disabled, delete MachineConfig")
-			err = r.Delete(context.TODO(), foundMC)
-			if err != nil {
-				return fmt.Errorf("Couldn't delete MachineConfig: %v", err)
+			if dc.Spec.EnableOvsOffload && enable {
+				if bytes.Compare(foundMC.Spec.Config.Raw, mc.Spec.Config.Raw) == 0 {
+					logger.Info("MachineConfig already exists, updating")
+					err = r.Update(context.TODO(), foundMC)
+					if err != nil {
+						return fmt.Errorf("Couldn't update MachineConfig: %v", err)
+					}
+				} else {
+					logger.Info("No content change, skip updating MC")
+				}
+			} else {
+				logger.Info("offload disabled, delete MachineConfig")
+				err = r.Delete(context.TODO(), foundMC)
+				if err != nil {
+					return fmt.Errorf("Couldn't delete MachineConfig: %v", err)
+				}
 			}
 		}
 	}
 
-	err = r.Get(context.TODO(), types.NamespacedName{Name: mcpName}, foundMCP)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			if dc.Spec.EnableOvsOffload {
-				err = r.Create(context.TODO(), mcp)
-				if err != nil {
-					return fmt.Errorf("Couldn't create MachineConfigPool: %v", err)
-				}
-				logger.Info("Created MachineConfigPool CR")
+	// Remove legacy MCs
+	for _, mcp := range mcpList.Items {
+		found := false
+		for mcpName := range mcpMap {
+			if mcp.Name == mcpName {
+				found = true
+				break
 			}
-		} else {
-			return fmt.Errorf("Failed to get MachineConfigPool: %v", err)
 		}
-	} else {
-		if dc.Spec.EnableOvsOffload {
-			modified := resourcemerge.BoolPtr(false)
-			resourcemerge.EnsureMachineConfigPool(modified, foundMCP, *mcp)
-			if *modified {
-				logger.Info("MachineConfig already exists, updating")
-				err = r.Update(context.TODO(), foundMCP)
-				if err != nil {
-					return fmt.Errorf("Couldn't update MachineConfig: %v", err)
-				}
-			} else {
-				logger.Info("No content change, skip updating MCP")
-			}
-		} else {
-			logger.Info("offload disabled, delete MachineConfigPool")
-			err = r.Delete(context.TODO(), foundMCP)
+		if !found {
+			mcName := "00-" + mcp.Name + "-" + OVS_HWOL_MACHINE_CONFIG_NAME_SUFFIX
+			foundMC := &mcfgv1.MachineConfig{}
+			err = r.Get(context.TODO(), types.NamespacedName{Name: mcName}, foundMC)
 			if err != nil {
-				return fmt.Errorf("Couldn't delete MachineConfigPool: %v", err)
+				if !errors.IsNotFound(err) {
+					err = r.Delete(context.TODO(), foundMC)
+					if err != nil {
+						return fmt.Errorf("Couldn't delete MachineConfig: %v", err)
+					}
+				}
 			}
 		}
 	}
+
+	// Update SriovOperatorConfig.Status
+	if equality.Semantic.DeepDerivative(dc.Status.OvsHardwareOffload, nodeOffloadStatus) {
+		logger.Info("Default SriovOperatorConfig status changed, updating")
+		dc.Status.OvsHardwareOffload = nodeOffloadStatus
+		err := r.Status().Update(context.TODO(), dc)
+		if err != nil {
+			logger.Error(err, "Fail to update OvsHardwareConfigStatus in default SriovOperatorConfig status")
+			return err
+		}
+	}
+
 	return nil
 }
