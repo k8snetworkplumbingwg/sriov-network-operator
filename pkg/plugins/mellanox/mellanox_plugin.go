@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/golang/glog"
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
 type MellanoxPlugin struct {
@@ -70,6 +69,10 @@ func (p *MellanoxPlugin) OnNodeStateAdd(state *sriovnetworkv1.SriovNetworkNodeSt
 // OnNodeStateChange Invoked when SriovNetworkNodeState CR is updated, return if need dain and/or reboot node
 func (p *MellanoxPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetworkNodeState) (needDrain bool, needReboot bool, err error) {
 	glog.Info("mellanox-Plugin OnNodeStateChange()")
+	if utils.IsKernelLockdownMode() {
+		glog.Info("Lockdown mode detected, skipping interface update for mellanox devices")
+		return false, false, nil
+	}
 	needDrain = false
 	needReboot = false
 	err = nil
@@ -173,6 +176,10 @@ func (p *MellanoxPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetwork
 
 // Apply config change
 func (p *MellanoxPlugin) Apply() error {
+	if utils.IsKernelLockdownMode() {
+		glog.Info("Lockdown mode detected, skipping interface update for mellanox devices")
+		return nil
+	}
 	glog.Info("mellanox-plugin Apply()")
 	return configFW()
 }
@@ -200,7 +207,7 @@ func configFW() error {
 		if len(cmdArgs) <= 4 {
 			continue
 		}
-		_, err := runCommand("mstconfig", cmdArgs...)
+		_, err := utils.RunCommand("mstconfig", cmdArgs...)
 		if err != nil {
 			glog.Errorf("mellanox-plugin configFW(): failed : %v", err)
 			return err
@@ -212,22 +219,8 @@ func configFW() error {
 func mstConfigReadData(pciAddress string) (string, error) {
 	glog.Infof("mellanox-plugin mstConfigReadData(): device %s", pciAddress)
 	args := []string{"-e", "-d", pciAddress, "q"}
-	out, err := runCommand("mstconfig", args...)
+	out, err := utils.RunCommand("mstconfig", args...)
 	return out, err
-}
-
-func runCommand(command string, args ...string) (string, error) {
-	glog.Infof("mellanox-plugin runCommand(): %s %v", command, args)
-	var stdout, stderr bytes.Buffer
-
-	cmd := exec.Command(command, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	glog.V(2).Infof("mellanox-plugin: runCommand(): %s, %v", command, args)
-	err := cmd.Run()
-	glog.V(2).Infof("mellanox-plugin: runCommand(): %s", stdout.String())
-	return stdout.String(), err
 }
 
 func getMlnxNicFwData(pciAddress string) (current, next *mlnxNic, err error) {
