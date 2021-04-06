@@ -2,11 +2,11 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/sriovnetwork.openshift.io_sriovnetworks.yaml
-- bases/sriovnetwork.openshift.io_sriovibnetworks.yaml
-- bases/sriovnetwork.openshift.io_sriovnetworknodepolicies.yaml
-- bases/sriovnetwork.openshift.io_sriovnetworknodestates.yaml
-- bases/sriovnetwork.openshift.io_sriovoperatorconfigs.yaml
+- bases/sriovnetwork.k8s.cni.cncf.io_sriovnetworks.yaml
+- bases/sriovnetwork.k8s.cni.cncf.io_sriovibnetworks.yaml
+- bases/sriovnetwork.k8s.cni.cncf.io_sriovnetworknodepolicies.yaml
+- bases/sriovnetwork.k8s.cni.cncf.io_sriovnetworknodestates.yaml
+- bases/sriovnetwork.k8s.cni.cncf.io_sriovoperatorconfigs.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patchesStrategicMerge:

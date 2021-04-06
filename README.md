@@ -41,7 +41,7 @@ This SriovNetwork CR also contains the ‘resourceName’ which is aligned with 
 This CR should be managed by cluster admin. Here is an example:
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetwork
 metadata:
   name: example-network
@@ -69,7 +69,7 @@ It is possible to add additional capabilities to the device configured via the S
 In order to do this, the `metaPlugins` field must contain the array of one or more additional configurations used to build a [network configuration list](https://github.com/containernetworking/cni/blob/master/SPEC.md#network-configuration-lists), as per the following example:
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetwork
 metadata:
   name: example-network
@@ -113,7 +113,7 @@ The spec is rendered by sriov-policy-controller, and consumed by sriov-config-da
 An example of SriovNetworkNodeState CR:
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetworkNodeState
 metadata:
   name: worker-node-1
@@ -171,7 +171,7 @@ This CRD is the key of SR-IOV network operator. This custom resource should be m
 An example of SriovNetworkNodeConfigPolicy CR:
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetworkNodePolicy
 metadata:
   name: policy-1

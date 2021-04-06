@@ -73,7 +73,7 @@ rules:
     verbs:
       - '*'
   - apiGroups:
-      - sriovnetwork.openshift.io
+      - sriovnetwork.k8s.cni.cncf.io
     resources:
       - '*'
       - sriovnetworknodestates

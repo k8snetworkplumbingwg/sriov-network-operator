@@ -4,9 +4,9 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.3.0
   creationTimestamp: null
-  name: sriovibnetworks.sriovnetwork.openshift.io
+  name: sriovibnetworks.sriovnetwork.k8s.cni.cncf.io
 spec:
-  group: sriovnetwork.openshift.io
+  group: sriovnetwork.k8s.cni.cncf.io
   names:
     kind: SriovIBNetwork
     listKind: SriovIBNetworkList

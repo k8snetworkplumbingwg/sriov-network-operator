@@ -168,7 +168,7 @@ var _ = Describe("SriovNetwork Controller", func() {
 				cr := sriovnetworkv1.SriovNetwork{
 					TypeMeta: metav1.TypeMeta{
 						Kind:       "SriovNetwork",
-						APIVersion: "sriovnetwork.openshift.io/v1",
+						APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 					},
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "test-5",

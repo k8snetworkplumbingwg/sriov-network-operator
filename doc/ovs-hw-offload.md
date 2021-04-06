@@ -25,7 +25,7 @@ The following manufacturers are known to work:
 ### Deploy SriovNetworkNodePolicy
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetworkNodePolicy
 metadata:
   name: ovs-hw-offload

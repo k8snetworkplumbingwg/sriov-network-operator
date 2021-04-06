@@ -114,7 +114,7 @@ type workItem struct {
 const (
 	rdmaScriptsPath = "/bindata/scripts/enable-rdma.sh"
 	udevScriptsPath = "/bindata/scripts/load-udev.sh"
-	annoKey         = "sriovnetwork.openshift.io/state"
+	annoKey         = "sriovnetwork.k8s.cni.cncf.io/state"
 	annoIdle        = "Idle"
 	annoDraining    = "Draining"
 	annoMcpPaused   = "Draining_MCP_Paused"

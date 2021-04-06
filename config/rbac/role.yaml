@@ -7,7 +7,7 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovibnetworks
   verbs:
@@ -19,7 +19,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovibnetworks/status
   verbs:
@@ -27,7 +27,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworknodepolicies
   verbs:
@@ -39,7 +39,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworknodepolicies/status
   verbs:
@@ -47,7 +47,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworknodepolicies
   verbs:
@@ -59,7 +59,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworknodepolicies/status
   verbs:
@@ -67,7 +67,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworks
   verbs:
@@ -79,7 +79,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworks/status
   verbs:
@@ -87,7 +87,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovoperatorconfigs
   verbs:
@@ -99,7 +99,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovoperatorconfigs/status
   verbs:

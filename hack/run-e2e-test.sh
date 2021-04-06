@@ -13,4 +13,4 @@ echo ${SRIOV_NETWORK_CONFIG_DAEMON_IMAGE}
 echo ${SRIOV_NETWORK_OPERATOR_IMAGE}
 echo ${SRIOV_NETWORK_WEBHOOK_IMAGE}
 envsubst < deploy/operator.yaml  > deploy/operator-init.yaml
-go test ./test/e2e/... -root=$(pwd) -kubeconfig=$KUBECONFIG -globalMan deploy/crds/sriovnetwork.openshift.io_sriovnetworks_crd.yaml -namespacedMan deploy/operator-init.yaml -v -singleNamespace true
+go test ./test/e2e/... -root=$(pwd) -kubeconfig=$KUBECONFIG -globalMan deploy/crds/sriovnetwork.k8s.cni.cncf.io_sriovnetworks_crd.yaml -namespacedMan deploy/operator-init.yaml -v -singleNamespace true

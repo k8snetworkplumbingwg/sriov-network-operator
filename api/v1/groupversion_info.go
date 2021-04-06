@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1 contains API Schema definitions for the sriovnetwork v1 API group
 // +kubebuilder:object:generate=true
-// +groupName=sriovnetwork.openshift.io
+// +groupName=sriovnetwork.k8s.cni.cncf.io
 package v1
 
 import (
@@ -26,10 +26,10 @@ import (
 
 var (
 	// GroupVersion is group version used to register these objects
-	GroupVersion = schema.GroupVersion{Group: "sriovnetwork.openshift.io", Version: "v1"}
+	GroupVersion = schema.GroupVersion{Group: "sriovnetwork.k8s.cni.cncf.io", Version: "v1"}
 
 	// SchemeGroupVersion is group version used to register these objects
-	SchemeGroupVersion = schema.GroupVersion{Group: "sriovnetwork.openshift.io", Version: "v1"}
+	SchemeGroupVersion = schema.GroupVersion{Group: "sriovnetwork.k8s.cni.cncf.io", Version: "v1"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}

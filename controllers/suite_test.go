@@ -118,7 +118,7 @@ var _ = BeforeSuite(func(done Done) {
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
-	os.Setenv("RESOURCE_PREFIX", "openshift.io")
+	os.Setenv("RESOURCE_PREFIX", "k8s.cni.cncf.io")
 	os.Setenv("NAMESPACE", "openshift-sriov-network-operator")
 	os.Setenv("ENABLE_ADMISSION_CONTROLLER", "true")
 	os.Setenv("SRIOV_CNI_IMAGE", "mock-image")

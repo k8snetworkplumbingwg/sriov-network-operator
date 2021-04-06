@@ -91,9 +91,9 @@ After the operator gets installed, you can configure it with creating the custom
 Here comes an example. As you can see, there are 2 SR-IOV NICs from Intel.
 
 ```bash
-$ oc get sriovnetworknodestates.sriovnetwork.openshift.io -n sriov-network-operator node-1 -o yaml
+$ oc get sriovnetworknodestates.sriovnetwork.k8s.cni.cncf.io -n sriov-network-operator node-1 -o yaml
 
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetworkNodeState
 spec: ...
 status:
@@ -115,7 +115,7 @@ status:
 You can choose the NIC you want when creating SriovNetworkNodePolicy CR, by specifying the 'nicSelector'.
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetworkNodePolicy
 metadata:
   name: policy-1
@@ -138,7 +138,7 @@ spec:
 After applying your SriovNetworkNodePolicy CR, check the status of SriovNetworkNodeState again, you should be able to see the NIC has been configured as instructed.
 
 ```bash
-$ oc get sriovnetworknodestates.sriovnetwork.openshift.io -n sriov-network-operator node-1 -o yaml
+$ oc get sriovnetworknodestates.sriovnetwork.k8s.cni.cncf.io -n sriov-network-operator node-1 -o yaml
 
 ...
 - Vfs:
@@ -190,7 +190,7 @@ Now you can create a SriovNetwork CR which refer to the 'resourceName' defined i
 Here is an example:
 
 ```yaml
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetwork
 metadata:
   name: example-sriovnetwork

@@ -5,4 +5,4 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: $(CERTIFICATE_NAMESPACE)/$(CERTIFICATE_NAME)
-  name: sriovibnetworks.sriovnetwork.openshift.io
+  name: sriovibnetworks.sriovnetwork.k8s.cni.cncf.io
