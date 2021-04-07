@@ -58,7 +58,7 @@ var webhookServiceCaCmVersion = ""
 // +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs/status,verbs=get;update;patch
 
-func (r *SriovOperatorConfigReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
 	logger := r.Log.WithValues("sriovoperatorconfig", req.NamespacedName)
 
@@ -390,7 +390,7 @@ func (r *SriovOperatorConfigReconciler) syncValidatingWebhook(cr *sriovnetworkv1
 }
 
 func (r *SriovOperatorConfigReconciler) deleteK8sResource(in *uns.Unstructured) error {
-	if err := apply.DeleteObject(context.TODO(), r, in); err != nil {
+	if err := apply.DeleteObject(context.TODO(), r.Client, in); err != nil {
 		return fmt.Errorf("failed to delete object %v with err: %v", in, err)
 	}
 	return nil
@@ -403,7 +403,7 @@ func (r *SriovOperatorConfigReconciler) syncK8sResource(cr *sriovnetworkv1.Sriov
 			return err
 		}
 	}
-	if err := apply.ApplyObject(context.TODO(), r, in); err != nil {
+	if err := apply.ApplyObject(context.TODO(), r.Client, in); err != nil {
 		return fmt.Errorf("failed to apply object %v with err: %v", in, err)
 	}
 	return nil

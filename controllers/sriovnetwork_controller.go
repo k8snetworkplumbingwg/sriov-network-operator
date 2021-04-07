@@ -45,7 +45,7 @@ type SriovNetworkReconciler struct {
 // +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworks/status,verbs=get;update;patch
 
-func (r *SriovNetworkReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *SriovNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
 	// The SriovNetwork CR shall only be defined in operator namespace.
 	req.Namespace = namespace
@@ -85,7 +85,7 @@ func (r *SriovNetworkReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error
 		if sriovnetworkv1.StringInArray(sriovnetworkv1.FINALIZERNAME, instance.ObjectMeta.Finalizers) {
 			// our finalizer is present, so lets handle any external dependency
 			reqLogger.Info("delete NetworkAttachmentDefinition CR", "Namespace", instance.Spec.NetworkNamespace, "Name", instance.Name)
-			if err := instance.DeleteNetAttDef(r); err != nil {
+			if err := instance.DeleteNetAttDef(r.Client); err != nil {
 				// if fail to delete the external dependency here, return with error
 				// so that it can be retried
 				return reconcile.Result{}, err

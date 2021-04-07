@@ -53,7 +53,7 @@ var sriovInfos *cluster.EnabledNodes
 var sriovIface *sriovnetworkv1.InterfaceExt
 
 var _ = BeforeSuite(func(done Done) {
-	logf.SetLogger(zap.LoggerTo(GinkgoWriter, true))
+	logf.SetLogger(zap.New(zap.UseDevMode(true), zap.WriteTo(GinkgoWriter)))
 
 	// Go to project root directory
 	os.Chdir("..")

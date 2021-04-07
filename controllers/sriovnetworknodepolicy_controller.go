@@ -59,7 +59,7 @@ var ctlrlogger = logf.Log.WithName("SriovNetworkNodePolicyController")
 // +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies/status,verbs=get;update;patch
 
-func (r *SriovNetworkNodePolicyReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
+func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
 	reqLogger := r.Log.WithValues("sriovnetworknodepolicy", req.NamespacedName)
 
@@ -381,7 +381,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncPluginDaemonObjs(dp *sriovnetwork
 }
 
 func (r *SriovNetworkNodePolicyReconciler) deleteK8sResource(in *uns.Unstructured) error {
-	if err := apply.DeleteObject(context.TODO(), r, in); err != nil {
+	if err := apply.DeleteObject(context.TODO(), r.Client, in); err != nil {
 		return fmt.Errorf("failed to delete object %v with err: %v", in, err)
 	}
 	return nil
@@ -396,7 +396,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDsObject(dp *sriovnetworkv1.Sriov
 		if err := controllerutil.SetControllerReference(dp, obj, r.Scheme); err != nil {
 			return err
 		}
-		if err := apply.ApplyObject(context.TODO(), r, obj); err != nil {
+		if err := apply.ApplyObject(context.TODO(), r.Client, obj); err != nil {
 			logger.Error(err, "Fail to sync", "Kind", kind)
 			return err
 		}
