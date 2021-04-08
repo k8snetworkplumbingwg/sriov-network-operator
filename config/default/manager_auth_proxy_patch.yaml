@@ -7,6 +7,9 @@ metadata:
   namespace: system
 spec:
   template:
+    metadata:
+      annotations:
+        workload.openshift.io/management: '{"effect": "PreferredDuringScheduling"}'
     spec:
       containers:
       - name: kube-rbac-proxy

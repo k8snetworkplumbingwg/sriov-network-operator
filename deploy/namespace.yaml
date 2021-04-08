@@ -2,5 +2,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: $NAMESPACE
+  annotations:
+    workload.openshift.io/allowed: "management"
   labels:
     name: $NAMESPACE
