@@ -24,6 +24,28 @@ type SriovOperatorConfigSpec struct {
 	DisableDrain bool `json:"disableDrain,omitempty"`
 	// Flag to enable OVS hardware offload. Set to 'true' to provision switchdev-configuration.service and enable OpenvSwitch hw-offload on nodes.
 	EnableOvsOffload bool `json:"enableOvsOffload,omitempty"`
+	// OvsHardwareOffload describes the OVS HWOL configuration for selected Nodes
+	OvsHardwareOffload []OvsHardwareOffloadConfig `json:"ovsHardwareOffload,omitempty"`
+}
+
+type OvsHardwareOffloadConfig struct {
+	// On Kubernetes:
+	// NodeSelector selects Kubernetes Nodes to be configured with OVS HWOL configurations
+	// OVS HWOL configurations are generated automatically by Operator
+	// Labels in NodeSelector are ANDed when selecting Kubernetes Nodes
+	// On OpenShift:
+	// NodeSelector matches on Labels defined in MachineConfigPoolSpec.NodeSelector
+	// OVS HWOL MachineConfigs are generated and applied to Nodes in MachineConfigPool
+	// Labels in NodeSelector are ANDed when matching on MachineConfigPoolSpec.NodeSelector
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+}
+
+type OvsHardwareOffloadConfigStatus struct {
+	// On Kubernetes:
+	// Nodes shows the selected names of Kubernetes Nodes that are configured with OVS HWOL
+	// On OpenShift:
+	// Nodes shows the selected names of MachineConfigPools that are configured with OVS HWOL
+	Nodes []string `json:"nodes,omitempty"`
 }
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig
@@ -33,6 +55,8 @@ type SriovOperatorConfigStatus struct {
 	Injector string `json:"injector,omitempty"`
 	// Show the runtime status of the operator admission controller webhook
 	OperatorWebhook string `json:"operatorWebhook,omitempty"`
+	// Show the runtime status of OvsHardwareOffload
+	OvsHardwareOffload []OvsHardwareOffloadConfigStatus `json:"ovsHardwareOffload,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

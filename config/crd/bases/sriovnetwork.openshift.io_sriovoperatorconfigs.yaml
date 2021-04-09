@@ -65,6 +65,25 @@ spec:
                 maximum: 2
                 minimum: 0
                 type: integer
+              ovsHardwareOffload:
+                description: OvsHardwareOffload describes the OVS HWOL configuration
+                  for selected Nodes
+                items:
+                  properties:
+                    nodeSelector:
+                      additionalProperties:
+                        type: string
+                      description: 'On Kubernetes: NodeSelector selects Kubernetes
+                        Nodes to be configured with OVS HWOL configurations OVS HWOL
+                        configurations are generated automatically by Operator Labels
+                        in NodeSelector are ANDed when selecting Kubernetes Nodes
+                        On OpenShift: NodeSelector matches on Labels defined in MachineConfigPoolSpec.NodeSelector
+                        OVS HWOL MachineConfigs are generated and applied to Nodes
+                        in MachineConfigPool Labels in NodeSelector are ANDed when
+                        matching on MachineConfigPoolSpec.NodeSelector'
+                      type: object
+                  type: object
+                type: array
             type: object
           status:
             description: SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig
@@ -77,6 +96,20 @@ spec:
                 description: Show the runtime status of the operator admission controller
                   webhook
                 type: string
+              ovsHardwareOffload:
+                description: Show the runtime status of OvsHardwareOffload
+                items:
+                  properties:
+                    nodes:
+                      description: 'On Kubernetes: Nodes shows the selected names
+                        of Kubernetes Nodes that are configured with OVS HWOL On OpenShift:
+                        Nodes shows the selected names of MachineConfigPools that
+                        are configured with OVS HWOL'
+                      items:
+                        type: string
+                      type: array
+                  type: object
+                type: array
             type: object
         type: object
     served: true
