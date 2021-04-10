@@ -491,6 +491,9 @@ func (dn *Daemon) nodeStateSyncHandler(generation int64) error {
 	mcoReboot := false
 	for k, p := range dn.LoadedPlugins {
 		d, r := false, false
+		if k == K8sPlugin && utils.ClusterType == utils.ClusterTypeOpenshift {
+			continue
+		}
 		if dn.nodeState.GetName() == "" {
 			d, r, err = p.OnNodeStateAdd(latestState)
 		} else {
