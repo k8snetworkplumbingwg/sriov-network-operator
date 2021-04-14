@@ -574,8 +574,10 @@ func setVfsAdminMac(iface *sriovnetworkv1.InterfaceExt) error {
 		if err := netlink.LinkSetVfHardwareAddr(pfLink, vfID, vfLink.Attrs().HardwareAddr); err != nil {
 			return err
 		}
-		if err = Unbind(addr); err != nil {
-			return err
+		if vfLink.Attrs().EncapType == "infiniband" {
+			if err = Unbind(addr); err != nil {
+				return err
+			}
 		}
 		if err = BindDefaultDriver(addr); err != nil {
 			return err
