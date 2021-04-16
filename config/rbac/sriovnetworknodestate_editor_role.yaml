@@ -5,7 +5,7 @@ metadata:
   name: sriovnetworknodestate-editor-role
 rules:
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworknodestates
   verbs:
@@ -17,7 +17,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworknodestates/status
   verbs:

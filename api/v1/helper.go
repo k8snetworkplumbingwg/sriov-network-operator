@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	LASTNETWORKNAMESPACE  = "operator.sriovnetwork.openshift.io/last-network-namespace"
-	FINALIZERNAME         = "netattdef.finalizers.sriovnetwork.openshift.io"
+	LASTNETWORKNAMESPACE  = "operator.sriovnetwork.k8s.cni.cncf.io/last-network-namespace"
+	FINALIZERNAME         = "netattdef.finalizers.sriovnetwork.k8s.cni.cncf.io"
 	ESWITCHMODE_LEGACY    = "legacy"
 	ESWITCHMODE_SWITCHDEV = "switchdev"
 )

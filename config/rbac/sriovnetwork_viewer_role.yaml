@@ -5,7 +5,7 @@ metadata:
   name: sriovnetwork-viewer-role
 rules:
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworks
   verbs:
@@ -13,7 +13,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - sriovnetwork.openshift.io
+  - sriovnetwork.k8s.cni.cncf.io
   resources:
   - sriovnetworks/status
   verbs:

@@ -135,7 +135,7 @@ func GenerateSriovNetworkCRs(namespace string, specs map[string]sriovnetworkv1.S
 		crs[k] = sriovnetworkv1.SriovNetwork{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetwork",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      k,
@@ -188,7 +188,7 @@ func GenerateSriovIBNetworkCRs(namespace string, specs map[string]sriovnetworkv1
 		crs[k] = sriovnetworkv1.SriovIBNetwork{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovIBNetwork",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      k,

@@ -55,8 +55,8 @@ type SriovOperatorConfigReconciler struct {
 var injectorServiceCaCmVersion = ""
 var webhookServiceCaCmVersion = ""
 
-// +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sriovnetwork.k8s.cni.cncf.io,resources=sriovoperatorconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sriovnetwork.k8s.cni.cncf.io,resources=sriovoperatorconfigs/status,verbs=get;update;patch
 
 func (r *SriovOperatorConfigReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()

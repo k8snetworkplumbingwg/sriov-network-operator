@@ -44,7 +44,7 @@ var _ = Describe("Operator", func() {
 		policy1 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "policy-1",
@@ -65,7 +65,7 @@ var _ = Describe("Operator", func() {
 		policy2 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "policy-2",
@@ -172,7 +172,7 @@ var _ = Describe("Operator", func() {
 		policy1 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "policy-1",
@@ -195,7 +195,7 @@ var _ = Describe("Operator", func() {
 		policy2 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "policy-1",
@@ -309,7 +309,7 @@ var _ = Describe("Operator", func() {
 		policy1 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "policy1",
@@ -330,7 +330,7 @@ var _ = Describe("Operator", func() {
 		policy2 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
+				APIVersion: "sriovnetwork.k8s.cni.cncf.io/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "policy2",

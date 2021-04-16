@@ -7,7 +7,7 @@ metadata:
     alm-examples: |
       [
         {
-          "apiVersion": "sriovnetwork.openshift.io/v1",
+          "apiVersion": "sriovnetwork.k8s.cni.cncf.io/v1",
           "kind": "SriovOperatorConfig",
           "metadata": {
             "name": "default",
@@ -20,7 +20,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "sriovnetwork.openshift.io/v1",
+          "apiVersion": "sriovnetwork.k8s.cni.cncf.io/v1",
           "kind": "SriovNetworkNodePolicy",
           "metadata": {
             "name": "policy-1",
@@ -47,7 +47,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "sriovnetwork.openshift.io/v1",
+          "apiVersion": "sriovnetwork.k8s.cni.cncf.io/v1",
           "kind": "SriovNetwork",
           "metadata": {
             "name": "example-sriovnetwork",
@@ -63,7 +63,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "sriovnetwork.openshift.io/v1",
+          "apiVersion": "sriovnetwork.k8s.cni.cncf.io/v1",
           "kind": "SriovIBNetwork",
           "metadata": {
             "name": "example-sriovibnetwork",
@@ -77,7 +77,7 @@ metadata:
           }
         },
         {
-          "apiVersion": "sriovnetwork.openshift.io/v1",
+          "apiVersion": "sriovnetwork.k8s.cni.cncf.io/v1",
           "kind": "SriovNetworkNodeState",
           "metadata": {
             "name": "minikube",
@@ -104,27 +104,27 @@ spec:
     - description: Represents an cluster-wide policy of configuring SR-IOV Operator
       displayName: Sriov Operator Config
       kind: SriovOperatorConfig
-      name: sriovoperatorconfigs.sriovnetwork.openshift.io
+      name: sriovoperatorconfigs.sriovnetwork.k8s.cni.cncf.io
       version: v1
     - description: Represents an policy of configuring SR-IOV components on nodes
       displayName: Sriov Network
       kind: SriovNetwork
-      name: sriovnetworks.sriovnetwork.openshift.io
+      name: sriovnetworks.sriovnetwork.k8s.cni.cncf.io
       version: v1
     - description: Represents an policy of configuring SR-IOV components on nodes
       displayName: Sriov Network Node Policy
       kind: SriovNetworkNodePolicy
-      name: sriovnetworknodepolicies.sriovnetwork.openshift.io
+      name: sriovnetworknodepolicies.sriovnetwork.k8s.cni.cncf.io
       version: v1
     - description: Represents the state of SR-IOV network devices on a node
       displayName: Sriov Network Node State
       kind: SriovNetworkNodeState
-      name: sriovnetworknodestates.sriovnetwork.openshift.io
+      name: sriovnetworknodestates.sriovnetwork.k8s.cni.cncf.io
       version: v1
     - description: Represents an policy of configuring SR-IOV IB network components on a node
       displayName: Sriov IB Network
       kind: SriovIBNetwork
-      name: sriovibnetworks.sriovnetwork.openshift.io
+      name: sriovibnetworks.sriovnetwork.k8s.cni.cncf.io
       version: v1
   description: |
       # SR-IOV Network Operator for Openshift
@@ -181,7 +181,7 @@ spec:
         - apiGroups: ["admissionregistration.k8s.io"]
           resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
           verbs: ["*"]
-        - apiGroups: ["sriovnetwork.openshift.io"]
+        - apiGroups: ["sriovnetwork.k8s.cni.cncf.io"]
           resources: ["*"]
           verbs: ["*"]
         - apiGroups: ["machineconfiguration.openshift.io"]
@@ -270,7 +270,7 @@ spec:
           - "get"
           - "update"
         - apiGroups:
-          - sriovnetwork.openshift.io
+          - sriovnetwork.k8s.cni.cncf.io
           resources:
           - '*'
           - sriovnetworknodestates

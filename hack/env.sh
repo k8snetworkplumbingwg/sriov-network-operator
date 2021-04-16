@@ -30,7 +30,7 @@ fi
 
 export RELEASE_VERSION=4.7.0
 export OPERATOR_NAME=sriov-network-operator
-export RESOURCE_PREFIX=${RESOURCE_PREFIX:-openshift.io}
+export RESOURCE_PREFIX=${RESOURCE_PREFIX:-k8s.cni.cncf.io}
 export ENABLE_ADMISSION_CONTROLLER=${ENABLE_ADMISSION_CONTROLLER:-"true"}
 export CLUSTER_TYPE=${CLUSTER_TYPE:-openshift}
 export NAMESPACE=${NAMESPACE:-"openshift-sriov-network-operator"}

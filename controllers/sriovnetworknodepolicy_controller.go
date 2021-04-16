@@ -56,8 +56,8 @@ type SriovNetworkNodePolicyReconciler struct {
 
 var ctlrlogger = logf.Log.WithName("SriovNetworkNodePolicyController")
 
-// +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sriovnetwork.k8s.cni.cncf.io,resources=sriovnetworknodepolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sriovnetwork.k8s.cni.cncf.io,resources=sriovnetworknodepolicies/status,verbs=get;update;patch
 
 func (r *SriovNetworkNodePolicyReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()

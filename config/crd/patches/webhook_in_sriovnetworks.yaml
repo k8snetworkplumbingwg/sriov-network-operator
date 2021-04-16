@@ -3,7 +3,7 @@
 apiVersion: apiextensions.k8s.io/v1beta1
 kind: CustomResourceDefinition
 metadata:
-  name: sriovnetworks.sriovnetwork.openshift.io
+  name: sriovnetworks.sriovnetwork.k8s.cni.cncf.io
 spec:
   conversion:
     strategy: Webhook

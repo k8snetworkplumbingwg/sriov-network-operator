@@ -42,8 +42,8 @@ type SriovNetworkReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworks,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworks/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sriovnetwork.k8s.cni.cncf.io,resources=sriovnetworks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sriovnetwork.k8s.cni.cncf.io,resources=sriovnetworks/status,verbs=get;update;patch
 
 func (r *SriovNetworkReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()

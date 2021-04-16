@@ -12,7 +12,7 @@ resources+=(ns/openshift-multus)
 # other sriov network operator related namespaces
 resources+=(ns/openshift-marketplace)
 
-# sriovnetwork.openshift.io
+# sriovnetwork.k8s.cni.cncf.io
 resources+=(sriovnetworknodepolicies sriovnetworknodestates sriovnetworks sriovoperatorconfigs sriovibnetworks)
 
 # net-attch-def

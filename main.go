@@ -70,7 +70,7 @@ func main() {
 		MetricsBindAddress: metricsAddr,
 		Port:               9443,
 		LeaderElection:     enableLeaderElection,
-		LeaderElectionID:   "578c20de.sriovnetwork.openshift.io",
+		LeaderElectionID:   "578c20de.sriovnetwork.k8s.cni.cncf.io",
 		Namespace:          namespace,
 	})
 	if err != nil {

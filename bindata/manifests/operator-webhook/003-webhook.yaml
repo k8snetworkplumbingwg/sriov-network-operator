@@ -7,7 +7,7 @@ metadata:
   annotations:
     service.beta.openshift.io/inject-cabundle: "true"
 webhooks:
-  - name: operator-webhook.sriovnetwork.openshift.io
+  - name: operator-webhook.sriovnetwork.k8s.cni.cncf.io
     failurePolicy: Fail
     clientConfig:
       service:
@@ -16,7 +16,7 @@ webhooks:
         path: "/mutating-custom-resource"
     rules:
       - operations: [ "CREATE", "UPDATE" ]
-        apiGroups: ["sriovnetwork.openshift.io"]
+        apiGroups: ["sriovnetwork.k8s.cni.cncf.io"]
         apiVersions: ["v1"]
         resources: ["sriovnetworknodepolicies"]
 
@@ -29,7 +29,7 @@ metadata:
   annotations:
     service.beta.openshift.io/inject-cabundle: "true"
 webhooks:
-  - name: operator-webhook.sriovnetwork.openshift.io
+  - name: operator-webhook.sriovnetwork.k8s.cni.cncf.io
     failurePolicy: Fail
     clientConfig:
       service:
@@ -38,6 +38,6 @@ webhooks:
         path: "/validating-custom-resource"
     rules:
       - operations: [ "CREATE", "UPDATE", "DELETE" ]
-        apiGroups: ["sriovnetwork.openshift.io"]
+        apiGroups: ["sriovnetwork.k8s.cni.cncf.io"]
         apiVersions: ["v1"]
         resources: ["sriovnetworknodepolicies"]

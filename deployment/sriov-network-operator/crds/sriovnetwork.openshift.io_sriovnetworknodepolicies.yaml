@@ -6,9 +6,9 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.3.0
   creationTimestamp: null
-  name: sriovnetworknodepolicies.sriovnetwork.openshift.io
+  name: sriovnetworknodepolicies.sriovnetwork.k8s.cni.cncf.io
 spec:
-  group: sriovnetwork.openshift.io
+  group: sriovnetwork.k8s.cni.cncf.io
   names:
     kind: SriovNetworkNodePolicy
     listKind: SriovNetworkNodePolicyList

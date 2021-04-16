@@ -1,4 +1,4 @@
-apiVersion: sriovnetwork.openshift.io/v1
+apiVersion: sriovnetwork.k8s.cni.cncf.io/v1
 kind: SriovNetworkNodeState
 metadata:
   name: sriovnetworknodestate-sample

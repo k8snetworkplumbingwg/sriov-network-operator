@@ -24,7 +24,7 @@ rules:
 - apiGroups: ["admissionregistration.k8s.io"]
   resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
   verbs: ["*"]
-- apiGroups: ["sriovnetwork.openshift.io"]
+- apiGroups: ["sriovnetwork.k8s.cni.cncf.io"]
   resources: ["*"]
   verbs: ["*"]
 - apiGroups: ["machineconfiguration.openshift.io"]
