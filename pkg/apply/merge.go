@@ -34,6 +34,10 @@ func MergeObjectForUpdate(current, updated *uns.Unstructured) error {
 		return err
 	}
 
+	if err := MergeWebhookForUpdate(current, updated); err != nil {
+		return err
+	}
+
 	// For all object types, merge metadata.
 	// Run this last, in case any of the more specific merge logic has
 	// changed "updated"
@@ -111,6 +115,71 @@ func MergeServiceAccountForUpdate(current, updated *uns.Unstructured) error {
 		}
 		if ok {
 			uns.SetNestedField(updated.Object, curImagePullSecrets, "imagePullSecrets")
+		}
+	}
+	return nil
+}
+
+func MergeWebhookForUpdate(current, updated *uns.Unstructured) error {
+	gvk := updated.GroupVersionKind()
+	if gvk.Group != "admissionregistration.k8s.io" {
+		return nil
+	}
+
+	if gvk.Kind != "MutatingWebhookConfiguration" && gvk.Kind != "ValidatingWebhookConfiguration" {
+		return nil
+	}
+
+	curWebhooks, _, err := uns.NestedSlice(current.Object, "webhooks")
+	if err != nil {
+		return err
+	}
+
+	updWebhooks, _, err := uns.NestedSlice(updated.Object, "webhooks")
+	if err != nil {
+		return err
+	}
+
+	for _, updWebhook := range updWebhooks {
+		u, ok := updWebhook.(map[string]interface{})
+		if !ok {
+			return errors.Errorf("Unrecognized updated webhook configuration format")
+		}
+
+		_, foundUpd, err := uns.NestedString(u, "clientConfig", "caBundle")
+		if err != nil {
+			return err
+		}
+
+		for _, curWebhook := range curWebhooks {
+			c, ok := curWebhook.(map[string]interface{})
+			if !ok {
+				return errors.Errorf("Unrecognized current webhook configuration format")
+			}
+
+			if c["name"] != u["name"] {
+				continue
+			}
+
+			curCaBundle, foundCur, err := uns.NestedString(c, "clientConfig", "caBundle")
+			if err != nil {
+				return err
+			}
+
+			// Update CA bundle with current if we are not applying a new one
+			if foundCur && !foundUpd {
+				err = uns.SetNestedField(u, curCaBundle, "clientConfig", "caBundle")
+				if err != nil {
+					return err
+				}
+
+				err = uns.SetNestedSlice(updated.Object, updWebhooks, "webhooks")
+				if err != nil {
+					return err
+				}
+			}
+
+			break
 		}
 	}
 	return nil

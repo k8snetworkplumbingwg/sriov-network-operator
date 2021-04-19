@@ -260,6 +260,93 @@ metadata:
 	g.Expect(s).To(ConsistOf("foo"))
 }
 
+func TestMergeWebhookWithCaBundle(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	cur := UnstructuredFromYaml(t, `
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: wh
+  annotations:
+    a: cur
+webhooks:
+- name: wh
+  clientConfig:
+    caBundle: cur`)
+
+	upd := UnstructuredFromYaml(t, `
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: wh
+  annotations:
+    a: upd
+webhooks:
+- name: wh
+  clientConfig:
+    caBundle: upd`)
+
+	err := MergeObjectForUpdate(cur, upd)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	s, ok, err := uns.NestedSlice(upd.Object, "webhooks")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(BeTrue())
+	g.Expect(s).To(HaveLen(1))
+
+	m, ok := s[0].(map[string]interface{})
+	g.Expect(ok).To(BeTrue())
+
+	c, ok, err := uns.NestedString(m, "clientConfig", "caBundle")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(BeTrue())
+	g.Expect(c).To(Equal("upd"))
+}
+
+func TestMergeWebhookWithNoCaBundle(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	cur := UnstructuredFromYaml(t, `
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: wh
+  annotations:
+    a: cur
+webhooks:
+- name: wh
+  clientConfig:
+    caBundle: cur`)
+
+	upd := UnstructuredFromYaml(t, `
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: wh
+  annotations:
+    a: upd
+webhooks:
+- name: wh
+  clientConfig: {}`)
+
+	err := MergeObjectForUpdate(cur, upd)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	s, ok, err := uns.NestedSlice(upd.Object, "webhooks")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(BeTrue())
+	g.Expect(s).To(HaveLen(1))
+
+	m, ok := s[0].(map[string]interface{})
+	g.Expect(ok).To(BeTrue())
+
+	c, ok, err := uns.NestedString(m, "clientConfig", "caBundle")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(BeTrue())
+	g.Expect(c).To(Equal("cur"))
+}
+
 // UnstructuredFromYaml creates an unstructured object from a raw yaml string
 func UnstructuredFromYaml(t *testing.T, obj string) *uns.Unstructured {
 	t.Helper()
