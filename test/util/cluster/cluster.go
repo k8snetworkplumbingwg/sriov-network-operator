@@ -99,7 +99,7 @@ func (n *EnabledNodes) FindSriovDevices(node string) ([]*sriovv1.InterfaceExt, e
 func (n *EnabledNodes) FindOneVfioSriovDevice() (string, sriovv1.InterfaceExt) {
 	for _, node := range n.Nodes {
 		for _, nic := range n.States[node].Status.Interfaces {
-			if nic.Vendor == "8086" {
+			if nic.Vendor == "8086" && nic.TotalVfs > 0 {
 				return node, nic
 			}
 		}
