@@ -25,6 +25,8 @@ type K8sPlugin struct {
 	openVSwitchService    *service.Service
 	networkManagerService *service.Service
 	updateTarget          *k8sUpdateTarget
+	operatorConf          *sriovnetworkv1.SriovOperatorConfig
+	serviceFilters        service.FilterList
 }
 
 type k8sUpdateTarget struct {
@@ -117,8 +119,10 @@ func (p *K8sPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetworkNodeS
 
 	p.updateTarget.reset()
 	// TODO add check for enableOvsOffload in OperatorConfig later
-	// Update services if switchdev not required
+	// Update services if switchdev required
 	if utils.IsSwitchdevModeSpec(new.Spec) {
+		// Generate services Filters based on config
+		p.GenerateServiceFilters()
 		// Check services
 		err = p.servicesStateUpdate()
 		if err != nil {
@@ -166,6 +170,12 @@ func (p *K8sPlugin) Apply() error {
 	}
 
 	for _, systemService := range p.updateTarget.systemServices {
+		if p.serviceFilters.Match(systemService) {
+			glog.Info("MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM")
+			glog.Infof("skipinng %s", systemService.Name)
+			glog.Info("MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM")
+			continue
+		}
 		if err := p.updateSystemService(systemService); err != nil {
 			return err
 		}
@@ -314,6 +324,12 @@ func (p *K8sPlugin) isSystemServiceNeedUpdate(serviceObj *service.Service) bool 
 func (p *K8sPlugin) systemServicesStateUpdate() error {
 	var services []*service.Service
 	for _, systemService := range p.getSystemServices() {
+		if p.serviceFilters.Match(systemService) {
+			glog.Info("MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM")
+			glog.Infof("skipinng %s", systemService.Name)
+			glog.Info("MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM")
+			continue
+		}
 		exist, err := p.serviceManager.IsServiceExist(systemService.Path)
 		if err != nil {
 			return err
@@ -392,4 +408,18 @@ func (p *K8sPlugin) updateSystemService(serviceObj *service.Service) error {
 	}
 
 	return p.serviceManager.EnableService(updatedService)
+}
+
+func (p *K8sPlugin) GenerateServiceFilters() {
+	var filters service.FilterList
+
+	// Skip ovs service if ovs is containerized
+	// TODO read operator config
+	p.operatorConf.Spec.ContainerizedOvs = true
+	if p.operatorConf.Spec.ContainerizedOvs {
+		ovsFilter := service.NewNameFilter("ovs-vswitchd.service")
+		filters = append(filters, ovsFilter)
+	}
+
+	p.serviceFilters = filters
 }
