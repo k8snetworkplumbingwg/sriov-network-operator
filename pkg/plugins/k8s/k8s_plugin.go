@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/coreos/go-systemd/v22/unit"
 	"github.com/golang/glog"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/service"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
@@ -25,6 +28,9 @@ type K8sPlugin struct {
 	openVSwitchService    *service.Service
 	networkManagerService *service.Service
 	updateTarget          *k8sUpdateTarget
+	serviceFilters        service.FilterList
+	client                snclientset.Interface
+	operatorConf          *sriovnetworkv1.SriovOperatorConfig
 }
 
 type k8sUpdateTarget struct {
@@ -72,10 +78,14 @@ const (
 	switchdevRenamingUdevScript = switchdevManifestPath + "files/switchdev-vf-link-name.sh.yaml"
 
 	chroot = "/host"
+
+	defaultSriovOperatorConfig = "default"
 )
 
 var (
 	Plugin K8sPlugin
+
+	namespace = os.Getenv("NAMESPACE")
 )
 
 // Initialize our plugin and set up initial values
@@ -91,6 +101,14 @@ func init() {
 	if err := Plugin.readManifestFiles(); err != nil {
 		panic(err)
 	}
+
+	// Get kubernetes client to read SriovOperatorConfig
+	clientset, err := utils.GetKubernetesClient()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	Plugin.client = clientset
 }
 
 // Name returns the name of the plugin
@@ -116,9 +134,15 @@ func (p *K8sPlugin) OnNodeStateChange(old, new *sriovnetworkv1.SriovNetworkNodeS
 	needReboot = false
 
 	p.updateTarget.reset()
-	// TODO add check for enableOvsOffload in OperatorConfig later
-	// Update services if switchdev not required
+
+	// Update services if switchdev required
 	if utils.IsSwitchdevModeSpec(new.Spec) {
+		err = p.readSriovOperatorConfig()
+		if err != nil {
+			return
+		}
+		// Generate services Filters based on OperatorConfig
+		p.GenerateServiceFilters()
 		// Check services
 		err = p.servicesStateUpdate()
 		if err != nil {
@@ -314,6 +338,10 @@ func (p *K8sPlugin) isSystemServiceNeedUpdate(serviceObj *service.Service) bool 
 func (p *K8sPlugin) systemServicesStateUpdate() error {
 	var services []*service.Service
 	for _, systemService := range p.getSystemServices() {
+		if p.serviceFilters.Match(systemService) {
+			glog.Infof("k8s-plugin(): skipping service %s", systemService.Name)
+			continue
+		}
 		exist, err := p.serviceManager.IsServiceExist(systemService.Path)
 		if err != nil {
 			return err
@@ -392,4 +420,24 @@ func (p *K8sPlugin) updateSystemService(serviceObj *service.Service) error {
 	}
 
 	return p.serviceManager.EnableService(updatedService)
+}
+
+func (p *K8sPlugin) readSriovOperatorConfig() error {
+	sriovOperatorConfig, err := p.client.SriovnetworkV1().SriovOperatorConfigs(namespace).Get(context.TODO(),
+		defaultSriovOperatorConfig, metav1.GetOptions{})
+	p.operatorConf = sriovOperatorConfig
+
+	return err
+}
+
+func (p *K8sPlugin) GenerateServiceFilters() {
+	var filters service.FilterList
+
+	// Skip ovs service if ovs is containerized
+	if p.operatorConf.Spec.ContainerizedOvs {
+		ovsFilter := service.NewNameFilter("ovs-vswitchd.service")
+		filters = append(filters, ovsFilter)
+	}
+
+	p.serviceFilters = filters
 }

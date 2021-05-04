@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"fmt"
+	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -21,6 +22,8 @@ import (
 	"github.com/jaypipes/ghw"
 	"github.com/vishvananda/netlink"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 )
@@ -740,4 +743,22 @@ func hasMellanoxInterfacesInSpec(newState *sriovnetworkv1.SriovNetworkNodeState)
 		}
 	}
 	return false
+}
+
+func GetKubernetesClient() (snclientset.Interface, error) {
+	var config *rest.Config
+	var err error
+	kubeconfig := os.Getenv("KUBECONFIG")
+	if kubeconfig != "" {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+	} else {
+		// creates the in-cluster config
+		config, err = rest.InClusterConfig()
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return snclientset.NewForConfig(config)
 }
