@@ -42,6 +42,10 @@ spec:
                   type: string
                 description: NodeSelector selects the nodes to be configured
                 type: object
+              containerizedOvs:
+                description: Flag to support deploying containerized ovs and skip
+                  maintaining ovs-vswitchd service for OvsOffload.
+                type: boolean
               disableDrain:
                 description: Flag to disable nodes drain during debugging
                 type: boolean

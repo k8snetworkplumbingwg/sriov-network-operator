@@ -24,6 +24,8 @@ type SriovOperatorConfigSpec struct {
 	DisableDrain bool `json:"disableDrain,omitempty"`
 	// Flag to enable OVS hardware offload. Set to 'true' to provision switchdev-configuration.service and enable OpenvSwitch hw-offload on nodes.
 	EnableOvsOffload bool `json:"enableOvsOffload,omitempty"`
+	// Flag to support deploying containerized ovs and skip maintaining ovs-vswitchd service for OvsOffload.
+	ContainerizedOvs bool `json:"containerizedOvs,omitempty"`
 }
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig
