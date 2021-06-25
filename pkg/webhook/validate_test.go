@@ -14,23 +14,44 @@ import (
 
 func TestMain(m *testing.M) {
 	NicIdMap = []string{
+		"14e4 168e 16af", // Broadcom bnx2x BCM57810
+		"14e4 16a1 16ad", // Broadcom bnx2x BCM57840
+		"14e4 16d7 16c1", // Broadcom bnxt_en BCM57414 NetXtreme-E
+		"14e4 1750 1806", // Broadcom bnxt_en BCM57508 NetXtreme-E
+		"1425 4401 4801", // Chelsio cxgb4 T420-CR
+		"1425 4402 4802", // Chelsio cxgb4 T422-CR
+		"1425 5401 5801", // Chelsio cxgb4 T520-CR
+		"1425 540d 580d", // Chelsio cxgb4 T580-CR
+		"10df 0720 0720", // Emulex be2net OneConnect
 		"8086 158a 154c", // I40e XXV710
 		"8086 158b 154c", // I40e 25G SFP28
-		"8086 1572 154c", // I40e 10G X710 SFP+
-		"8086 0d58 154c", // I40e XXV710 N3000
 		"8086 1583 154c", // I40e 40G XL710 QSFP+
+		"8086 1572 154c", // I40e 10G X710 SFP+
+		"8086 37d0 37cd", // Intel i40e X722 10G
+		"8086 0d58 154c", // I40e XXV710 N3000
 		"8086 1592 1889", // Columbiaville E810-CQDA2/2CQDA2
 		"8086 1593 1889", // Columbiaville E810-XXVDA4
 		"8086 159b 1889", // Columbiaville E810-XXVDA2
-		"15b3 1013 1014", // ConnectX-4
-		"15b3 1015 1016", // ConnectX-4LX
-		"15b3 1017 1018", // ConnectX-5, PCIe 3.0
-		"15b3 1019 101a", // ConnectX-5 Ex
-		"15b3 101b 101c", // ConnectX-6
-		"15b3 101d 101e", // ConnectX-6 Dx
-		"15b3 a2d6 101e", // MT42822 BlueField-2 integrated ConnectX-6 Dx
-		"14e4 16d7 16dc", // BCM57414 2x25G
-		"14e4 1750 1806", // BCM75508 2x100G
+		"8086 1521 1520", // Intel igb I350
+		"8086 10fb 10ed", // Intel ixgbe 82599ES
+		"8086 154d 10ed", // Intel ixgbe X520
+		"8086 1528 1515", // Intel ixgbe X520-AT2
+		"8086 1563 1565", // Intel ixgbe X550T
+		"15b3 1007 1004", // Nvidia mlx4 ConnectX-3 Pro
+		"15b3 1013 1014", // Nvidia mlx5 ConnectX-4
+		"15b3 1015 1016", // Nvidia mlx5 ConnectX-4 LX
+		"15b3 1017 1018", // Nvidia mlx5 ConnectX-5
+		"15b3 1019 101a", // Nvidia mlx5 ConnectX-5 Ex
+		"15b3 101b 101c", // Nvidia mlx5 ConnectX-6
+		"15b3 101d 101e", // Nvidia mlx5 ConnectX-6 Dx
+		"15b3 a2d6 101e", // Nvidia mlx5 MT42822 BlueField-2 integrated ConnectX-6 Dx
+		"1dd8 1002 1003", // Pensando ionic DSC
+		"1077 8070 8090", // Qlogic qede QL41000
+		"1077 1656 1664", // Qlogic qede QL45000 25G
+		"1077 1654 1664", // Qlogic qede QL45000 50G
+		"8086 1591 1889", // Silicom ice STS
+		"1924 0a03 1a03", // Solarflare sfc SFC9220
+		"1924 0b03 1b03", // Solarflare sfc SFC9250
 	}
 	os.Exit(m.Run())
 }
