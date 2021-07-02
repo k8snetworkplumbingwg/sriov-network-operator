@@ -8,6 +8,8 @@ import (
 type SriovNetworkPoolConfigSpec struct {
 	// OvsHardwareOffloadConfig describes the OVS HWOL configuration for selected Nodes
 	OvsHardwareOffloadConfig OvsHardwareOffloadConfig `json:"ovsHardwareOffloadConfig,omitempty"`
+	// RDMAExclusiveMode enables RDMA exclusive mode for the selected nodes
+	RDMAExclusiveMode []RDMAExclusiveModeConfig `json:"rdmaExclusiveMode,omitempty"`
 }
 
 type OvsHardwareOffloadConfig struct {
@@ -17,6 +19,19 @@ type OvsHardwareOffloadConfig struct {
 	// On OpenShift:
 	// Name is the name of MachineConfigPool to be enabled with OVS hardware offload
 	Name string `json:"name,omitempty"`
+}
+
+type RDMAExclusiveModeConfig struct {
+	// Name is mandatory and must be unique.
+	// On Kubernetes:
+	// Name is the name of OvsHardwareOffloadConfig
+	// On OpenShift:
+	// Name is the name of MachineConfigPool to be enabled with OVS hardware offload
+	Name string `json:"name,omitempty"`
+	// On Kubernetes:
+	// Node Selector will be used to select nodes and update SriovNetworkNodeState for them
+	// On OpenShift: unused
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // SriovNetworkPoolConfigStatus defines the observed state of SriovNetworkPoolConfig

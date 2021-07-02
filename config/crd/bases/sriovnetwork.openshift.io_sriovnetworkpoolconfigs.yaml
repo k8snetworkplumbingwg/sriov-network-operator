@@ -48,6 +48,26 @@ spec:
                       offload'
                     type: string
                 type: object
+              rdmaExclusiveMode:
+                description: RDMAExclusiveMode enables RDMA exclusive mode for the
+                  selected nodes
+                items:
+                  properties:
+                    name:
+                      description: 'Name is mandatory and must be unique. On Kubernetes:
+                        Name is the name of OvsHardwareOffloadConfig On OpenShift:
+                        Name is the name of MachineConfigPool to be enabled with OVS
+                        hardware offload'
+                      type: string
+                    nodeSelector:
+                      additionalProperties:
+                        type: string
+                      description: 'On Kubernetes: Node Selector will be used to select
+                        nodes and update SriovNetworkNodeState for them On OpenShift:
+                        unused'
+                      type: object
+                  type: object
+                type: array
             type: object
           status:
             description: SriovNetworkPoolConfigStatus defines the observed state of

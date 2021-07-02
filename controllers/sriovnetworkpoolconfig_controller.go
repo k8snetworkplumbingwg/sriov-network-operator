@@ -6,7 +6,10 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
+	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -16,7 +19,6 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	render "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
-	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 )
 
 // SriovNetworkPoolConfigReconciler reconciles a SriovNetworkPoolConfig object
@@ -74,6 +76,11 @@ func (r *SriovNetworkPoolConfigReconciler) Reconcile(req ctrl.Request) (ctrl.Res
 				return reconcile.Result{}, err
 			}
 		}
+		if utils.ClusterType == utils.ClusterTypeKubernetes {
+			if err = r.syncRDMAModeConfigs(instance, false); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
 	} else {
 		// The object is being deleted
 		if sriovnetworkv1.StringInArray(sriovnetworkv1.POOLCONFIGFINALIZERNAME, instance.ObjectMeta.Finalizers) {
@@ -83,6 +90,11 @@ func (r *SriovNetworkPoolConfigReconciler) Reconcile(req ctrl.Request) (ctrl.Res
 				if err = r.syncOvsHardwareOffloadMachineConfigs(instance, true); err != nil {
 					// if fail to delete the external dependency here, return with error
 					// so that it can be retried
+					return reconcile.Result{}, err
+				}
+			}
+			if utils.ClusterType == utils.ClusterTypeKubernetes {
+				if err = r.syncRDMAModeConfigs(instance, true); err != nil {
 					return reconcile.Result{}, err
 				}
 			}
@@ -202,4 +214,75 @@ func (r *SriovNetworkPoolConfigReconciler) syncOvsHardwareOffloadMachineConfigs(
 	}
 
 	return nil
+}
+
+func (r *SriovNetworkPoolConfigReconciler) syncRDMAModeConfigs(
+	nc *sriovnetworkv1.SriovNetworkPoolConfig, deletion bool) error {
+	logger := r.Log.WithName("syncRDMAModeConfigs")
+	nodes := &corev1.NodeList{}
+	err := r.List(context.TODO(), nodes, &client.ListOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	for _, node := range nodes.Items {
+		currentNodeState := &sriovnetworkv1.SriovNetworkNodeState{}
+		err = r.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: node.Name}, currentNodeState)
+		if err != nil {
+			logger.Info("Fail to get SriovNetworkNodeState", "namespace", namespace, "name", node.Name)
+			if errors.IsNotFound(err) {
+				if deletion {
+					// nothing to update
+					continue
+				}
+				ns := &sriovnetworkv1.SriovNetworkNodeState{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      node.Name,
+						Namespace: namespace}}
+				err = r.Create(context.TODO(), ns)
+				if err != nil {
+					return fmt.Errorf("Couldn't create SriovNetworkNodeState: %v", err)
+				}
+				logger.Info("Created SriovNetworkNodeState for", namespace, ns.Name)
+			} else {
+				return fmt.Errorf("Failed to get SriovNetworkNodeState: %v", err)
+			}
+		} else {
+			logger.Info("SriovNetworkNodeState already exists, updating")
+			newNodeState := currentNodeState.DeepCopy()
+
+			currentlyEnabled := currentNodeState.Spec.NodeSettings.RDMAExclusiveMode
+
+			var expectEnabled bool
+
+			for _, rdmaConf := range nc.Spec.RDMAExclusiveMode {
+				if isNodeSelected(&node, rdmaConf.NodeSelector) {
+					expectEnabled = !deletion
+					break
+				}
+			}
+			if expectEnabled != currentlyEnabled {
+				// update state if current status didn't match expected
+				newNodeState.Spec.NodeSettings.RDMAExclusiveMode = expectEnabled
+				err = r.Update(context.TODO(), newNodeState)
+				if err != nil {
+					return fmt.Errorf("Couldn't update SriovNetworkNodeState: %v", err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// isNodeSelected check if node labels match selectors map
+func isNodeSelected(node *corev1.Node, selectors map[string]string) bool {
+	for k, v := range selectors {
+		if nv, ok := node.Labels[k]; ok && nv == v {
+			continue
+		}
+		return false
+	}
+	return true
 }
