@@ -31,6 +31,7 @@ const (
 	GenericPlugin = "generic_plugin"
 	VirtualPlugin = "virtual_plugin"
 	K8sPlugin     = "k8s_plugin"
+	RDMAPlugin    = "rdma_plugin"
 )
 
 // loadPlugin loads a single plugin from a file path
