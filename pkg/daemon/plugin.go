@@ -30,8 +30,8 @@ const (
 	SpecVersion   = "1.0"
 	GenericPlugin = "generic_plugin"
 	VirtualPlugin = "virtual_plugin"
-	McoPlugin     = "mco_plugin"
 	K8sPlugin     = "k8s_plugin"
+	RDMAPlugin    = "rdma_plugin"
 )
 
 // loadPlugin loads a single plugin from a file path

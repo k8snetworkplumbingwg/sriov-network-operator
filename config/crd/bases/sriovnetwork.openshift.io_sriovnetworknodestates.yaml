@@ -73,6 +73,12 @@ spec:
                   - pciAddress
                   type: object
                 type: array
+              nodeSettings:
+                description: NodeSettings defines node level configuration options
+                properties:
+                  rdmaExclusiveMode:
+                    type: boolean
+                type: object
             type: object
           status:
             description: SriovNetworkNodeStateStatus defines the observed state of
@@ -141,6 +147,12 @@ spec:
                 type: array
               lastSyncError:
                 type: string
+              nodeSettings:
+                description: NodeSettings defines node level configuration options
+                properties:
+                  rdmaExclusiveMode:
+                    type: boolean
+                type: object
               syncStatus:
                 type: string
             type: object

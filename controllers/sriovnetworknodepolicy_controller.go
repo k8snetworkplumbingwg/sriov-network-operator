@@ -278,6 +278,10 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovNetworkNodeState(np *sriovne
 		newVersion := found.DeepCopy()
 		newVersion.Spec = ns.Spec
 
+		// NodeSettings are managed by SriovNetworkPoolConfig controller,
+		// we should not rewrite them here
+		newVersion.Spec.NodeSettings = found.Spec.NodeSettings
+
 		// Previous Policy Priority(ppp) records the priority of previous evaluated policy in node policy list.
 		// Since node policy list is already sorted with priority number, comparing current priority with ppp shall
 		// be sufficient.
