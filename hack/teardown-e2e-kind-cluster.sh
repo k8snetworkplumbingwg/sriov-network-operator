@@ -7,3 +7,5 @@ if ! command -v kind &> /dev/null; then
 fi
 
 kind delete cluster
+sudo systemctl stop vf-switcher.service
+
