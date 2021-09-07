@@ -518,15 +518,6 @@ func (dn *Daemon) nodeStateSyncHandler(generation int64) error {
 		return nil
 	}
 
-	// restart device plugin pod
-	if reqDrain || latestState.Spec.DpConfigVersion != dn.nodeState.Spec.DpConfigVersion {
-		glog.Info("nodeStateSyncHandler(): restart device plugin pod")
-		if err := dn.restartDevicePluginPod(); err != nil {
-			glog.Errorf("nodeStateSyncHandler(): fail to restart device plugin pod: %v", err)
-			return err
-		}
-	}
-
 	if anno, ok := dn.node.Annotations[annoKey]; ok && (anno == annoDraining || anno == annoMcpPaused) {
 		if err := dn.completeDrain(); err != nil {
 			glog.Errorf("nodeStateSyncHandler(): failed to complete draining: %v", err)
@@ -543,6 +534,13 @@ func (dn *Daemon) nodeStateSyncHandler(generation int64) error {
 	dn.refreshCh <- Message{
 		syncStatus:    "Succeeded",
 		lastSyncError: "",
+	}
+
+	// restart device plugin pod after node policy applied
+	glog.Info("nodeStateSyncHandler(): restart device plugin pod")
+	if err := dn.restartDevicePluginPod(); err != nil {
+		glog.Errorf("nodeStateSyncHandler(): fail to restart device plugin pod: %v", err)
+		return err
 	}
 	// wait for writer to refresh the status
 	<-dn.syncCh
