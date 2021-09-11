@@ -270,7 +270,6 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovNetworkNodeState(np *sriovne
 	if err != nil {
 		logger.Info("Fail to get SriovNetworkNodeState", "namespace", ns.Namespace, "name", ns.Name)
 		if errors.IsNotFound(err) {
-			ns.Spec.DpConfigVersion = cksum
 			err = r.Create(context.TODO(), ns)
 			if err != nil {
 				return fmt.Errorf("Couldn't create SriovNetworkNodeState: %v", err)
