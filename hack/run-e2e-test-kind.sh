@@ -7,7 +7,7 @@ export SRIOV_NETWORK_CONFIG_DAEMON_IMAGE="${SRIOV_NETWORK_CONFIG_DAEMON_IMAGE:-o
 RETRY_MAX=10
 INTERVAL=10
 TIMEOUT=300
-MULTUS_CNI_DS="https://raw.githubusercontent.com/intel/multus-cni/master/images/multus-daemonset.yml"
+MULTUS_CNI_DS="https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml"
 test_pf_pci_addr="$1"
 
 check_requirements() {
