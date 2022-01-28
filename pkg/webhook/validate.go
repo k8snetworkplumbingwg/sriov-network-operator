@@ -260,11 +260,15 @@ func keys(m map[string]([]string)) []string {
 }
 
 func validateNicModel(selector *sriovnetworkv1.SriovNetworkNicSelector, iface *sriovnetworkv1.InterfaceExt, node *corev1.Node) bool {
-	if selector.Vendor != "" && selector.Vendor != iface.Vendor {
-		return false
-	}
-	if selector.DeviceID != "" && selector.DeviceID != iface.DeviceID {
-		return false
+	// Assume that when NetFilter is set, we don't require a Vendor or a DeviceID
+	// since the device will be found by the NetFilter in the node.
+	if selector.NetFilter == "" {
+		if selector.Vendor != "" && selector.Vendor != iface.Vendor {
+			return false
+		}
+		if selector.DeviceID != "" && selector.DeviceID != iface.DeviceID {
+			return false
+		}
 	}
 	if len(selector.RootDevices) > 0 && !sriovnetworkv1.StringInArray(iface.PciAddress, selector.RootDevices) {
 		return false
