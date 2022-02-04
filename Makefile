@@ -24,6 +24,9 @@ export WATCH_NAMESPACE?=openshift-sriov-network-operator
 export GOFLAGS+=-mod=vendor
 export GO111MODULE=on
 PKGS=$(shell go list ./... | grep -v -E '/vendor/|/test|/examples')
+# github.com/jetstack/cert-manager latest version
+export CERT_MANAGER_VERSION?=v1.7.0
+export ENABLE_CERT_MANAGER?=true
 
 # go source files, ignore vendor directory
 SRC = $(shell find . -type f -name '*.go' -not -path "./vendor/*")

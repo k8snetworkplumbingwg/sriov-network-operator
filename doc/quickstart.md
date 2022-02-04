@@ -58,54 +58,13 @@ Webhooks are disabled when deploying on a Kubernetes cluster as per the instruct
    kubectl -n sriov-network-operator create secret tls operator-webhook-service --cert=cert.pem --key=key.pem
    kubectl -n sriov-network-operator create secret tls network-resources-injector-secret --cert=cert.pem --key=key.pem
    export ENABLE_ADMISSION_CONTROLLER=true
+   export ENABLE_CERT_MANAGER=false
    export WEBHOOK_CA_BUNDLE=$(base64 -w 0 < cacert.pem)
    make deploy-setup-k8s
    ```
 
 2. Using https://cert-manager.io/, deploy it as:
-   ```bash
-   kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.3.0/cert-manager.yaml
-   ```
 
-   Define the appropriate Issuer and Certificates, as an example:
-   ```bash
-   kubectl create ns sriov-network-operator
-   cat <<EOF | kubectl apply -f -
-   apiVersion: cert-manager.io/v1
-   kind: Issuer
-   metadata:
-     name: sriov-network-operator-selfsigned-issuer
-     namespace: sriov-network-operator
-   spec:
-     selfSigned: {}
-   ---
-   apiVersion: cert-manager.io/v1
-   kind: Certificate
-   metadata:
-     name: operator-webhook-service
-     namespace: sriov-network-operator
-   spec:
-     secretName: operator-webhook-service
-     dnsNames:
-     - operator-webhook-service.sriov-network-operator.svc
-     issuerRef:
-       name: sriov-network-operator-selfsigned-issuer
-   ---
-   apiVersion: cert-manager.io/v1
-   kind: Certificate
-   metadata:
-     name: network-resources-injector-service
-     namespace: sriov-network-operator
-   spec:
-     secretName: network-resources-injector-secret
-     dnsNames:
-     - network-resources-injector-service.sriov-network-operator.svc
-     issuerRef:
-       name: sriov-network-operator-selfsigned-issuer
-   EOF
-   ```
-
-    And then deploy the operator:
     ```bash
     export ENABLE_ADMISSION_CONTROLLER=true
     make deploy-setup-k8s

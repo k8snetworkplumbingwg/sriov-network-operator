@@ -1,0 +1,31 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: sriov-network-operator-selfsigned-issuer
+  namespace: $NAMESPACE
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: operator-webhook-service
+  namespace: $NAMESPACE
+spec:
+  secretName: operator-webhook-service
+  dnsNames:
+  - operator-webhook-service.sriov-network-operator.svc
+  issuerRef:
+    name: sriov-network-operator-selfsigned-issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: network-resources-injector-service
+  namespace: $NAMESPACE
+spec:
+  secretName: network-resources-injector-secret
+  dnsNames:
+  - network-resources-injector-service.sriov-network-operator.svc
+  issuerRef:
+    name: sriov-network-operator-selfsigned-issuer
