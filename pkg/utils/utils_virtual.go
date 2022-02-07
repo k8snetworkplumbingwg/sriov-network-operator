@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/golang/glog"
+	"github.com/hashicorp/go-retryablehttp"
 	dputils "github.com/intel/sriov-network-device-plugin/pkg/utils"
 	"github.com/jaypipes/ghw"
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
@@ -42,9 +43,12 @@ var (
 )
 
 const (
-	ospMetaDataDir = "/host/var/config/openstack/latest/"
-	ospNetworkData = ospMetaDataDir + "/network_data.json"
-	ospMetaData    = ospMetaDataDir + "/meta_data.json"
+	ospMetaDataDir     = "/host/var/config/openstack/latest/"
+	ospMetaDataBaseUrl = "http://169.254.169.254/openstack/latest"
+	ospNetworkDataFile = ospMetaDataDir + "/network_data.json"
+	ospMetaDataFile    = ospMetaDataDir + "/meta_data.json"
+	ospNetworkDataUrl  = ospMetaDataBaseUrl + "/network_data.json"
+	ospMetaDataUrl     = ospMetaDataBaseUrl + "/meta_data.json"
 )
 
 // OSPMetaDataDevice -- Device structure within meta_data.json
@@ -106,31 +110,65 @@ func metaData(platformType PlatformType, address string) (netFilter string, macA
 	return
 }
 
-func readOpenstackMetaData() (metaData *OSPMetaData, networkData *OSPNetworkData) {
-	networkData = &OSPNetworkData{}
-
-	rawBytes, err := ioutil.ReadFile(ospNetworkData)
+func getBodyFromUrl(url string) ([]byte, error) {
+	glog.V(2).Infof("Getting body from %s", url)
+	resp, err := retryablehttp.Get(url)
 	if err != nil {
-		glog.Errorf("error reading file %s, %v", ospNetworkData, err)
-		return
+		return nil, err
 	}
-
-	if err = json.Unmarshal(rawBytes, networkData); err != nil {
-		glog.Errorf("error unmarshalling raw bytes %v from %s", err, ospNetworkData)
-		return
+	rawBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
 	}
+	defer resp.Body.Close()
+	return rawBytes, nil
+}
 
+func unmarshalOpenStackMetaData(source string, rawBytes []byte) (metaData *OSPMetaData) {
 	metaData = &OSPMetaData{}
-
-	rawBytes, err = ioutil.ReadFile(ospMetaData)
+	err := json.Unmarshal(rawBytes, metaData)
 	if err != nil {
-		glog.Errorf("error reading file %s, %v", ospMetaData, err)
-		return
+		glog.Errorf("error unmarshalling raw bytes %v from %s", err, source)
+	}
+	return
+}
+
+func unmarshalOpenStackNetworkData(source string, rawBytes []byte) (networkData *OSPNetworkData) {
+	networkData = &OSPNetworkData{}
+	err := json.Unmarshal(rawBytes, networkData)
+	if err != nil {
+		glog.Errorf("error unmarshalling raw bytes %v from %s", err, source)
+	}
+	return
+}
+
+func readOpenstackMetaData() (metaData *OSPMetaData, networkData *OSPNetworkData) {
+	// We first try to read metadata from config-drive and fallback to reading from
+	// OpenStack metadata service.
+	if rawBytes, err := ioutil.ReadFile(ospMetaDataFile); err == nil {
+		glog.V(2).Infof("getting OpenStack meta_data from config-drive")
+		unmarshalOpenStackMetaData(ospMetaDataFile, rawBytes)
+	} else {
+		glog.V(2).Infof("getting OpenStack meta_data from metadata server")
+		rawBytes, err := getBodyFromUrl(ospMetaDataUrl)
+		if err != nil {
+			glog.Errorf("error getting OpenStack meta_data from %s: %v", ospMetaDataUrl, err)
+			return
+		}
+		unmarshalOpenStackMetaData(ospMetaDataUrl, rawBytes)
 	}
 
-	if err = json.Unmarshal(rawBytes, metaData); err != nil {
-		glog.Errorf("error unmarshalling raw bytes %v from %s", err, ospNetworkData)
-		return
+	if rawBytes, err := ioutil.ReadFile(ospNetworkDataFile); err == nil {
+		glog.V(2).Infof("getting OpenStack network_data from config-drive")
+		unmarshalOpenStackNetworkData(ospNetworkDataFile, rawBytes)
+	} else {
+		glog.V(2).Infof("getting OpenStack network_data from metadata server")
+		rawBytes, err := getBodyFromUrl(ospNetworkDataUrl)
+		if err != nil {
+			glog.Errorf("error getting OpenStack network_data from %s: %v", ospNetworkDataUrl, err)
+			return
+		}
+		unmarshalOpenStackNetworkData(ospNetworkDataUrl, rawBytes)
 	}
 
 	return
