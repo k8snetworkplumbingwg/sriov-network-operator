@@ -287,15 +287,18 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 					break
 				}
 			}
-			if strings.EqualFold(iface.LinkType, "IB") {
-				if err = setVfGuid(addr, pfLink); err != nil {
+			if iface.NumVfs != ifaceStatus.NumVfs {
+				// only set VF GUID and MAC for when VFs are created
+				if strings.EqualFold(iface.LinkType, "IB") {
+					if err = setVfGuid(addr, pfLink); err != nil {
+						return err
+					}
+				} else if err = setVfAdminMac(addr, pfLink); err != nil {
 					return err
 				}
-			} else if err = setVfAdminMac(addr, pfLink); err != nil {
-				return err
-			}
-			if err = unbindDriverIfNeeded(addr, isRdma); err != nil {
-				return err
+				if err = unbindDriverIfNeeded(addr, isRdma); err != nil {
+					return err
+				}
 			}
 			if driver == "" {
 				if err := BindDefaultDriver(addr); err != nil {
