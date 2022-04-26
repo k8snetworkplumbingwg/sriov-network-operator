@@ -24,7 +24,6 @@ import (
 	mcfginformers "github.com/openshift/machine-config-operator/pkg/generated/informers/externalversions"
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -177,26 +176,6 @@ func New(
 			&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(updateDelay), 1)},
 			workqueue.NewItemExponentialFailureRateLimiter(1*time.Second, maxUpdateBackoff)), "SriovNetworkNodeState"),
 	}
-}
-
-func (dn *Daemon) annotateUnsupportedNicIdConfigMap(cm *v1.ConfigMap, nodeName string) (*v1.ConfigMap, error) {
-	jsonData, err := json.Marshal(cm.Data)
-	if err != nil {
-		return nil, err
-	}
-	cmData := string(jsonData)
-
-	annotationKey := "openshift.io/" + nodeName
-	annotationData, ok := cm.ObjectMeta.Annotations[annotationKey]
-	if ok && cmData == annotationData {
-		return cm, nil
-	}
-
-	if cm.ObjectMeta.Annotations == nil {
-		cm.ObjectMeta.Annotations = make(map[string]string)
-	}
-	cm.ObjectMeta.Annotations[annotationKey] = cmData
-	return dn.kubeClient.CoreV1().ConfigMaps(namespace).Update(context.Background(), cm, metav1.UpdateOptions{})
 }
 
 func (dn *Daemon) tryCreateUdevRuleWrapper() error {
