@@ -13,4 +13,5 @@ COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/sriov-network-operat
 COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/sriov-network-operator/build/_output/pkg/plugins /plugins
 COPY bindata /bindata
 ENV PLUGINSPATH=/plugins
+ENV CLUSTER_TYPE=openshift
 CMD ["/usr/bin/sriov-network-config-daemon"]

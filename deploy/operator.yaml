@@ -35,7 +35,7 @@ spec:
           image: $SRIOV_NETWORK_OPERATOR_IMAGE
           command:
           - sriov-network-operator
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           resources:
             requests:
               cpu: 100m
