@@ -131,6 +131,7 @@ sync-manifests-%: manifests
 fmt: ## Go fmt your code
 	CONTAINER_CMD=$(IMAGE_BUILDER) hack/go-fmt.sh .
 
+<<<<<<< HEAD
 # Run go fmt against code
 fmt-code:
 	go fmt ./...
@@ -187,12 +188,23 @@ bundle-build:
 deploy-setup: export ENABLE_ADMISSION_CONTROLLER?=true
 deploy-setup: skopeo install
 	hack/deploy-setup.sh $(NAMESPACE)
+=======
+gencode: operator-sdk
+	@operator-sdk generate crds
+	@operator-sdk generate k8s
+
+deploy-setup:
+	@hack/deploy-setup.sh $(NAMESPACE)
+>>>>>>> 45124b6ead00d663912621a0065d47e514c0cafe
 
 deploy-setup-k8s: export NAMESPACE=sriov-network-operator
 deploy-setup-k8s: export ENABLE_ADMISSION_CONTROLLER?=false
 deploy-setup-k8s: export CNI_BIN_PATH=/opt/cni/bin
 deploy-setup-k8s: export OPERATOR_EXEC=kubectl
+<<<<<<< HEAD
 deploy-setup-k8s: export CLUSTER_TYPE=kubernetes
+=======
+>>>>>>> 45124b6ead00d663912621a0065d47e514c0cafe
 deploy-setup-k8s: deploy-setup
 
 test-e2e-conformance:
@@ -201,21 +213,33 @@ test-e2e-conformance:
 test-e2e-validation-only:
 	SUITE=./test/validation ./hack/run-e2e-conformance.sh	
 
+<<<<<<< HEAD
 test-e2e: generate vet manifests skopeo
 	mkdir -p ${ENVTEST_ASSETS_DIR}
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.3/hack/setup-envtest.sh
 	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); source hack/env.sh; go test ./test/e2e/... -timeout 60m -coverprofile cover.out -v
 
 test-e2e-k8s: export NAMESPACE=sriov-network-operator
+=======
+>>>>>>> 45124b6ead00d663912621a0065d47e514c0cafe
 test-e2e-k8s: test-e2e
 
 test-bindata-scripts: fakechroot
 	fakechroot ./test/scripts/enable-kargs_test.sh
 
+<<<<<<< HEAD
 test-%: generate vet manifests
 	mkdir -p ${ENVTEST_ASSETS_DIR}
 	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.8.3/hack/setup-envtest.sh
 	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./$*/... -coverprofile cover.out -v
+=======
+undeploy-k8s: export NAMESPACE=sriov-network-operator
+undeploy-k8s: export OPERATOR_EXEC=kubectl
+undeploy-k8s: undeploy
+
+_plugin-%:
+	@hack/build-plugins.sh $*
+>>>>>>> 45124b6ead00d663912621a0065d47e514c0cafe
 
 # deploy-setup-k8s: export NAMESPACE=sriov-network-operator
 # deploy-setup-k8s: export ENABLE_ADMISSION_CONTROLLER=false
