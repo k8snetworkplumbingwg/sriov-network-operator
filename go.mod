@@ -14,6 +14,7 @@ require (
 	github.com/jaypipes/ghw v0.6.1
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.1.1-0.20201119153432-9d213757d22d
 	github.com/k8snetworkplumbingwg/sriov-network-device-plugin v0.0.0-20220614121156-6fff085aed91
+	github.com/k8snetworkplumbingwg/sriov-network-operator/api v0.0.0-00010101000000-000000000000
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.17.0
 	github.com/openshift/api v0.0.0-20210325163602-e37aaed4c278
@@ -158,3 +159,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.2.1 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
+
+replace github.com/k8snetworkplumbingwg/sriov-network-operator/api => ./api

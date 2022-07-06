@@ -1,4 +1,4 @@
-package v1_test
+package utils_test
 
 import (
 	"bufio"
@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	v1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	utils "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -127,7 +128,7 @@ func TestRendering(t *testing.T) {
 		t.Run(tc.tname, func(t *testing.T) {
 			var b bytes.Buffer
 			w := bufio.NewWriter(&b)
-			rendered, err := tc.network.RenderNetAttDef()
+			rendered, err := utils.SriovNetworkRenderNetAttDef(&tc.network)
 			if err != nil {
 				t.Fatal("failed rendering network attachment definition", err)
 			}
@@ -174,7 +175,7 @@ func TestIBRendering(t *testing.T) {
 		t.Run(tc.tname, func(t *testing.T) {
 			var b bytes.Buffer
 			w := bufio.NewWriter(&b)
-			rendered, err := tc.network.RenderNetAttDef()
+			rendered, err := utils.SriovIBNetworkRenderNetAttDef(&tc.network)
 			if err != nil {
 				t.Fatal("failed rendering network attachment definition", err)
 			}

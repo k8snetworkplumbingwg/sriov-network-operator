@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
 // SriovNetworkReconciler reconciles a SriovNetwork object
@@ -109,7 +110,7 @@ func (r *SriovNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return reconcile.Result{}, err
 	}
-	raw, err := instance.RenderNetAttDef()
+	raw, err := utils.SriovNetworkRenderNetAttDef(instance)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
