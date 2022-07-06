@@ -268,6 +268,9 @@ github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8
 github.com/k8snetworkplumbingwg/sriov-network-device-plugin/pkg/types
 github.com/k8snetworkplumbingwg/sriov-network-device-plugin/pkg/utils
 github.com/k8snetworkplumbingwg/sriov-network-device-plugin/pkg/utils/mocks
+# github.com/k8snetworkplumbingwg/sriov-network-operator/api v0.0.0-00010101000000-000000000000 => ./api
+## explicit; go 1.17
+github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1
 # github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de
 ## explicit
 github.com/liggitt/tabwriter
@@ -1316,3 +1319,4 @@ sigs.k8s.io/structured-merge-diff/v4/value
 # sigs.k8s.io/yaml v1.3.0
 ## explicit; go 1.12
 sigs.k8s.io/yaml
+# github.com/k8snetworkplumbingwg/sriov-network-operator/api => ./api
