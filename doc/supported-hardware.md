@@ -17,6 +17,7 @@ The following SR-IOV capable hardware is supported with sriov-network-operator:
 | Mellanox MT28908 Family [ConnectX-6 Dx] | 15b3 | 101d |
 | Mellanox MT42822 BlueField-2 integrated ConnectX-6 Dx | 15b3 | a2d6 |
 | Qlogic QL45000 Series 50GbE Controller | 1077 | 1654 |
+| Pensando_ionic_DSC | 1dd8 | 1002 |
 
 > **Note:** sriov-network-operator maintains a list of supported NICs which it supports.
 > These are stored in supported-nic-ids [configMap](https://github.com/k8snetworkplumbingwg/sriov-network-operator/blob/master/deployment/sriov-network-operator/templates/configmap.yaml).
@@ -44,6 +45,7 @@ The following table depicts the supported SR-IOV hardware features of each suppo
 | Mellanox MT28908 Family [ConnectX-6 Dx] | V | V | V |
 | Mellanox MT42822 BlueField-2 integrated ConnectX-6 Dx | V | V | V |
 | Qlogic QL45000 Series 50GbE Controller | V | X | X |
+| Pensando_ionic_DSC | V | X | X |
 
 # Adding new Hardware
 
