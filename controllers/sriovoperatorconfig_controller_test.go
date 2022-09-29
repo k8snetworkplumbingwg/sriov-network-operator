@@ -157,7 +157,7 @@ var _ = Describe("Operator", func() {
 			config := &sriovnetworkv1.SriovOperatorConfig{}
 			err := util.WaitForNamespacedObject(config, k8sClient, testNamespace, "default", interval, timeout)
 			Expect(err).NotTo(HaveOccurred())
-			config.Spec.ConfigDaemonNodeSelector = map[string]string{"node-role.kubernetes.io/worker": ""}
+			config.Spec.ConfigDaemonNodeSelector = map[string]string{"node-role.kubernetes.io/worker": "true"}
 			err = k8sClient.Update(goctx.TODO(), config)
 			Expect(err).NotTo(HaveOccurred())
 

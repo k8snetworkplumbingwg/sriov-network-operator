@@ -112,7 +112,7 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 	// Fetch the Nodes
 	nodeList := &corev1.NodeList{}
 	lo := &client.MatchingLabels{
-		"node-role.kubernetes.io/worker": "",
+		"node-role.kubernetes.io/worker": "true",
 		"beta.kubernetes.io/os":          "linux",
 	}
 	defaultOpConf := &sriovnetworkv1.SriovOperatorConfig{}

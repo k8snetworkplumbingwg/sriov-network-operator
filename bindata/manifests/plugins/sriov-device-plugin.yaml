@@ -27,7 +27,7 @@ spec:
       hostNetwork: true
       nodeSelector:
         beta.kubernetes.io/os: linux
-        node-role.kubernetes.io/worker:
+        node-role.kubernetes.io/worker: "true"
       tolerations:
       - operator: Exists
       serviceAccountName: sriov-device-plugin
@@ -73,7 +73,7 @@ spec:
           hostPath:
             path: /sys/class/net
         - name: config-volume
-          configMap: 
+          configMap:
             name: device-plugin-config
         - name: device-info
           hostPath:
