@@ -89,6 +89,8 @@ spec:
         volumeMounts:
         - name: host
           mountPath: /host
+        - name: kubelet-config
+          mountPath: /etc/kubernetes/kubelet.conf
         lifecycle:
           preStop:
             exec:
@@ -101,3 +103,6 @@ spec:
       - name: cnibin
         hostPath:
           path: {{.CNIBinPath}}
+      - name: kubelet-config
+        hostPath:
+          path: /etc/kubernetes/kubelet.conf

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,9 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
+	daemonconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
+	mcfginformers "github.com/openshift/machine-config-operator/pkg/generated/informers/externalversions"
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +40,9 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/kubectl/pkg/drain"
+	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
+	"k8s.io/kubernetes/pkg/kubelet/kubeletconfig/configfiles"
+	utilfs "k8s.io/kubernetes/pkg/util/filesystem"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
@@ -51,6 +58,8 @@ const (
 	// maxUpdateBackoff is the maximum time to react to a change as we back off
 	// in the face of errors.
 	maxUpdateBackoff = 60 * time.Second
+	// kubeletConfigurationFilePath is the location for kubelet configuration file.
+	kubeletConfigurationFilePath = "/etc/kubernetes/kubelet.conf"
 )
 
 var (
@@ -102,6 +111,8 @@ type Daemon struct {
 
 	workqueue workqueue.RateLimitingInterface
 
+	mcpName string
+
 	// updatingFlag signals when the daemon is doing a plugin apply and must not be interrupted.
 	updatingFlagMutex sync.Mutex
 	updatingFlag      bool
@@ -116,6 +127,7 @@ const (
 	annoKey             = "sriovnetwork.openshift.io/state"
 	annoIdle            = "Idle"
 	annoDraining        = "Draining"
+	annoMcpPaused       = "Draining_MCP_Paused"
 	syncStatusSucceeded = "Succeeded"
 	syncStatusFailed    = "Failed"
 )
@@ -394,7 +406,7 @@ func (dn *Daemon) nodeUpdateHandler(old, new interface{}) {
 		return
 	}
 	for _, node := range nodes {
-		if node.GetName() != dn.name && node.Annotations[annoKey] == annoDraining {
+		if node.GetName() != dn.name && (node.Annotations[annoKey] == annoDraining || node.Annotations[annoKey] == annoMcpPaused) {
 			dn.drainable = false
 			return
 		}
@@ -515,6 +527,12 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 		}
 	}
 
+	if utils.ClusterType == utils.ClusterTypeOpenshift && !dn.openshiftContext.IsHypershift() {
+		if err = dn.getNodeMachinePool(); err != nil {
+			return err
+		}
+	}
+
 	if reqDrain {
 		if !dn.isNodeDraining() {
 			if !dn.disableDrain {
@@ -525,6 +543,13 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 				done := make(chan bool)
 				go dn.getDrainLock(ctx, done)
 				<-done
+
+				if !isGracefulShutdownConfigured() && utils.ClusterType == utils.ClusterTypeOpenshift && !dn.openshiftContext.IsHypershift() {
+					glog.Infof("nodeStateSyncHandler(): pause MCP")
+					if err := dn.pauseMCP(); err != nil {
+						return err
+					}
+				}
 			}
 		}
 
@@ -596,7 +621,7 @@ func (dn *Daemon) nodeHasAnnotation(annoKey string, value string) bool {
 }
 
 func (dn *Daemon) isNodeDraining() bool {
-	if anno, ok := dn.node.Annotations[annoKey]; ok && anno == annoDraining {
+	if anno, ok := dn.node.Annotations[annoKey]; ok && (anno == annoDraining || anno == annoMcpPaused) {
 		return true
 	}
 	return false
@@ -605,6 +630,15 @@ func (dn *Daemon) isNodeDraining() bool {
 func (dn *Daemon) completeDrain() error {
 	if !dn.disableDrain {
 		if err := drain.RunCordonOrUncordon(dn.drainer, dn.node, false); err != nil {
+			return err
+		}
+	}
+
+	if !isGracefulShutdownConfigured() && utils.ClusterType == utils.ClusterTypeOpenshift && !dn.openshiftContext.IsHypershift() {
+		glog.Infof("completeDrain(): resume MCP %s", dn.mcpName)
+		pausePatch := []byte("{\"spec\":{\"paused\":false}}")
+		if _, err := dn.openshiftContext.McClient.MachineconfigurationV1().MachineConfigPools().Patch(context.Background(), dn.mcpName, types.MergePatchType, pausePatch, metav1.PatchOptions{}); err != nil {
+			glog.Errorf("completeDrain(): failed to resume MCP %s: %v", dn.mcpName, err)
 			return err
 		}
 	}
@@ -734,6 +768,27 @@ func (dn *Daemon) annotateNode(node, value string) error {
 	return nil
 }
 
+func (dn *Daemon) getNodeMachinePool() error {
+	desiredConfig, ok := dn.node.Annotations[daemonconsts.DesiredMachineConfigAnnotationKey]
+	if !ok {
+		glog.Errorf("getNodeMachinePool(): Failed to find the the desiredConfig Annotation")
+		return fmt.Errorf("getNodeMachinePool(): Failed to find the the desiredConfig Annotation")
+	}
+	mc, err := dn.openshiftContext.McClient.MachineconfigurationV1().MachineConfigs().Get(context.TODO(), desiredConfig, metav1.GetOptions{})
+	if err != nil {
+		glog.Errorf("getNodeMachinePool(): Failed to get the desired Machine Config: %v", err)
+		return err
+	}
+	for _, owner := range mc.OwnerReferences {
+		if owner.Kind == "MachineConfigPool" {
+			dn.mcpName = owner.Name
+			return nil
+		}
+	}
+	glog.Error("getNodeMachinePool(): Failed to find the MCP of the node")
+	return fmt.Errorf("getNodeMachinePool(): Failed to find the MCP of the node")
+}
+
 func (dn *Daemon) getDrainLock(ctx context.Context, done chan bool) {
 	var err error
 
@@ -760,6 +815,11 @@ func (dn *Daemon) getDrainLock(ctx context.Context, done chan bool) {
 				glog.V(2).Info("getDrainLock(): started leading")
 				for {
 					time.Sleep(3 * time.Second)
+					if dn.node.Annotations[annoKey] == annoMcpPaused {
+						// The node in Draining_MCP_Paused state, no other node is draining. Skip drainable checking
+						done <- true
+						return
+					}
 					if dn.drainable {
 						glog.V(2).Info("getDrainLock(): no other node is draining")
 						err = dn.annotateNode(dn.name, annoDraining)
@@ -778,6 +838,94 @@ func (dn *Daemon) getDrainLock(ctx context.Context, done chan bool) {
 			},
 		},
 	})
+}
+
+func (dn *Daemon) pauseMCP() error {
+	glog.Info("pauseMCP(): pausing MCP")
+	var err error
+
+	mcpInformerFactory := mcfginformers.NewSharedInformerFactory(dn.openshiftContext.McClient,
+		time.Second*30,
+	)
+	mcpInformer := mcpInformerFactory.Machineconfiguration().V1().MachineConfigPools().Informer()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	paused := dn.node.Annotations[annoKey] == annoMcpPaused
+
+	mcpEventHandler := func(obj interface{}) {
+		mcp := obj.(*mcfgv1.MachineConfigPool)
+		if mcp.GetName() != dn.mcpName {
+			return
+		}
+		// Always get the latest object
+		newMcp, err := dn.openshiftContext.McClient.MachineconfigurationV1().MachineConfigPools().Get(ctx, dn.mcpName, metav1.GetOptions{})
+		if err != nil {
+			glog.V(2).Infof("pauseMCP(): Failed to get MCP %s: %v", dn.mcpName, err)
+			return
+		}
+		if mcfgv1.IsMachineConfigPoolConditionFalse(newMcp.Status.Conditions, mcfgv1.MachineConfigPoolDegraded) &&
+			mcfgv1.IsMachineConfigPoolConditionTrue(newMcp.Status.Conditions, mcfgv1.MachineConfigPoolUpdated) &&
+			mcfgv1.IsMachineConfigPoolConditionFalse(newMcp.Status.Conditions, mcfgv1.MachineConfigPoolUpdating) {
+			glog.V(2).Infof("pauseMCP(): MCP %s is ready", dn.mcpName)
+			if paused {
+				glog.V(2).Info("pauseMCP(): stop MCP informer")
+				cancel()
+				return
+			}
+			if newMcp.Spec.Paused {
+				glog.V(2).Infof("pauseMCP(): MCP %s was paused by other, wait...", dn.mcpName)
+				return
+			}
+			glog.Infof("pauseMCP(): pause MCP %s", dn.mcpName)
+			pausePatch := []byte("{\"spec\":{\"paused\":true}}")
+			_, err = dn.openshiftContext.McClient.MachineconfigurationV1().MachineConfigPools().Patch(context.Background(), dn.mcpName, types.MergePatchType, pausePatch, metav1.PatchOptions{})
+			if err != nil {
+				glog.V(2).Infof("pauseMCP(): Failed to pause MCP %s: %v", dn.mcpName, err)
+				return
+			}
+			err = dn.annotateNode(dn.name, annoMcpPaused)
+			if err != nil {
+				glog.V(2).Infof("pauseMCP(): Failed to annotate node: %v", err)
+				return
+			}
+			paused = true
+			return
+		}
+		if paused {
+			glog.Infof("pauseMCP(): MCP is processing, resume MCP %s", dn.mcpName)
+			pausePatch := []byte("{\"spec\":{\"paused\":false}}")
+			_, err = dn.openshiftContext.McClient.MachineconfigurationV1().MachineConfigPools().Patch(context.Background(), dn.mcpName, types.MergePatchType, pausePatch, metav1.PatchOptions{})
+			if err != nil {
+				glog.V(2).Infof("pauseMCP(): fail to resume MCP %s: %v", dn.mcpName, err)
+				return
+			}
+			err = dn.annotateNode(dn.name, annoDraining)
+			if err != nil {
+				glog.V(2).Infof("pauseMCP(): Failed to annotate node: %v", err)
+				return
+			}
+			paused = false
+		}
+		glog.Infof("pauseMCP():MCP %s is not ready: %v, wait...", newMcp.GetName(), newMcp.Status.Conditions)
+	}
+
+	mcpInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: mcpEventHandler,
+		UpdateFunc: func(old, new interface{}) {
+			mcpEventHandler(new)
+		},
+	})
+
+	// The Draining_MCP_Paused state means the MCP work has been paused by the config daemon in previous round.
+	// Only check MCP state if the node is not in Draining_MCP_Paused state
+	if !paused {
+		mcpInformerFactory.Start(ctx.Done())
+		mcpInformerFactory.WaitForCacheSync(ctx.Done())
+		<-ctx.Done()
+	}
+
+	return err
 }
 
 func (dn *Daemon) drainNode() error {
@@ -878,6 +1026,33 @@ func (dn *Daemon) installSignalHandler(signalStopCh chan struct{}) {
 			}
 		}
 	}()
+}
+
+func isGracefulShutdownConfigured() bool {
+	kc, err := loadConfigFile(kubeletConfigurationFilePath)
+	if err != nil {
+		glog.Errorf("isGracefulShutdownConfigured(): failed to load file: %v", err)
+		return false
+	}
+	return kc.ShutdownGracePeriodCriticalPods.Duration != 0
+}
+
+func loadConfigFile(name string) (*kubeletconfig.KubeletConfiguration, error) {
+	const errFmt = "failed to load Kubelet config file %s, error %v"
+	// compute absolute path based on current working dir
+	kubeletConfigFile, err := filepath.Abs(name)
+	if err != nil {
+		return nil, fmt.Errorf(errFmt, name, err)
+	}
+	loader, err := configfiles.NewFsLoader(&utilfs.DefaultFs{}, kubeletConfigFile)
+	if err != nil {
+		return nil, fmt.Errorf(errFmt, name, err)
+	}
+	kc, err := loader.Load()
+	if err != nil {
+		return nil, fmt.Errorf(errFmt, name, err)
+	}
+	return kc, err
 }
 
 func tryEnableTun() {
