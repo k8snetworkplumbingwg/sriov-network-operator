@@ -41,7 +41,7 @@ spec:
       - name: sriov-cni
         image: {{.SRIOVCNIImage}}
         securityContext:
-          privileged: true
+          runAsUser: 0
         resources:
           requests:
             cpu: 10m
@@ -52,7 +52,7 @@ spec:
       - name: sriov-infiniband-cni
         image: {{.SRIOVInfiniBandCNIImage}}
         securityContext:
-          privileged: true
+          runAsUser: 0
         resources:
           requests:
             cpu: 10m
