@@ -3,4 +3,8 @@ dropins:
 - name: 10-hw-offload.conf
   contents: |
     [Service]
-    ExecStartPre=/bin/ovs-vsctl set Open_vSwitch . other_config:hw-offload=true
+    # Enable HW offload and set the max revalidator time.
+    # Workaround for Mellanox NICs, the max revalidator time needs to be extended to allow for higher than expected
+    # dump durations during the OvS revalidator sweep. This will prevent the flows from being deleted due to these unexpected
+    # delays.
+    ExecStartPre=/bin/ovs-vsctl set Open_vSwitch . other_config:hw-offload=true other_config:max-revalidator=1000
