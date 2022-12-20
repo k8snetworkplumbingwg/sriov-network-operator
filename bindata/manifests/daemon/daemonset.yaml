@@ -38,6 +38,17 @@ spec:
       {{- end }}
       {{- end }}
       containers:
+      - name: rdma-cni
+        image: {{.RDMACNIImage}}
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 10Mi
+        volumeMounts:
+          - name: cnibin
+            mountPath: /host/opt/cni/bin
       - name: sriov-cni
         image: {{.SRIOVCNIImage}}
         securityContext:
