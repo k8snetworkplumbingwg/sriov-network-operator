@@ -38,7 +38,7 @@ var _ = Describe("Operator", func() {
 				Spec: mcfgv1.MachineConfigPoolSpec{
 					NodeSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
-							"node-role.kubernetes.io/worker": "",
+							"node-role.kubernetes.io/worker": "true",
 						},
 					},
 				},
