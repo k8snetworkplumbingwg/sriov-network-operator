@@ -93,6 +93,7 @@ spec:
         volumeMounts:
         - name: cnibin
           mountPath: /host/opt/cni/bin
+      terminationGracePeriodSeconds: 900
       volumes:
       - name: host
         hostPath:

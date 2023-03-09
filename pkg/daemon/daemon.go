@@ -52,6 +52,9 @@ const (
 	// maxUpdateBackoff is the maximum time to react to a change as we back off
 	// in the face of errors.
 	maxUpdateBackoff = 60 * time.Second
+
+	// the presence of this file indicates that the sriov shutdown should be delayed
+	delayShutdownPath = "/host/tmp/sriov-delay-shutdown"
 )
 
 type Message struct {
@@ -612,6 +615,22 @@ func (dn *Daemon) completeDrain() error {
 		glog.Errorf("completeDrain(): failed to annotate node: %v", err)
 		return err
 	}
+
+	if _, err := os.Stat(delayShutdownPath); err != nil {
+		if os.IsNotExist(err) {
+			// delayShutdownPath does not exist, so we don't need to do anything
+			return nil
+		}
+
+		glog.Errorf("completeDrain(): error checking file status %v: %v", delayShutdownPath, err)
+		return err
+	}
+
+	if err := os.Remove(delayShutdownPath); err != nil {
+		glog.Errorf("completeDrain(): failed to remove file %v: %v", delayShutdownPath, err)
+		return err
+	}
+
 	return nil
 }
 
@@ -679,15 +698,16 @@ func rebootNode() {
 		glog.Errorf("rebootNode(): %v", err)
 	}
 	defer exit()
-	// creates a new transient systemd unit to reboot the system.
-	// We explictily try to stop kubelet.service first, before anything else; this
-	// way we ensure the rest of system stays running, because kubelet may need
-	// to do "graceful" shutdown by e.g. de-registering with a load balancer.
-	// However note we use `;` instead of `&&` so we keep rebooting even
-	// if kubelet failed to shutdown - that way the machine will still eventually reboot
-	// as systemd will time out the stop invocation.
+	// creates a new transient systemd unit to reboot the system that
+	// reboots the system using `systemctl reboot``
+	// by shutting down the system this way instead via `reboot`,
+	// when kubelet is configured with a shutdownGracePeriod, then it will
+	// be give some time to pods to run their preStop scripts and respond to
+	// SIGTERM by terminating gracefully before being forcefully killed via
+	// SIGKILL. Stopping the kubelet service and then immediately running
+	// `reboot` just results in all pods being immediately killed
 	cmd := exec.Command("systemd-run", "--unit", "sriov-network-config-daemon-reboot",
-		"--description", "sriov-network-config-daemon reboot node", "/bin/sh", "-c", "systemctl stop kubelet.service; reboot")
+		"--description", "sriov-network-config-daemon reboot node", "/bin/sh", "-c", "systemctl reboot")
 
 	if err := cmd.Run(); err != nil {
 		glog.Errorf("failed to reboot node: %v", err)
@@ -933,6 +953,14 @@ func (dn *Daemon) drainNode() error {
 		return err
 	}
 	glog.Info("drainNode(): drain complete")
+
+	file, err := os.Create(delayShutdownPath)
+	if err != nil {
+		glog.Errorf("drainNode(): failed to create file %v %v", delayShutdownPath, err)
+		return err
+	}
+	defer file.Close()
+
 	return nil
 }
 
