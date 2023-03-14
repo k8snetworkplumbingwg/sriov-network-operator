@@ -43,6 +43,11 @@ type SriovOperatorConfigSpec struct {
 	// Default mode: daemon
 	// +kubebuilder:validation:Enum=daemon;systemd
 	ConfigurationMode ConfigurationModeType `json:"configurationMode,omitempty"`
+	// How many nodes can be configured in parallel
+	// 0 means no limit, all nodes will be configured in parallel
+	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum:=0
+	MaxParallelNodeConfiguration int `json:"maxParallelNodeConfiguration,omitempty"`
 }
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig
