@@ -166,6 +166,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovNetworkPoolConfig")
 		os.Exit(1)
 	}
+	if err = (&controllers.DrainReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DrainReconciler")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	// Create a default SriovNetworkNodePolicy
