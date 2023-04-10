@@ -14,15 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golang/glog"
 	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 	daemonconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
 	mcfginformers "github.com/openshift/machine-config-operator/pkg/generated/informers/externalversions"
-	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -38,6 +37,7 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
 	sninformer "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/informers/externalversions"
+	consts "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
@@ -98,9 +98,6 @@ type Daemon struct {
 
 	node *corev1.Node
 
-	// TODO(e0ne): remove it
-	drainable bool
-
 	disableDrain bool
 
 	nodeLister listerv1.NodeLister
@@ -118,11 +115,6 @@ type Daemon struct {
 
 const (
 	udevScriptsPath      = "/bindata/scripts/load-udev.sh"
-	annoKey              = "sriovnetwork.openshift.io/state"
-	annoIdle             = "Idle"
-	annoDrainRequired    = "Drain_Required"
-	annoMcpPaused        = "Draining_MCP_Paused"
-	annoDraining         = "Draining"
 	syncStatusSucceeded  = "Succeeded"
 	syncStatusFailed     = "Failed"
 	syncStatusInProgress = "InProgress"
@@ -391,33 +383,6 @@ func (dn *Daemon) nodeUpdateHandler(old, new interface{}) {
 		return
 	}
 	dn.node = node.DeepCopy()
-
-	nodes, err := dn.nodeLister.List(labels.Everything())
-	if err != nil {
-		log.Log.Error(err, "nodeUpdateHandler(): failed to list nodes")
-		return
-	}
-
-	// Checking if other nodes are draining
-	for _, otherNode := range nodes {
-		if otherNode.GetName() == dn.name {
-			continue
-		}
-
-		drainingAnnotationValue := otherNode.Annotations[annoKey]
-		if drainingAnnotationValue == annoDraining || drainingAnnotationValue == annoMcpPaused {
-			log.Log.V(2).Info("nodeUpdateHandler(): node is not drainable, another node is draining",
-				"other-node", otherNode.Name, "annotation", annoKey+"="+drainingAnnotationValue)
-			dn.drainable = false
-			return
-		}
-	}
-
-	if !dn.drainable {
-		log.Log.V(2).Info("nodeUpdateHandler(): node is now drainable")
-	}
-
-	dn.drainable = true
 }
 
 func (dn *Daemon) operatorConfigAddHandler(obj interface{}) {
@@ -627,8 +592,8 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 		}
 	}
 
-	if dn.nodeHasAnnotation(annoKey, annoDrainRequired) {
-		log.Log.Info("nodeStateSyncHandler(): waiting for drain")
+	if utils.NodeHasAnnotation(*dn.node, consts.NodeDrainAnnotation, consts.DrainRequired) {
+		log.Log.Info("nodeStateSyncHandler(): waiting for drain"))
 		return nil
 	}
 
@@ -703,7 +668,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 			return err
 		}
 	} else {
-		if !dn.nodeHasAnnotation(annoKey, annoIdle) {
+		if !utils.NodeHasAnnotation(*dn.node, consts.NodeDrainAnnotation, consts.DrainIdle) {
 			if err := dn.annotateNode(dn.name, annoIdle); err != nil {
 				log.Log.Error(err, "nodeStateSyncHandler(): failed to annotate node")
 				return err
@@ -728,24 +693,15 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	return nil
 }
 
-func (dn *Daemon) nodeHasAnnotation(annoKey string, value string) bool {
-	// TODO(e0ne): re-use cluster.NodeHasAnnotation function
-	// Check if node already contains annotation
-	if anno, ok := dn.node.Annotations[annoKey]; ok && (anno == value) {
-		return true
-	}
-	return false
-}
-
 // isNodeDraining: check if the node is draining
 // both Draining and MCP paused labels will return true
 func (dn *Daemon) isNodeDraining() bool {
-	anno, ok := dn.node.Annotations[annoKey]
+	anno, ok := dn.node.Annotations[consts.NodeDrainAnnotation]
 	if !ok {
 		return false
 	}
 
-	return anno == annoDraining || anno == annoMcpPaused
+	return anno == consts.Draining || anno == consts.DrainMcpPaused
 }
 
 func (dn *Daemon) completeDrain() error {
@@ -764,7 +720,7 @@ func (dn *Daemon) completeDrain() error {
 		}
 	}
 
-	if err := dn.annotateNode(dn.name, annoIdle); err != nil {
+	if err := dn.annotateNode(dn.name, consts.DrainIdle); err != nil {
 		log.Log.Error(err, "completeDrain(): failed to annotate node")
 		return err
 	}
@@ -868,8 +824,8 @@ func (dn *Daemon) annotateNode(node, value string) error {
 	if newNode.Annotations == nil {
 		newNode.Annotations = map[string]string{}
 	}
-	if newNode.Annotations[annoKey] != value {
-		newNode.Annotations[annoKey] = value
+	if newNode.Annotations[consts.NodeDrainAnnotation] != value {
+		newNode.Annotations[consts.NodeDrainAnnotation] = value
 		newData, err := json.Marshal(newNode)
 		if err != nil {
 			return err
@@ -915,7 +871,7 @@ func (dn *Daemon) getNodeMachinePool() error {
 
 func (dn *Daemon) applyDrainRequired() error {
 	log.Log.Info("applyDrainRequired(): no other node is draining")
-	err := dn.annotateNode(dn.name, annoDrainRequired)
+	err := dn.annotateNode(dn.name, consts.DrainRequired)
 	if err != nil {
 		log.Log.Error(err, "applyDrainRequired(): Failed to annotate node")
 		return err
@@ -934,7 +890,7 @@ func (dn *Daemon) pauseMCP() error {
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	paused := dn.node.Annotations[annoKey] == annoMcpPaused
+	paused := dn.node.Annotations[consts.NodeDrainAnnotation] == consts.DrainMcpPaused
 
 	mcpEventHandler := func(obj interface{}) {
 		mcp := obj.(*mcfgv1.MachineConfigPool)
@@ -967,7 +923,7 @@ func (dn *Daemon) pauseMCP() error {
 				log.Log.V(2).Error(err, "pauseMCP(): failed to pause MCP", "mcp-name", dn.mcpName)
 				return
 			}
-			err = dn.annotateNode(dn.name, annoMcpPaused)
+			err = dn.annotateNode(dn.name, consts.DrainMcpPaused)
 			if err != nil {
 				log.Log.V(2).Error(err, "pauseMCP(): Failed to annotate node")
 				return
@@ -983,7 +939,7 @@ func (dn *Daemon) pauseMCP() error {
 				log.Log.V(2).Error(err, "pauseMCP(): fail to resume MCP", "mcp-name", dn.mcpName)
 				return
 			}
-			err = dn.annotateNode(dn.name, annoDraining)
+			err = dn.annotateNode(dn.name, consts.Draining)
 			if err != nil {
 				log.Log.V(2).Error(err, "pauseMCP(): Failed to annotate node")
 				return
