@@ -74,32 +74,9 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 	err := r.Get(ctx, types.NamespacedName{
 		Name: constants.DefaultConfigName, Namespace: namespace}, defaultConfig)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			singleNode, err := utils.IsSingleNodeCluster(r.Client)
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("couldn't get cluster single node status: %s", err)
-			}
-
-			// Default Config object not found, create it.
-			defaultConfig.SetNamespace(namespace)
-			defaultConfig.SetName(constants.DefaultConfigName)
-			defaultConfig.Spec = sriovnetworkv1.SriovOperatorConfigSpec{
-				EnableInjector:           func() *bool { b := enableAdmissionController; return &b }(),
-				EnableOperatorWebhook:    func() *bool { b := enableAdmissionController; return &b }(),
-				ConfigDaemonNodeSelector: map[string]string{},
-				LogLevel:                 2,
-				DisableDrain:             singleNode,
-			}
-
-			err = r.Create(ctx, defaultConfig)
-			if err != nil {
-				logger.Error(err, "Failed to create default Operator Config", "Namespace",
-					namespace, "Name", constants.DefaultConfigName)
-				return reconcile.Result{}, err
-			}
-			return reconcile.Result{}, nil
-		}
 		// Error reading the object - requeue the request.
+		logger.Error(err, "Failed to read default Operator Config", "Namespace",
+			namespace, "Name", constants.DefaultConfigName)
 		return reconcile.Result{}, err
 	}
 

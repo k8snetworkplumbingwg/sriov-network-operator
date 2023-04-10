@@ -164,17 +164,19 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovNetworkPoolConfig")
 		os.Exit(1)
 	}
+
+	ctx := ctrl.SetupSignalHandler()
 	// +kubebuilder:scaffold:builder
 
 	// Create a default SriovNetworkNodePolicy
-	err = createDefaultPolicy(kubeClient)
+	err = createDefaultPolicy(ctx, kubeClient)
 	if err != nil {
 		setupLog.Error(err, "unable to create default SriovNetworkNodePolicy")
 		os.Exit(1)
 	}
 
 	// Create default SriovOperatorConfig
-	err = createDefaultOperatorConfig(kubeClient)
+	err = createDefaultOperatorConfig(ctx, kubeClient)
 	if err != nil {
 		setupLog.Error(err, "unable to create default SriovOperatorConfig")
 		os.Exit(1)
@@ -189,9 +191,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	stopCh := ctrl.SetupSignalHandler()
 	go func() {
-		if err := mgrGlobal.Start(stopCh); err != nil {
+		if err := mgrGlobal.Start(ctx); err != nil {
 			setupLog.Error(err, "Manager Global exited non-zero")
 			os.Exit(1)
 		}
@@ -201,7 +202,7 @@ func main() {
 	defer utils.Shutdown()
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(stopCh); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
@@ -217,7 +218,7 @@ func initNicIDMap() error {
 	return nil
 }
 
-func createDefaultPolicy(c client.Client) error {
+func createDefaultPolicy(ctx context.Context, c client.Client) error {
 	logger := setupLog.WithName("createDefaultPolicy")
 	policy := &sriovnetworkv1.SriovNetworkNodePolicy{
 		Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
@@ -227,13 +228,13 @@ func createDefaultPolicy(c client.Client) error {
 		},
 	}
 	namespace := os.Getenv("NAMESPACE")
-	err := c.Get(context.TODO(), types.NamespacedName{Name: constants.DefaultPolicyName, Namespace: namespace}, policy)
+	err := c.Get(ctx, types.NamespacedName{Name: constants.DefaultPolicyName, Namespace: namespace}, policy)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("Create a default SriovNetworkNodePolicy")
 			policy.Namespace = namespace
 			policy.Name = constants.DefaultPolicyName
-			err = c.Create(context.TODO(), policy)
+			err = c.Create(ctx, policy)
 			if err != nil {
 				return err
 			}
@@ -244,7 +245,7 @@ func createDefaultPolicy(c client.Client) error {
 	return nil
 }
 
-func createDefaultOperatorConfig(c client.Client) error {
+func createDefaultOperatorConfig(ctx context.Context, c client.Client) error {
 	logger := setupLog.WithName("createDefaultOperatorConfig")
 	singleNode, err := utils.IsSingleNodeCluster(c)
 	if err != nil {
@@ -262,13 +263,13 @@ func createDefaultOperatorConfig(c client.Client) error {
 		},
 	}
 	namespace := os.Getenv("NAMESPACE")
-	err = c.Get(context.TODO(), types.NamespacedName{Name: constants.DefaultConfigName, Namespace: namespace}, config)
+	err = c.Get(ctx, types.NamespacedName{Name: constants.DefaultConfigName, Namespace: namespace}, config)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("Create default SriovOperatorConfig")
 			config.Namespace = namespace
 			config.Name = constants.DefaultConfigName
-			err = c.Create(context.TODO(), config)
+			err = c.Create(ctx, config)
 			if err != nil {
 				return err
 			}
