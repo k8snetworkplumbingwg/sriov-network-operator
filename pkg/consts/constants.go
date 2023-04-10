@@ -23,6 +23,12 @@ const (
 	DPConfigFileName                   = "config.json"
 	OVSHWOLMachineConfigNameSuffix     = "ovs-hw-offload"
 
+	NodeDrainAnnotation = "sriovnetwork.openshift.io/state"
+	AnnoIdle            = "Idle"
+	AnnoDrainRequired   = "Drain_Required"
+	AnnoMcpPaused       = "Draining_MCP_Paused"
+	AnnoDraining        = "Draining"
+
 	LinkTypeEthernet   = "ether"
 	LinkTypeInfiniband = "infiniband"
 
