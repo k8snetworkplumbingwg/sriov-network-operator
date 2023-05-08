@@ -59,6 +59,8 @@ type SriovNetworkNodePolicySpec struct {
 	VdpaType string `json:"vdpaType,omitempty"`
 	// Exclude device's NUMA node when advertising this resource by SRIOV network device plugin. Default to false.
 	ExcludeTopology bool `json:"excludeTopology,omitempty"`
+	// don't create the virtual function only allocated them to the device plugin. Defaults to false.
+	ExternallyCreated bool `json:"externallyCreated,omitempty"`
 }
 
 type SriovNetworkNicSelector struct {
