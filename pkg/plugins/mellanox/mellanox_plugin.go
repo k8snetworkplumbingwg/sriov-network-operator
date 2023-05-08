@@ -107,6 +107,11 @@ func (p *MellanoxPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeS
 	}
 
 	for _, ifaceSpec := range mellanoxNicsSpec {
+		// skip configuration for the MLX firmware if externallyCreated is true
+		if ifaceSpec.ExternallyCreated {
+			continue
+		}
+
 		pciPrefix := getPciAddressPrefix(ifaceSpec.PciAddress)
 		// skip processed nics, help not running the same logic 2 times for dual port NICs
 		if _, ok := processedNics[pciPrefix]; ok {
