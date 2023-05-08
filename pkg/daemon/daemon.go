@@ -436,6 +436,12 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	}
 
 	if latestState.GetGeneration() == 1 && len(latestState.Spec.Interfaces) == 0 {
+		err = utils.ClearPCIAddressFolder()
+		if err != nil {
+			glog.Errorf("failed to clear the PCI address configuration: %v", err)
+			return err
+		}
+
 		glog.V(0).Infof("nodeStateSyncHandler(): Name: %s, Interface policy spec not yet set by controller", latestState.Name)
 		if latestState.Status.SyncStatus != "Succeeded" {
 			dn.refreshCh <- Message{

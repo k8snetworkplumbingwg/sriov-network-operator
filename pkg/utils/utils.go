@@ -122,6 +122,15 @@ func DiscoverSriovDevices(withUnsupported bool) ([]sriovnetworkv1.InterfaceExt, 
 		}
 		iface.LinkType = getLinkType(iface)
 
+		pfStatus, exist, err := LoadPfsStatus(iface.PciAddress, true)
+		if err != nil {
+			glog.Warningf("DiscoverSriovDevices(): failed to load PF status from disk: %v", err)
+		}
+
+		if exist {
+			iface.ExternallyCreated = pfStatus.ExternallyCreated
+		}
+
 		if dputils.IsSriovPF(device.Address) {
 			iface.TotalVfs = dputils.GetSriovVFcapacity(device.Address)
 			iface.NumVfs = dputils.GetVFconfigured(device.Address)
@@ -165,13 +174,32 @@ func SyncNodeState(newState *sriovnetworkv1.SriovNetworkNodeState, pfsToConfig m
 
 				if !NeedUpdate(&iface, &ifaceStatus) {
 					glog.V(2).Infof("syncNodeState(): no need update interface %s", iface.PciAddress)
+
+					// Save the PF status to the host
+					err = SaveLastPfAppliedStatus(iface.PciAddress, CreatePfAppliedStatusFromSpec(&iface))
+					if err != nil {
+						glog.Errorf("SyncNodeState(): failed to save PF applied config to host: %v", err)
+						return err
+					}
+
 					break
 				}
 				if err = configSriovDevice(&iface, &ifaceStatus); err != nil {
 					glog.Errorf("SyncNodeState(): fail to configure sriov interface %s: %v. resetting interface.", iface.PciAddress, err)
-					if resetErr := resetSriovDevice(ifaceStatus); resetErr != nil {
-						glog.Errorf("SyncNodeState(): fail to reset on error SR-IOV interface: %s", resetErr)
+					if iface.ExternallyCreated {
+						glog.Infof("SyncNodeState(): skipping device reset as the nic is marked as externally created")
+					} else {
+						if resetErr := resetSriovDevice(ifaceStatus); resetErr != nil {
+							glog.Errorf("SyncNodeState(): failed to reset on error SR-IOV interface: %s", resetErr)
+						}
 					}
+					return err
+				}
+
+				// Save the PF status to the host
+				err = SaveLastPfAppliedStatus(iface.PciAddress, CreatePfAppliedStatusFromSpec(&iface))
+				if err != nil {
+					glog.Errorf("SyncNodeState(): failed to save PF applied config to host: %v", err)
 					return err
 				}
 				break
@@ -179,6 +207,27 @@ func SyncNodeState(newState *sriovnetworkv1.SriovNetworkNodeState, pfsToConfig m
 		}
 		if !configured && ifaceStatus.NumVfs > 0 {
 			if skip := pfsToConfig[ifaceStatus.PciAddress]; skip {
+				continue
+			}
+
+			// load the PF info
+			pfStatus, exist, err := LoadPfsStatus(ifaceStatus.PciAddress, false)
+			if err != nil {
+				glog.Errorf("SyncNodeState(): failed to load info about PF status for pci address %s: %v", ifaceStatus.PciAddress, err)
+				return err
+			}
+
+			if !exist {
+				glog.Infof("SyncNodeState(): PF name %s with pci address %s has VFs configured but they weren't created by the sriov operator. Skipping the device reset",
+					ifaceStatus.Name,
+					ifaceStatus.PciAddress)
+				continue
+			}
+
+			if pfStatus.ExternallyCreated {
+				glog.Infof("SyncNodeState(): PF name %s with pci address %s was externally created skipping the device reset",
+					ifaceStatus.Name,
+					ifaceStatus.PciAddress)
 				continue
 			}
 
@@ -270,6 +319,12 @@ func NeedUpdate(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetworkv1.Int
 							glog.V(2).Infof("NeedUpdate(): VF %d MTU needs update, desired=%d, current=%d", vf.VfID, group.Mtu, vf.Mtu)
 							return true
 						}
+
+						// this is needed to be sure the admin mac address is configured as expected
+						if iface.ExternallyCreated {
+							glog.V(2).Infof("NeedUpdate(): need to update the device as it's externally manage for pci address %s", ifaceStatus.PciAddress)
+							return true
+						}
 					}
 					break
 				}
@@ -293,6 +348,12 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 	}
 	// set numVFs
 	if iface.NumVfs != ifaceStatus.NumVfs {
+		if iface.ExternallyCreated {
+			errMsg := fmt.Sprintf("configSriovDevice(): number of request virtual functions %d is not equal to configured virtual functions %d but the policy is configured as ExternallyCreated for device %s", iface.NumVfs, ifaceStatus.NumVfs, iface.PciAddress)
+			glog.Error(errMsg)
+			return fmt.Errorf(errMsg)
+		}
+
 		err = setSriovNumVfs(iface.PciAddress, iface.NumVfs)
 		if err != nil {
 			glog.Errorf("configSriovDevice(): fail to set NumVfs for device %s", iface.PciAddress)

@@ -198,6 +198,27 @@ func needDrainNode(desired sriovnetworkv1.Interfaces, current sriovnetworkv1.Int
 			}
 		}
 		if !configured && ifaceStatus.NumVfs > 0 {
+			// load the PF info
+			pfStatus, exist, err := utils.LoadPfsStatus(ifaceStatus.PciAddress, true)
+			if err != nil {
+				glog.Errorf("generic-plugin needDrainNode(): failed to load info about PF status for pci address %s: %v", ifaceStatus.PciAddress, err)
+				continue
+			}
+
+			if !exist {
+				glog.Infof("generic-plugin needDrainNode(): PF name %s with pci address %s has VFs configured but they weren't created by the sriov operator. Skipping drain",
+					ifaceStatus.Name,
+					ifaceStatus.PciAddress)
+				continue
+			}
+
+			if pfStatus.ExternallyCreated {
+				glog.Infof("generic-plugin needDrainNode()(): PF name %s with pci address %s was externally created. Skipping drain",
+					ifaceStatus.Name,
+					ifaceStatus.PciAddress)
+				continue
+			}
+
 			glog.V(2).Infof("generic-plugin needDrainNode(): need drain, %v needs to be reset", ifaceStatus)
 			needDrain = true
 			return
