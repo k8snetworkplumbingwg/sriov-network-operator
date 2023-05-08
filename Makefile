@@ -75,7 +75,7 @@ image: ; $(info Building image...)
 
 # Run tests
 test: generate vet manifests envtest
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir=/tmp -p path)" HOME="$(shell pwd)" go test ./... -coverprofile cover.out -v
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir=/tmp -p path)" HOME="$(shell pwd)" go test `go list ./... | grep -v test/` -coverprofile cover.out -v
 
 # Build manager binary
 manager: generate vet _build-manager
