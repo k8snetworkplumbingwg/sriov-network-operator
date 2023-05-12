@@ -667,7 +667,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 // isNodeDraining: check if the node is draining
 // both Draining and MCP paused labels will return true
 func (dn *Daemon) isNodeDraining() bool {
-	anno, ok := dn.node.Annotations[annoKey]
+	anno, ok := dn.node.Annotations[consts.NodeDrainAnnotation]
 	if !ok {
 		return false
 	}
@@ -794,8 +794,8 @@ func (dn *Daemon) annotateNode(node, value string) error {
 	if newNode.Annotations == nil {
 		newNode.Annotations = map[string]string{}
 	}
-	if newNode.Annotations[annoKey] != value {
-		newNode.Annotations[annoKey] = value
+	if newNode.Annotations[consts.NodeDrainAnnotation] != value {
+		newNode.Annotations[consts.NodeDrainAnnotation] = value
 		newData, err := json.Marshal(newNode)
 		if err != nil {
 			return err
