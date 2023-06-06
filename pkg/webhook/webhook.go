@@ -68,6 +68,20 @@ func ValidateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
 				Reason: metav1.StatusReason(err.Error()),
 			}
 		}
+	case "SriovNetwork":
+		network := sriovnetworkv1.SriovNetwork{}
+
+		err = json.Unmarshal(raw, &network)
+		if err != nil {
+			glog.Error(err)
+			return toV1AdmissionResponse(err)
+		}
+
+		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovNetwork(&network, ar.Request.Operation); err != nil {
+			reviewResponse.Result = &metav1.Status{
+				Reason: metav1.StatusReason(err.Error()),
+			}
+		}
 	case "SriovOperatorConfig":
 		config := sriovnetworkv1.SriovOperatorConfig{}
 

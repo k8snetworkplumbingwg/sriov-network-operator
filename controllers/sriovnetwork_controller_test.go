@@ -48,6 +48,7 @@ var _ = Describe("SriovNetwork Controller", func() {
 				ResourceName: "resource_1",
 				IPAM:         `{"type":"host-local","subnet":"10.56.217.0/24","rangeStart":"10.56.217.171","rangeEnd":"10.56.217.181","routes":[{"dst":"0.0.0.0/0"}],"gateway":"10.56.217.1"}`,
 				Trust:        on,
+				AllMulticast: on,
 			},
 			"test-4": {
 				ResourceName: "resource_1",
@@ -90,7 +91,7 @@ var _ = Describe("SriovNetwork Controller", func() {
 			Entry("with vlan flag", sriovnets["test-0"]),
 			Entry("with networkNamespace flag", sriovnets["test-1"]),
 			Entry("with SpoofChk flag on", sriovnets["test-2"]),
-			Entry("with Trust flag on", sriovnets["test-3"]),
+			Entry("with Trust and AllMulticast on", sriovnets["test-3"]),
 		)
 
 		newSpecs := map[string]sriovnetworkv1.SriovNetworkSpec{
@@ -220,12 +221,19 @@ var _ = Describe("SriovNetwork Controller", func() {
 func generateExpectedNetConfig(cr *sriovnetworkv1.SriovNetwork) string {
 	spoofchk := ""
 	trust := ""
+	allMulticast := ""
 	ipam := emptyCurls
 
 	if cr.Spec.Trust == sriovnetworkv1.SriovCniStateOn {
 		trust = `"trust":"on",`
 	} else if cr.Spec.Trust == sriovnetworkv1.SriovCniStateOff {
 		trust = `"trust":"off",`
+	}
+
+	if cr.Spec.AllMulticast == sriovnetworkv1.SriovCniStateOn {
+		trust = `"all_multicast":"on",`
+	} else if cr.Spec.AllMulticast == sriovnetworkv1.SriovCniStateOff {
+		trust = `"all_multicast":"off",`
 	}
 
 	if cr.Spec.SpoofChk == sriovnetworkv1.SriovCniStateOn {
@@ -241,7 +249,7 @@ func generateExpectedNetConfig(cr *sriovnetworkv1.SriovNetwork) string {
 	}
 	vlanQoS := cr.Spec.VlanQoS
 
-	configStr, err := formatJSON(fmt.Sprintf(`{ "cniVersion":"0.3.1", "name":"%s","type":"sriov","vlan":%d,%s%s%s"vlanQoS":%d,"ipam":%s }`, cr.GetName(), cr.Spec.Vlan, spoofchk, trust, state, vlanQoS, ipam))
+	configStr, err := formatJSON(fmt.Sprintf(`{ "cniVersion":"0.3.1", "name":"%s","type":"sriov","vlan":%d,%s%s%s"vlanQoS":%d,%s"ipam":%s }`, cr.GetName(), cr.Spec.Vlan, spoofchk, trust, allMulticast, vlanQoS, state, ipam))
 	if err != nil {
 		panic(err)
 	}

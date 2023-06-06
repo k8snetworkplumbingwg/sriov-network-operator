@@ -57,3 +57,7 @@ webhooks:
         apiGroups: ["sriovnetwork.openshift.io"]
         apiVersions: ["v1"]
         resources: ["sriovnetworknodepolicies"]
+      - operations: [ "CREATE", "UPDATE" ]
+        apiGroups: [ "sriovnetwork.openshift.io" ]
+        apiVersions: [ "v1" ]
+        resources: [ "sriovnetworks" ]

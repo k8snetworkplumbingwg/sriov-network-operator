@@ -601,6 +601,16 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["TrustConfigured"] = false
 	}
 
+	data.Data["AllMulticastConfigured"] = true
+	switch cr.Spec.AllMulticast {
+	case SriovCniStateOn:
+		data.Data["SriovCniAllMulticast"] = SriovCniStateOn
+	case SriovCniStateOff:
+		data.Data["SriovCniAllMulticast"] = SriovCniStateOff
+	default:
+		data.Data["AllMulticastConfigured"] = false
+	}
+
 	data.Data["StateConfigured"] = true
 	switch cr.Spec.LinkState {
 	case SriovCniStateEnable:

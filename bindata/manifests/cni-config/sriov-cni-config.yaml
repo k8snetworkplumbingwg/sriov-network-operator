@@ -22,6 +22,9 @@ spec:
 {{- if .TrustConfigured -}}
   "trust":"{{.SriovCniTrust}}",
 {{- end -}}
+{{- if .AllMulticastConfigured -}}
+  "all_multicast":"{{.SriovCniAllMulticast}}",
+{{- end -}}
 {{- if .VlanQoSConfigured -}}
   "vlanQoS":{{.SriovCniVlanQoS}},
 {{- end -}}

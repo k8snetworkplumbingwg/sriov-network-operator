@@ -164,6 +164,54 @@ func TestValidateSriovOperatorConfigWithDefaultOperatorConfig(t *testing.T) {
 	g.Expect(ok).To(Equal(true))
 }
 
+func TestValidateSriovNetworkAllMulticastTrustOn(t *testing.T) {
+	var err error
+	var ok bool
+
+	network := &SriovNetwork{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+		},
+		Spec: SriovNetworkSpec{
+			AllMulticast: "on",
+			Trust:        "on",
+		},
+	}
+
+	g := NewGomegaWithT(t)
+	ok, _, err = validateSriovNetwork(network, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	ok, _, err = validateSriovNetwork(network, "UPDATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+}
+
+func TestValidateSriovNetworkAllMulticastTrustOff(t *testing.T) {
+	var err error
+	var ok bool
+
+	network := &SriovNetwork{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test",
+		},
+		Spec: SriovNetworkSpec{
+			AllMulticast: "on",
+			Trust:        "off",
+		},
+	}
+
+	g := NewGomegaWithT(t)
+	ok, _, err = validateSriovNetwork(network, "CREATE")
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(ok).To(Equal(false))
+
+	ok, _, err = validateSriovNetwork(network, "UPDATE")
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(ok).To(Equal(false))
+}
+
 func TestValidateSriovNetworkNodePolicyWithDefaultPolicy(t *testing.T) {
 	var err error
 	var ok bool

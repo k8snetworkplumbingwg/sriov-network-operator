@@ -48,6 +48,19 @@ func validateSriovOperatorConfig(cr *sriovnetworkv1.SriovOperatorConfig, operati
 	return false, warnings, fmt.Errorf("only default SriovOperatorConfig is used")
 }
 
+func validateSriovNetwork(cr *sriovnetworkv1.SriovNetwork, operation v1.Operation) (bool, []string, error) {
+	glog.V(2).Infof("validateSriovNetwork: %v", cr)
+	var warnings []string
+
+	if operation == v1.Create || operation == v1.Update {
+		if cr.Spec.AllMulticast == sriovnetworkv1.SriovCniStateOn && cr.Spec.Trust != sriovnetworkv1.SriovCniStateOn {
+			return false, warnings, fmt.Errorf("trust must be enabled in order to set allMulticast on")
+		}
+	}
+
+	return true, warnings, nil
+}
+
 func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, operation v1.Operation) (bool, []string, error) {
 	glog.V(2).Infof("validateSriovNetworkNodePolicy: %v", cr)
 	var warnings []string

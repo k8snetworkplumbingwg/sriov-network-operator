@@ -48,6 +48,9 @@ type SriovNetworkSpec struct {
 	// VF trust mode (on|off)
 	// +kubebuilder:validation:Enum={"on","off"}
 	Trust string `json:"trust,omitempty"`
+	// AllMulticast mode (on|off)
+	// +kubebuilder:validation:Enum={"on","off"}
+	AllMulticast string `json:"allMulticast,omitempty"`
 	// VF link state (enable|disable|auto)
 	// +kubebuilder:validation:Enum={"auto","enable","disable"}
 	LinkState string `json:"linkState,omitempty"`

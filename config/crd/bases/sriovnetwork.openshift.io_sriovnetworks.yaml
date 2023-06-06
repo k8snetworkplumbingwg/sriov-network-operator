@@ -35,6 +35,12 @@ spec:
           spec:
             description: SriovNetworkSpec defines the desired state of SriovNetwork
             properties:
+              allMulticast:
+                description: AllMulticast mode (on|off)
+                enum:
+                - "on"
+                - "off"
+                type: string
               capabilities:
                 description: 'Capabilities to be configured for this network. Capabilities
                   supported: (mac|ips), e.g. ''{"mac": true}'''
