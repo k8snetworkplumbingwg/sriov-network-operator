@@ -180,7 +180,13 @@ func (p *MellanoxPlugin) Apply() error {
 		return nil
 	}
 	glog.Info("mellanox-plugin Apply()")
-	return configFW()
+	if err := configFW(); err != nil {
+		return err
+	}
+	if err := resetFW(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func configFW() error {
@@ -209,6 +215,21 @@ func configFW() error {
 		_, err := utils.RunCommand("mstconfig", cmdArgs...)
 		if err != nil {
 			glog.Errorf("mellanox-plugin configFW(): failed : %v", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func resetFW() error {
+	glog.Info("mellanox-plugin resetFW()")
+	for pciAddr := range attributesToChange {
+		cmdArgs := []string{"-d", pciAddr, "-y", "reset"}
+
+		glog.V(2).Infof("mellanox-plugin: resetFW(): %v", cmdArgs)
+		_, err := utils.RunCommand("mstfwreset", cmdArgs...)
+		if err != nil {
+			glog.Errorf("mellanox-plugin resetFW(): failed : %v", err)
 			return err
 		}
 	}
