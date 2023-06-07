@@ -38,7 +38,6 @@ type DeviceInfo struct {
 
 const (
 	filesDir          = "files"
-	ovsUnitsDir       = "ovs-units"
 	switchdevUnitsDir = "switchdev-units"
 )
 
@@ -145,7 +144,7 @@ func formateDeviceList(devs []DeviceInfo) string {
 	return out
 }
 
-func GenerateMachineConfig(path, name, mcRole string, ovsOffload bool, d *RenderData) (*mcfgv1.MachineConfig, error) {
+func GenerateMachineConfig(path, name, mcRole string, d *RenderData) (*mcfgv1.MachineConfig, error) {
 	d.Funcs["formateDeviceList"] = formateDeviceList
 
 	exists, err := existsDir(path)
@@ -170,19 +169,6 @@ func GenerateMachineConfig(path, name, mcRole string, ovsOffload bool, d *Render
 	if exists {
 		if err := filterTemplates(files, p, d); err != nil {
 			return nil, err
-		}
-	}
-
-	if ovsOffload {
-		p = filepath.Join(path, ovsUnitsDir)
-		exists, err = existsDir(p)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			if err := filterTemplates(units, p, d); err != nil {
-				return nil, err
-			}
 		}
 	}
 

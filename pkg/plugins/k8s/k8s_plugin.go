@@ -27,7 +27,6 @@ type K8sPlugin struct {
 	switchdevUdevScript        *service.ScriptManifestFile
 	switchdevBeforeNMService   *service.Service
 	switchdevAfterNMService    *service.Service
-	openVSwitchService         *service.Service
 	networkManagerService      *service.Service
 	updateTarget               *k8sUpdateTarget
 }
@@ -81,7 +80,6 @@ const (
 	switchdevBeforeNMUnitFile         = switchdevUnits + "switchdev-configuration-before-nm.yaml"
 	switchdevAfterNMUnitFile          = switchdevUnits + "switchdev-configuration-after-nm.yaml"
 	networkManagerUnitFile            = switchdevUnits + "NetworkManager.service.yaml"
-	ovsUnitFile                       = switchdevManifestPath + "ovs-units/ovs-vswitchd.service.yaml"
 	configuresSwitchdevBeforeNMScript = switchdevManifestPath + "files/switchdev-configuration-before-nm.sh.yaml"
 	configuresSwitchdevAfterNMScript  = switchdevManifestPath + "files/switchdev-configuration-after-nm.sh.yaml"
 	switchdevRenamingUdevScript       = switchdevManifestPath + "files/switchdev-vf-link-name.sh.yaml"
@@ -220,26 +218,12 @@ func (p *K8sPlugin) readNetworkManagerManifest() error {
 	return nil
 }
 
-func (p *K8sPlugin) readOpenVSwitchdManifest() error {
-	openVSwitchService, err := service.ReadServiceInjectionManifestFile(ovsUnitFile)
-	if err != nil {
-		return err
-	}
-
-	p.openVSwitchService = openVSwitchService
-	return nil
-}
-
 func (p *K8sPlugin) readManifestFiles() error {
 	if err := p.readSwitchdevManifest(); err != nil {
 		return err
 	}
 
 	if err := p.readNetworkManagerManifest(); err != nil {
-		return err
-	}
-
-	if err := p.readOpenVSwitchdManifest(); err != nil {
 		return err
 	}
 
@@ -282,7 +266,7 @@ func (p *K8sPlugin) switchdevServiceStateUpdate() error {
 }
 
 func (p *K8sPlugin) getSystemServices() []*service.Service {
-	return []*service.Service{p.networkManagerService, p.openVSwitchService}
+	return []*service.Service{p.networkManagerService}
 }
 
 func (p *K8sPlugin) isSwitchdevScriptNeedUpdate(scriptObj *service.ScriptManifestFile) (needUpdate bool, err error) {

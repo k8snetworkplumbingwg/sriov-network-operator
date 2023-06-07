@@ -491,6 +491,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 			}
 		}
 	}
+
 	if dn.openshiftContext.IsOpenshiftCluster() && !dn.openshiftContext.IsHypershift() {
 		if err = dn.getNodeMachinePool(); err != nil {
 			return err
@@ -558,6 +559,11 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 				return err
 			}
 		}
+	}
+	// After reboot, set ovs HWOL dependent on whether there are switchdev mode devices
+	if err := trySetOvsHWOL(utils.SwitchdevDeviceExists(latestState)); err != nil {
+		glog.Errorf("nodeStateSyncHandler(): Failed to set OpenvSwitch offload error: %v", err)
+		return err
 	}
 	glog.Info("nodeStateSyncHandler(): sync succeeded")
 	dn.nodeState = latestState.DeepCopy()
@@ -1077,5 +1083,40 @@ func tryCreateNMUdevRule() error {
 		glog.Errorf("tryCreateNMUdevRule(): fail to write file: %v", err)
 		return err
 	}
+	return nil
+}
+
+func trySetOvsHWOL(switchdevDevExists bool) error {
+	glog.V(2).Infof("trySetOvsHWOL()")
+	desiredHWOLStateStr := strconv.FormatBool(switchdevDevExists)
+
+	exit, err := utils.Chroot("/host")
+	if err != nil {
+		glog.Errorf("trySetOvsHWOL(): failed to chroot to host: %v", err)
+	} else {
+		defer exit()
+	}
+
+	currentState := utils.OvsHWOLisEnabled()
+	// if we are already in desired state do nothing. HWOL should only be set if a switchdev Device exists
+	if currentState == switchdevDevExists {
+		glog.V(2).Infof("trySetOvsHWOL(): ovs hw-offload already in desired state %s, ovs switch not needed", desiredHWOLStateStr)
+		return nil
+	}
+
+	// otherwise switch state and reboot to apply the config changes to ovs
+	glog.V(2).Infof("trySetOvsHWOL(): switching Open_vSwitch hw-offload from %s to %s", currentState, desiredHWOLStateStr)
+	_, err = utils.RunOVSvsctl("set", "Open_vSwitch", ".", fmt.Sprintf("other_config:hw-offload=%s", desiredHWOLStateStr))
+	if err != nil {
+		glog.Errorf("trySetOvsHWOL(): ovs-vsctl set OpenvSwitch offload %s: failed: %v", desiredHWOLStateStr, err)
+		return err
+	}
+
+	err = utils.RestartOVS()
+	if err != nil {
+		glog.Errorf("SD DEBUG failed to restart ovs")
+		return err
+	}
+
 	return nil
 }

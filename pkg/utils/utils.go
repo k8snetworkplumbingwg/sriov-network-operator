@@ -788,6 +788,22 @@ func RunCommand(command string, args ...string) (string, error) {
 	return stdout.String(), err
 }
 
+func RunOVSvsctl(args ...string) (string, error) {
+	glog.Infof("runOVSvsctl(): ovs-vsctl %v", args)
+	var output bytes.Buffer
+	cmd := exec.Command("ovs-vsctl", args...)
+	cmd.Stdout = &output
+	err := cmd.Run()
+
+	return output.String(), err
+}
+
+func RestartOVS() error {
+	glog.Infof("RestartOVS(): restarting openvswitch.service")
+	cmd := exec.Command("systemctl", "restart", "openvswitch.service")
+	return cmd.Run()
+}
+
 func hasMellanoxInterfacesInSpec(newState *sriovnetworkv1.SriovNetworkNodeState) bool {
 	for _, ifaceStatus := range newState.Status.Interfaces {
 		if ifaceStatus.Vendor == VendorMellanox {

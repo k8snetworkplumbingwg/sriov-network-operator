@@ -148,7 +148,7 @@ func (r *SriovNetworkPoolConfigReconciler) syncOvsHardwareOffloadMachineConfigs(
 	}
 
 	data := render.MakeRenderData()
-	mc, err := render.GenerateMachineConfig("bindata/manifests/switchdev-config", mcName, mcpName, true, &data)
+	mc, err := render.GenerateMachineConfig("bindata/manifests/switchdev-config", mcName, mcpName, &data)
 	if err != nil {
 		return err
 	}

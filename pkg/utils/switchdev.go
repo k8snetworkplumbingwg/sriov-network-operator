@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"os"
+	"strings"
 
 	"github.com/golang/glog"
 
@@ -106,4 +107,29 @@ func WriteSwitchdevConfFile(newState *sriovnetworkv1.SriovNetworkNodeState) (upd
 		return
 	}
 	return
+}
+
+func SwitchdevDeviceExists(state *sriovnetworkv1.SriovNetworkNodeState) bool {
+	// In the event the user deletes the pool config, the spec may not reflect the actual Eswitch mode
+	// of the devices. Use the status instead to determine current device configuration.
+	for _, iface := range state.Status.Interfaces {
+		if iface.EswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+			glog.V(2).Infof("SwitchdevDeviceExists(): detected switchdev interface %+v", iface)
+			return true
+		}
+	}
+	return false
+}
+
+func OvsHWOLisEnabled() bool {
+	glog.V(2).Infof("ovsHWOLisEnabled()")
+
+	currentState, err := RunOVSvsctl("get", "Open_vSwitch", ".", "other_config:hw-offload")
+	if err != nil {
+		// if ovs has not previously been configured this record may not yet exist
+		glog.Errorf("trySetOvsHWOL(): failed to get current Open_vSwitch hw-offload mode : %v", err)
+		currentState = "false"
+	}
+
+	return strings.Contains(currentState, "true")
 }
