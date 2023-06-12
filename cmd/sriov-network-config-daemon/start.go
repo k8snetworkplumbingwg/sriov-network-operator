@@ -162,6 +162,10 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 	} else {
 		glog.Fatalf("Failed to fetch node state %s, %v!", startOpts.nodeName, err)
 	}
+	// Return an error if the platform is not Baremetal or OpenStack
+	if platformType != utils.Baremetal && platformType != utils.VirtualOpenStack {
+		glog.Fatalf("Unsupported platform type %s!", platformType.String())
+	}
 	glog.V(0).Infof("Running on platform: %s", platformType.String())
 
 	var namespace = os.Getenv("NAMESPACE")
