@@ -458,6 +458,15 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 		syncStatus:    syncStatusInProgress,
 		lastSyncError: "",
 	}
+	// wait for writer to refresh status then pull again the latest node state
+	<-dn.syncCh
+	updatedState, err := dn.client.SriovnetworkV1().SriovNetworkNodeStates(namespace).Get(context.Background(), dn.name, metav1.GetOptions{})
+	if err != nil {
+		glog.Warningf("nodeStateSyncHandler(): Failed to fetch node state %s: %v", dn.name, err)
+		return err
+	}
+	// we only update the status to avoid any race conditions where a new policy can be applied
+	latestState.Status = updatedState.Status
 
 	// load plugins if has not loaded
 	if len(dn.enabledPlugins) == 0 {
