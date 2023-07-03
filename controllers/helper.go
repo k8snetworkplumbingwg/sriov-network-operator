@@ -18,9 +18,14 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
+
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 )
@@ -39,6 +44,48 @@ const (
 )
 
 var namespace = os.Getenv("NAMESPACE")
+
+type DrainAnnotationPredicate struct {
+	predicate.Funcs
+}
+
+func (DrainAnnotationPredicate) Create(e event.CreateEvent) bool {
+	logger := log.FromContext(context.TODO())
+	if e.Object == nil {
+		logger.Error(nil, "Create event has no object for create", "event", e)
+		return false
+	}
+
+	if _, hasAnno := e.Object.GetAnnotations()[constants.NodeDrainAnnotation]; hasAnno {
+		logger.Error(nil, "Create event: node has no drain annotation", "event", e)
+		return true
+	}
+	return false
+}
+
+func (DrainAnnotationPredicate) Update(e event.UpdateEvent) bool {
+	logger := log.FromContext(context.TODO())
+	if e.ObjectOld == nil {
+		logger.Error(nil, "Update event has no old object to update", "event", e)
+		return false
+	}
+	if e.ObjectNew == nil {
+		logger.Error(nil, "Update event has no new object for update", "event", e)
+		return false
+	}
+
+	oldAnno, hasOldAnno := e.ObjectOld.GetAnnotations()[constants.NodeDrainAnnotation]
+	newAnno, hasNewAnno := e.ObjectNew.GetAnnotations()[constants.NodeDrainAnnotation]
+
+	if !hasOldAnno || !hasNewAnno {
+		logger.Error(nil, "Update event: can not compare annotations", "old", hasOldAnno)
+		logger.Error(nil, "Update event: can not compare annotations", "new", hasNewAnno)
+		logger.Error(nil, "Update event: can not compare annotations", "event", e)
+		return false
+	}
+
+	return oldAnno == newAnno
+}
 
 func GetImagePullSecrets() []string {
 	imagePullSecrets := os.Getenv("IMAGE_PULL_SECRETS")
