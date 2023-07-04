@@ -2,11 +2,11 @@ package conformance
 
 import (
 	"flag"
-	"fmt"
-	"os"
+	"log"
 	"path"
 	"testing"
 
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/clean"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -14,7 +14,7 @@ import (
 	"github.com/onsi/ginkgo/v2/types"
 	. "github.com/onsi/gomega"
 
-	testclient "github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/client"
+	kniK8sReporter "github.com/openshift-kni/k8sreporter"
 
 	// Test files in this package must not end with `_test.go` suffix, as they are imported as go package
 	_ "github.com/k8snetworkplumbingwg/sriov-network-operator/test/conformance/tests"
@@ -23,34 +23,26 @@ import (
 )
 
 var (
+	err            error
 	junitPath      *string
-	dumpOutput     *bool
-	reporterFile   string
-	customReporter *k8sreporter.KubernetesReporter
+	reportPath     *string
+	customReporter *kniK8sReporter.KubernetesReporter
 )
 
 func init() {
-	dumpOutput = flag.Bool("dump", false, "dump informations for failed tests")
 	junitPath = flag.String("junit", "", "the path for the junit format report")
+	reportPath = flag.String("report", "", "the path of the report file containing details for failed tests")
 }
 
 func TestTest(t *testing.T) {
 	RegisterFailHandler(Fail)
 
-	reporterFile = os.Getenv("REPORTER_OUTPUT")
-
-	clients := testclient.New("")
-
-	if reporterFile != "" {
-		f, err := os.OpenFile(reporterFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if *reportPath != "" {
+		*reportPath = path.Join(*reportPath, "sriov_conformance_failure_report.log")
+		customReporter, err = k8sreporter.New(*reportPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to open the file: %v\n", err)
-			return
+			log.Fatalf("Failed to create log reporter %s", err)
 		}
-		defer f.Close()
-		customReporter = k8sreporter.New(clients, f)
-	} else if *dumpOutput {
-		customReporter = k8sreporter.New(clients, os.Stdout)
 	}
 
 	RunSpecs(t, "SRIOV Operator conformance tests")
@@ -72,8 +64,8 @@ var _ = ReportAfterEach(func(sr types.SpecReport) {
 		return
 	}
 
-	if reporterFile != "" || *dumpOutput {
-		customReporter.Report(sr)
+	if *reportPath != "" {
+		customReporter.Dump(util.LogsExtractDuration, sr.LeafNodeText)
 	}
 })
 
