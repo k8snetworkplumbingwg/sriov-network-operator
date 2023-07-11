@@ -125,6 +125,7 @@ func DiscoverSriovDevices(withUnsupported bool) ([]sriovnetworkv1.InterfaceExt, 
 		if dputils.IsSriovPF(device.Address) {
 			iface.TotalVfs = dputils.GetSriovVFcapacity(device.Address)
 			iface.NumVfs = dputils.GetVFconfigured(device.Address)
+			iface.NUMANode = dputils.GetDevNode(device.Address)
 			if iface.EswitchMode, err = GetNicSriovMode(device.Address); err != nil {
 				glog.Warningf("DiscoverSriovDevices(): unable to get device mode %+v %q", device.Address, err)
 			}

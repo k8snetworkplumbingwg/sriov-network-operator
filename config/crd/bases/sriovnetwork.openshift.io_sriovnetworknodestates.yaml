@@ -139,6 +139,8 @@ spec:
                       type: string
                     numVfs:
                       type: integer
+                    numaNode:
+                      type: integer
                     pciAddress:
                       type: string
                     totalvfs:

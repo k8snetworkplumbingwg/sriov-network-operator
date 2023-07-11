@@ -65,6 +65,7 @@ type InterfaceExt struct {
 	LinkType    string            `json:"linkType,omitempty"`
 	EswitchMode string            `json:"eSwitchMode,omitempty"`
 	TotalVfs    int               `json:"totalvfs,omitempty"`
+	NUMANode    int               `json:"numaNode,omitempty"`
 	VFs         []VirtualFunction `json:"Vfs,omitempty"`
 }
 type InterfaceExts []InterfaceExt
