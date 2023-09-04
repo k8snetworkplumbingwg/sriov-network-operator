@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"os"
@@ -323,11 +324,19 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 			return err
 		}
 
-		for _, addr := range vfAddrs {
+		for vfNum, addr := range vfAddrs {
 			var group sriovnetworkv1.VfGroup
 			i := 0
 			var dpdkDriver string
 			var isRdma bool
+
+			// LinkType is an optional field. Let's fallback to current link type
+			// if nothing is specified in the SriovNodePolicy
+			linkType := iface.LinkType
+			if linkType == "" {
+				linkType = ifaceStatus.LinkType
+			}
+
 			vfID, err := dputils.GetVFID(addr)
 			for i, group = range iface.VfGroups {
 				if err != nil {
@@ -346,12 +355,7 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 			// for userspace drivers like vfio we configure the vf mac using the kernel nic mac address
 			// before we switch to the userspace driver
 			if yes, d := hasDriver(addr); yes && !sriovnetworkv1.StringInArray(d, DpdkDrivers) {
-				// LinkType is an optional field. Let's fallback to current link type
-				// if nothing is specified in the SriovNodePolicy
-				linkType := iface.LinkType
-				if linkType == "" {
-					linkType = ifaceStatus.LinkType
-				}
+
 				if strings.EqualFold(linkType, constants.LinkTypeIB) {
 					if err = setVfGUID(addr, pfLink); err != nil {
 						return err
@@ -399,6 +403,15 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 			} else {
 				if err := BindDpdkDriver(addr, dpdkDriver); err != nil {
 					glog.Warningf("configSriovDevice(): fail to bind driver %s for device %s", dpdkDriver, addr)
+					return err
+				}
+			}
+
+			// Set the vf state to "Follow"
+			if strings.EqualFold(linkType, constants.LinkTypeIB) && "mlx5_core" == ifaceStatus.Driver {
+				devicePolicyPath := filepath.Join(sysClassNet, ifaceStatus.Name, "device/sriov/"+strconv.Itoa(vfNum)+"/policy")
+				if err := ioutil.WriteFile(devicePolicyPath, []byte("Follow"), 0666); err != nil {
+					glog.Warningf("configSriovDevice(): fail to set vf state %s: %v", devicePolicyPath, err)
 					return err
 				}
 			}
