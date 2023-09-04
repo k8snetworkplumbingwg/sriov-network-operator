@@ -21,11 +21,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/kubectl/pkg/drain"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -134,6 +136,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	kubeclient := kubernetes.NewForConfigOrDie(ctrl.GetConfigOrDie())
+
 	if err = (&controllers.SriovNetworkReconciler{
 		Client: mgrGlobal.GetClient(),
 		Scheme: mgrGlobal.GetScheme(),
@@ -169,6 +173,22 @@ func main() {
 		OpenshiftContext: openshiftContext,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovNetworkPoolConfig")
+		os.Exit(1)
+	}
+	if err = (&controllers.DrainReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Drainer: &drain.Helper{
+			Client:              kubeclient,
+			Force:               true,
+			IgnoreAllDaemonSets: true,
+			DeleteEmptyDirData:  true,
+			GracePeriodSeconds:  -1,
+			Timeout:             90 * time.Second,
+			Ctx: context.Background(),
+		},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DrainReconciler")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

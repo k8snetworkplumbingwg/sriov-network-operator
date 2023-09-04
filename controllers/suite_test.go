@@ -18,10 +18,15 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/golang/glog"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/kubectl/pkg/drain"
 
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	. "github.com/onsi/ginkgo/v2"
@@ -140,6 +145,26 @@ var _ = BeforeSuite(func(done Done) {
 		Client:           k8sManager.GetClient(),
 		Scheme:           k8sManager.GetScheme(),
 		OpenshiftContext: &utils.OpenshiftContext{OpenshiftFlavor: utils.OpenshiftFlavorDefault},
+	}).SetupWithManager(k8sManager)
+	Expect(err).ToNot(HaveOccurred())
+
+	kubeclient := kubernetes.NewForConfigOrDie(k8sManager.GetConfig())
+	err = (&DrainReconciler{
+		Client: k8sManager.GetClient(),
+		Scheme: k8sManager.GetScheme(),
+		Drainer: &drain.Helper{
+			Client:              kubeclient,
+			Force:               true,
+			IgnoreAllDaemonSets: true,
+			DeleteEmptyDirData:  true,
+			GracePeriodSeconds:  -1,
+			Timeout:             90 * time.Second,
+			OnPodDeletedOrEvicted: func(pod *corev1.Pod, usingEviction bool) {
+				verbStr := "Deleted"
+				glog.Info(fmt.Sprintf("%s pod from Node %s/%s", verbStr, pod.Namespace, pod.Name))
+			},
+			Ctx: context.Background(),
+		},
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
