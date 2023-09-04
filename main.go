@@ -185,7 +185,7 @@ func main() {
 			DeleteEmptyDirData:  true,
 			GracePeriodSeconds:  -1,
 			Timeout:             90 * time.Second,
-			Ctx: context.Background(),
+			Ctx:                 context.Background(),
 		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DrainReconciler")

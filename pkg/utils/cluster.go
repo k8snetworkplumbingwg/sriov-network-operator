@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -120,4 +121,45 @@ func NodeHasAnnotation(node corev1.Node, annoKey string, value string) bool {
 		return true
 	}
 	return false
+}
+
+func AnnotateNode(node, value string, kubeClient kubernetes.Interface) error {
+	log.Log.V(2).Info("annotateNode(): Annotate node", "node", node, "annotation", value)
+	oldNode, err := kubeClient.CoreV1().Nodes().Get(context.Background(), node, metav1.GetOptions{})
+	if err != nil {
+		log.Log.Error(err, "annotateNode(): Failed to get node, retrying", "node", node)
+		return err
+	}
+
+	oldData, err := json.Marshal(oldNode)
+	if err != nil {
+		return err
+	}
+
+	newNode := oldNode.DeepCopy()
+	if newNode.Annotations == nil {
+		newNode.Annotations = map[string]string{}
+	}
+
+	if newNode.Annotations[consts.NodeDrainAnnotation] != value {
+		newNode.Annotations[consts.NodeDrainAnnotation] = value
+		newData, err := json.Marshal(newNode)
+		if err != nil {
+			return err
+		}
+		patchBytes, err := strategicpatch.CreateTwoWayMergePatch(oldData, newData, corev1.Node{})
+		if err != nil {
+			return err
+		}
+		_, err = kubeClient.CoreV1().Nodes().Patch(context.Background(),
+			node,
+			types.StrategicMergePatchType,
+			patchBytes,
+			metav1.PatchOptions{})
+		if err != nil {
+			log.Log.Error(err, "annotateNode(): Failed to patch node", "node", node)
+			return err
+		}
+	}
+	return nil
 }
