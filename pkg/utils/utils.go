@@ -414,11 +414,9 @@ func configSriovDevice(iface *sriovnetworkv1.Interface, ifaceStatus *sriovnetwor
 	// set numVFs
 	if iface.NumVfs != ifaceStatus.NumVfs {
 		if iface.ExternallyManaged {
-			if iface.NumVfs > ifaceStatus.NumVfs {
-				errMsg := fmt.Sprintf("configSriovDevice(): number of request virtual functions %d is not equal to configured virtual functions %d but the policy is configured as ExternallyManaged for device %s", iface.NumVfs, ifaceStatus.NumVfs, iface.PciAddress)
-				log.Log.Error(nil, errMsg)
-				return fmt.Errorf(errMsg)
-			}
+			errMsg := fmt.Sprintf("configSriovDevice(): number of request virtual functions %d is not equal to configured virtual functions %d but the policy is configured as ExternallyManaged for device %s", iface.NumVfs, ifaceStatus.NumVfs, iface.PciAddress)
+			log.Log.Error(nil, errMsg)
+			return fmt.Errorf(errMsg)
 		} else {
 			// create the udev rule to disable all the vfs from network manager as this vfs are managed by the operator
 			err = AddUdevRule(iface.PciAddress)
