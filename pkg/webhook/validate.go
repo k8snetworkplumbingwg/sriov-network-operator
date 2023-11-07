@@ -309,8 +309,12 @@ func validatePolicyForNodeState(policy *sriovnetworkv1.SriovNetworkNodePolicy, s
 
 			// Externally create validations
 			if policy.Spec.ExternallyManaged {
-				if policy.Spec.NumVfs > iface.NumVfs {
+				if policy.Spec.NumVfs != 0 && iface.NumVfs == 0 {
 					return nil, fmt.Errorf("numVfs(%d) in CR %s is higher than the virtual functions allocated for the PF externally value(%d)", policy.Spec.NumVfs, policy.GetName(), iface.NumVfs)
+				}
+
+				if policy.Spec.NumVfs != iface.NumVfs {
+					return nil, fmt.Errorf("numVfs(%d) in CR %s is different than the virtual functions allocated for the PF externally value(%d)", policy.Spec.NumVfs, policy.GetName(), iface.NumVfs)
 				}
 
 				if policy.Spec.Mtu != 0 && policy.Spec.Mtu > iface.Mtu {

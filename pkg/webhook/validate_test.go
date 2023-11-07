@@ -310,7 +310,7 @@ func TestValidatePolicyForNodeStateWithInvalidNumVfsExternallyCreated(t *testing
 	}
 	g := NewGomegaWithT(t)
 	_, err := validatePolicyForNodeState(policy, state, NewNode())
-	g.Expect(err).To(MatchError(ContainSubstring(fmt.Sprintf("numVfs(%d) in CR %s is higher than the virtual functions allocated for the PF externally value(%d)", policy.Spec.NumVfs, policy.GetName(), state.Status.Interfaces[0].NumVfs))))
+	g.Expect(err).To(MatchError(ContainSubstring(fmt.Sprintf("numVfs(%d) in CR %s is different than the virtual functions allocated for the PF externally value(%d)", policy.Spec.NumVfs, policy.GetName(), state.Status.Interfaces[0].NumVfs))))
 }
 
 func TestValidatePolicyForNodeStateWithValidNumVfsExternallyCreated(t *testing.T) {
@@ -364,7 +364,7 @@ func TestValidatePolicyForNodeStateWithValidLowerNumVfsExternallyCreated(t *test
 	}
 	g := NewGomegaWithT(t)
 	_, err := validatePolicyForNodeState(policy, state, NewNode())
-	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(err).To(MatchError(ContainSubstring(fmt.Sprintf("numVfs(%d) in CR %s is different than the virtual functions allocated for the PF externally value(%d)", policy.Spec.NumVfs, policy.GetName(), state.Status.Interfaces[0].NumVfs))))
 }
 
 func TestValidatePolicyForNodePolicyWithOutExternallyManageConflict(t *testing.T) {
