@@ -4,7 +4,19 @@ COPY . .
 RUN make _build-webhook BIN_PATH=build/_output/cmd
 
 FROM quay.io/centos/centos:stream9
+
+ARG BUILD_DATE
+ARG VERSION
+ARG VCS_REF
+ARG VCS_BRANCH
+
+LABEL version=$VERSION
+LABEL vcs-type="git"
+LABEL vcs-branch=$VCS_BRANCH
+LABEL vcs-ref=$VCS_REF
+LABEL build-date=$BUILD_DATE
 LABEL io.k8s.display-name="sriov-network-webhook" \
       io.k8s.description="This is an admission controller webhook that mutates and validates customer resources of sriov network operator."
+
 COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/sriov-network-operator/build/_output/cmd/webhook /usr/bin/webhook
 CMD ["/usr/bin/webhook"]

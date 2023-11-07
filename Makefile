@@ -12,8 +12,15 @@ export OPERATOR_EXEC?=oc
 BUILD_GOPATH=$(TARGET_DIR):$(TARGET_DIR)/vendor:$(CURPATH)/cmd
 IMAGE_BUILDER?=docker
 IMAGE_BUILD_OPTS?=
+IMAGE_METADATA=--build-arg BUILD_DATE="$(BUILD_TIMESTAMP)" --build-arg VERSION="$(BUILD_VERSION)" --build-arg VCS_REF="$(VCS_REF)" --build-arg VCS_BRANCH="$(VCS_BRANCH)"
 DOCKERFILE?=Dockerfile
 DOCKERFILE_CONFIG_DAEMON?=Dockerfile.sriov-network-config-daemon
+DOCKERFILE_WEBHOOK?=Dockerfile.webhook
+
+BUILD_VERSION := $(strip $(shell [ -d .git ] && git describe --always --tags --dirty))
+BUILD_TIMESTAMP := $(shell date -u +"%Y-%m-%dT%H:%M:%S%Z")
+VCS_BRANCH := $(strip $(shell git rev-parse --abbrev-ref HEAD))
+VCS_REF := $(strip $(shell [ -d .git ] && git rev-parse --short HEAD))
 
 CRD_BASES=./config/crd/bases
 
@@ -22,6 +29,7 @@ TARGET=$(TARGET_DIR)/bin/$(APP_NAME)
 IMAGE_REPO?=ghcr.io/k8snetworkplumbingwg
 IMAGE_TAG?=$(IMAGE_REPO)/$(APP_NAME):latest
 CONFIG_DAEMON_IMAGE_TAG?=$(IMAGE_REPO)/sriov-network-config-daemon:latest
+WEBHOOK_IMAGE_TAG?=$(IMAGE_REPO)/sriov-network-operator-webhook:latest
 MAIN_PKG=cmd/manager/main.go
 export NAMESPACE?=openshift-sriov-network-operator
 export WATCH_NAMESPACE?=openshift-sriov-network-operator
@@ -69,8 +77,12 @@ update-codegen:
 	hack/update-codegen.sh
 
 image: ; $(info Building image...)
-	$(IMAGE_BUILDER) build -f $(DOCKERFILE) -t $(IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
-	$(IMAGE_BUILDER) build -f $(DOCKERFILE_CONFIG_DAEMON) -t $(CONFIG_DAEMON_IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
+	$(IMAGE_BUILDER) build $(IMAGE_METADATA) \
+		-f $(DOCKERFILE) -t $(IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
+	$(IMAGE_BUILDER) build $(IMAGE_METADATA) \
+		-f $(DOCKERFILE_CONFIG_DAEMON) -t $(CONFIG_DAEMON_IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
+	$(IMAGE_BUILDER) build $(IMAGE_METADATA) \
+		-f $(DOCKERFILE_WEBHOOK) -t $(WEBHOOK_IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
 
 # Run tests
 test: generate vet manifests envtest
