@@ -1847,6 +1847,69 @@ var _ = Describe("[sriov] operator", func() {
 				Expect(errOutput).To(Equal(""))
 			})
 
+			It("Should create a policy if the number of requested vfs is less than the configured number and should only modify those requested", func() {
+				resourceName := "testexternally" //nolint:goconst
+				mtu := 2000
+				defaultMtu := 1500
+
+				By("allocating the 2 virtual functions to the selected device")
+				_, errOutput, err := runCommandOnConfigDaemon(node, "/bin/bash", "-c", fmt.Sprintf("echo 2 > /host/sys/class/net/%s/device/sriov_numvfs", nic.Name))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(errOutput).To(Equal(""))
+
+				By("manually changing the MTU")
+				_, errOutput, err = runCommandOnConfigDaemon(node, "/bin/bash", "-c", fmt.Sprintf("echo %d > /sys/bus/pci/devices/%s/net/%s/mtu", mtu, nic.PciAddress, nic.Name))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(errOutput).To(Equal(""))
+
+				By("creating the policy that will only use 1 virtual function we create manually on the system")
+				Eventually(func() error {
+					_, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, nic.Name, node, 1, resourceName, "netdevice", externallyManage, func(policy *sriovv1.SriovNetworkNodePolicy) {
+						policy.Spec.Mtu = mtu
+					})
+					return err
+				}, 1*time.Minute, time.Second).ShouldNot(HaveOccurred())
+
+				Eventually(func() int64 {
+					testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
+					Expect(err).ToNot(HaveOccurred())
+					resNum := testedNode.Status.Allocatable[corev1.ResourceName("openshift.io/"+resourceName)]
+					allocatable, _ := resNum.AsInt64()
+					return allocatable
+				}, 2*time.Minute, time.Second).Should(Equal(int64(2)))
+
+				By(fmt.Sprintf("verifying that only VF 0 have mtu set to %d", mtu))
+				Eventually(func() sriovv1.InterfaceExts {
+					nodeState, err := clients.SriovNetworkNodeStates(operatorNamespace).Get(context.Background(), node, metav1.GetOptions{})
+					Expect(err).ToNot(HaveOccurred())
+					return nodeState.Status.Interfaces
+				}, 3*time.Minute, 1*time.Second).Should(ContainElement(MatchFields(
+					IgnoreExtras,
+					Fields{
+						"VFs": SatisfyAll(
+							ContainElement(
+								MatchFields(
+									IgnoreExtras,
+									Fields{
+										"VfID": Equal(0),
+										"Mtu":  Equal(mtu),
+									})),
+							ContainElement(
+								MatchFields(
+									IgnoreExtras,
+									Fields{
+										"VfID": Equal(1),
+										"Mtu":  Equal(defaultMtu),
+									})),
+						),
+					})))
+
+				By("cleaning the manual sriov created")
+				_, errOutput, err = runCommandOnConfigDaemon(node, "/bin/bash", "-c", fmt.Sprintf("echo 0 > /host/sys/class/net/%s/device/sriov_numvfs", nic.Name))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(errOutput).To(Equal(""))
+			})
+
 			It("Should create a policy if the number of requested vfs is equal and not delete them when the policy is removed", func() {
 				resourceName := "testexternally"
 				var sriovPolicy *sriovv1.SriovNetworkNodePolicy
