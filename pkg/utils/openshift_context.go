@@ -1,10 +1,16 @@
 package utils
 
 import (
+	"context"
+	"fmt"
+	daemonconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
 	mcclientset "github.com/openshift/machine-config-operator/pkg/generated/clientset/versioned"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // OpenshiftFlavor holds metadata about the type of Openshift environment the operator is in.
@@ -65,4 +71,25 @@ func (c OpenshiftContext) IsOpenshiftCluster() bool {
 
 func (c OpenshiftContext) IsHypershift() bool {
 	return c.OpenshiftFlavor == OpenshiftFlavorHypershift
+}
+
+func (c OpenshiftContext) GetNodeMachinePoolName(node *corev1.Node) (string, error) {
+	desiredConfig, ok := node.Annotations[daemonconsts.DesiredMachineConfigAnnotationKey]
+	if !ok {
+		log.Log.Error(nil, "getNodeMachinePool(): Failed to find the the desiredConfig Annotation")
+		return "", fmt.Errorf("getNodeMachinePool(): Failed to find the the desiredConfig Annotation")
+	}
+	mc, err := c.McClient.MachineconfigurationV1().MachineConfigs().Get(context.TODO(), desiredConfig, metav1.GetOptions{})
+	if err != nil {
+		log.Log.Error(err, "getNodeMachinePool(): Failed to get the desired Machine Config")
+		return "", err
+	}
+	for _, owner := range mc.OwnerReferences {
+		if owner.Kind == "MachineConfigPool" {
+			return owner.Name, nil
+		}
+	}
+
+	log.Log.Error(nil, "getNodeMachinePool(): Failed to find the MCP of the node")
+	return "", fmt.Errorf("getNodeMachinePool(): Failed to find the MCP of the node")
 }

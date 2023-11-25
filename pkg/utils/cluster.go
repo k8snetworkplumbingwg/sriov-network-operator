@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -9,7 +10,10 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -107,4 +111,83 @@ func openshiftControlPlaneTopologyStatus(c client.Client) (configv1.TopologyMode
 		return "", fmt.Errorf("openshiftControlPlaneTopologyStatus(): Failed to get Infrastructure (name: %s): %v", infraResourceName, err)
 	}
 	return infra.Status.ControlPlaneTopology, nil
+}
+
+func ObjectHasAnnotationKey(obj metav1.Object, annoKey string) bool {
+	// Check if node already contains annotation
+	if _, ok := obj.GetAnnotations()[annoKey]; ok {
+		return true
+	}
+	return false
+}
+
+func ObjectHasAnnotation(obj metav1.Object, annoKey string, value string) bool {
+	// Check if node already contains annotation
+	if anno, ok := obj.GetAnnotations()[annoKey]; ok && (anno == value) {
+		return true
+	}
+	return false
+}
+
+func AnnotateNode(node, key, value string, kubeClient kubernetes.Interface) error {
+	log.Log.V(2).Info("annotateNode(): Annotate node", "node", node, "annotation", value)
+	oldNode, err := kubeClient.CoreV1().Nodes().Get(context.Background(), node, metav1.GetOptions{})
+	if err != nil {
+		log.Log.Error(err, "annotateNode(): Failed to get node, retrying", "node", node)
+		return err
+	}
+
+	oldData, err := json.Marshal(oldNode)
+	if err != nil {
+		return err
+	}
+
+	newNode := oldNode.DeepCopy()
+	if newNode.Annotations == nil {
+		newNode.Annotations = map[string]string{}
+	}
+
+	if newNode.Annotations[key] != value {
+		newNode.Annotations[key] = value
+		newData, err := json.Marshal(newNode)
+		if err != nil {
+			return err
+		}
+		patchBytes, err := strategicpatch.CreateTwoWayMergePatch(oldData, newData, corev1.Node{})
+		if err != nil {
+			return err
+		}
+		_, err = kubeClient.CoreV1().Nodes().Patch(context.Background(),
+			node,
+			types.StrategicMergePatchType,
+			patchBytes,
+			metav1.PatchOptions{})
+		if err != nil {
+			log.Log.Error(err, "annotateNode(): Failed to patch node", "node", node)
+			return err
+		}
+	}
+	return nil
+}
+
+func AnnotateObject(obj client.Object, key, value string, c client.Client) error {
+	log.Log.V(2).Info("annotateNode(): Annotate object", "objectName", obj.GetName(), "annotation", value)
+	newObj := obj.DeepCopyObject().(client.Object)
+	if newObj.GetAnnotations() == nil {
+		newObj.SetAnnotations(map[string]string{})
+	}
+
+	patch := client.MergeFrom(obj)
+
+	if newObj.GetAnnotations()[key] != value {
+		newObj.GetAnnotations()[key] = value
+		err := c.Patch(context.Background(),
+			newObj, patch)
+		if err != nil {
+			log.Log.Error(err, "annotateNode(): Failed to patch node")
+			return err
+		}
+	}
+
+	return nil
 }
