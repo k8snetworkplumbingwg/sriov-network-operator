@@ -18,8 +18,12 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"strings"
 
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -39,6 +43,92 @@ const (
 )
 
 var namespace = os.Getenv("NAMESPACE")
+
+type DrainAnnotationPredicate struct {
+	predicate.Funcs
+}
+
+func (DrainAnnotationPredicate) Create(e event.CreateEvent) bool {
+	logger := log.FromContext(context.TODO())
+	if e.Object == nil {
+		logger.Info("Create event: node has no drain annotation", "node", e.Object.GetName())
+		return false
+	}
+
+	if _, hasAnno := e.Object.GetAnnotations()[constants.NodeDrainAnnotation]; hasAnno {
+		logger.Info("Create event: node has no drain annotation", "node", e.Object.GetName())
+		return true
+	}
+	return false
+}
+
+func (DrainAnnotationPredicate) Update(e event.UpdateEvent) bool {
+	logger := log.FromContext(context.TODO())
+	if e.ObjectOld == nil {
+		logger.Info("Update event has no old object to update", "node", e.ObjectOld.GetName())
+		return false
+	}
+	if e.ObjectNew == nil {
+		logger.Info("Update event has no new object for update", "node", e.ObjectNew.GetName())
+		return false
+	}
+
+	oldAnno, hasOldAnno := e.ObjectOld.GetAnnotations()[constants.NodeDrainAnnotation]
+	newAnno, hasNewAnno := e.ObjectNew.GetAnnotations()[constants.NodeDrainAnnotation]
+
+	if !hasOldAnno && hasNewAnno {
+		return true
+	}
+
+	if oldAnno != newAnno {
+		return true
+	}
+
+	return false
+}
+
+type DrainStateAnnotationPredicate struct {
+	predicate.Funcs
+}
+
+func (DrainStateAnnotationPredicate) Create(e event.CreateEvent) bool {
+	logger := log.FromContext(context.TODO())
+	if e.Object == nil {
+		logger.Info("Create event: node has no drain annotation", "node", e.Object.GetName())
+		return false
+	}
+
+	if _, hasAnno := e.Object.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]; hasAnno {
+		logger.Info("Create event: node has no drain annotation", "node", e.Object.GetName())
+		return true
+	}
+	return false
+}
+
+func (DrainStateAnnotationPredicate) Update(e event.UpdateEvent) bool {
+	logger := log.FromContext(context.TODO())
+	if e.ObjectOld == nil {
+		logger.Info("Update event has no old object to update", "node", e.ObjectOld.GetName())
+		return false
+	}
+	if e.ObjectNew == nil {
+		logger.Info("Update event has no new object for update", "node", e.ObjectNew.GetName())
+		return false
+	}
+
+	oldAnno, hasOldAnno := e.ObjectOld.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+	newAnno, hasNewAnno := e.ObjectNew.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+
+	if !hasOldAnno || !hasNewAnno {
+		return true
+	}
+
+	if oldAnno != newAnno {
+		return true
+	}
+
+	return oldAnno != newAnno
+}
 
 func GetImagePullSecrets() []string {
 	imagePullSecrets := os.Getenv("IMAGE_PULL_SECRETS")

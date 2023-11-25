@@ -29,6 +29,7 @@ import (
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
 	"go.uber.org/zap/zapcore"
+	"k8s.io/client-go/kubernetes"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -141,6 +142,13 @@ var _ = BeforeSuite(func(done Done) {
 		Scheme:           k8sManager.GetScheme(),
 		OpenshiftContext: &utils.OpenshiftContext{OpenshiftFlavor: utils.OpenshiftFlavorDefault},
 	}).SetupWithManager(k8sManager)
+	Expect(err).ToNot(HaveOccurred())
+
+	kubeclient := kubernetes.NewForConfigOrDie(k8sManager.GetConfig())
+
+	drainController, err := NewDrainReconcileController(k8sManager.GetClient(), k8sManager.GetScheme(), kubeclient, &utils.OpenshiftContext{OpenshiftFlavor: utils.OpenshiftFlavorDefault})
+	Expect(err).ToNot(HaveOccurred())
+	err = drainController.SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
 	os.Setenv("RESOURCE_PREFIX", "openshift.io")
