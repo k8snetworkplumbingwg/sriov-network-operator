@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"flag"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -233,7 +234,7 @@ var _ = Describe("Config Daemon", func() {
 			Eventually(refreshCh, "10s").Should(Receive(&msg))
 			Expect(msg.syncStatus).To(Equal("Succeeded"))
 
-			Expect(sut.nodeState.GetGeneration()).To(BeNumerically("==", 777))
+			Expect(sut.currentNodeState.GetGeneration()).To(BeNumerically("==", 777))
 		})
 	})
 
@@ -242,17 +243,17 @@ var _ = Describe("Config Daemon", func() {
 		It("for a non-Openshift cluster", func() {
 			sut.openshiftContext = &utils.OpenshiftContext{IsOpenShiftCluster: false}
 
-			sut.node = &corev1.Node{
+			sut.desiredNodeState = &sriovnetworkv1.SriovNetworkNodeState{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-node",
 					Annotations: map[string]string{}}}
 
 			Expect(sut.isNodeDraining()).To(BeFalse())
 
-			sut.node.Annotations["sriovnetwork.openshift.io/state"] = "Draining"
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.Draining
 			Expect(sut.isNodeDraining()).To(BeTrue())
 
-			sut.node.Annotations["sriovnetwork.openshift.io/state"] = "Draining_MCP_Paused"
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainMcpPaused
 			Expect(sut.isNodeDraining()).To(BeTrue())
 		})
 
@@ -262,17 +263,17 @@ var _ = Describe("Config Daemon", func() {
 				OpenshiftFlavor:    utils.OpenshiftFlavorDefault,
 			}
 
-			sut.node = &corev1.Node{
+			sut.desiredNodeState = &sriovnetworkv1.SriovNetworkNodeState{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-node",
 					Annotations: map[string]string{}}}
 
 			Expect(sut.isNodeDraining()).To(BeFalse())
 
-			sut.node.Annotations["sriovnetwork.openshift.io/state"] = "Draining"
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.Draining
 			Expect(sut.isNodeDraining()).To(BeTrue())
 
-			sut.node.Annotations["sriovnetwork.openshift.io/state"] = "Draining_MCP_Paused"
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainMcpPaused
 			Expect(sut.isNodeDraining()).To(BeTrue())
 		})
 
@@ -282,17 +283,17 @@ var _ = Describe("Config Daemon", func() {
 				OpenshiftFlavor:    utils.OpenshiftFlavorHypershift,
 			}
 
-			sut.node = &corev1.Node{
+			sut.desiredNodeState = &sriovnetworkv1.SriovNetworkNodeState{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-node",
 					Annotations: map[string]string{}}}
 
 			Expect(sut.isNodeDraining()).To(BeFalse())
 
-			sut.node.Annotations["sriovnetwork.openshift.io/state"] = "Draining"
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.Draining
 			Expect(sut.isNodeDraining()).To(BeTrue())
 
-			sut.node.Annotations["sriovnetwork.openshift.io/state"] = "Draining_MCP_Paused"
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainMcpPaused
 			Expect(sut.isNodeDraining()).To(BeTrue())
 		})
 	})
