@@ -3,14 +3,16 @@ package utils
 import (
 	"context"
 	"fmt"
-	daemonconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
-	mcclientset "github.com/openshift/machine-config-operator/pkg/generated/clientset/versioned"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	daemonconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
+	mcclientset "github.com/openshift/machine-config-operator/pkg/generated/clientset/versioned"
 )
 
 // OpenshiftFlavor holds metadata about the type of Openshift environment the operator is in.

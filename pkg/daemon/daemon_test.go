@@ -250,10 +250,10 @@ var _ = Describe("Config Daemon", func() {
 
 			Expect(sut.isNodeDraining()).To(BeFalse())
 
-			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.Draining
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent] = consts.Draining
 			Expect(sut.isNodeDraining()).To(BeTrue())
 
-			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainMcpPaused
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent] = consts.DrainMcpPaused
 			Expect(sut.isNodeDraining()).To(BeTrue())
 		})
 
@@ -270,10 +270,10 @@ var _ = Describe("Config Daemon", func() {
 
 			Expect(sut.isNodeDraining()).To(BeFalse())
 
-			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.Draining
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent] = consts.Draining
 			Expect(sut.isNodeDraining()).To(BeTrue())
 
-			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainMcpPaused
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent] = consts.DrainMcpPaused
 			Expect(sut.isNodeDraining()).To(BeTrue())
 		})
 
@@ -290,10 +290,10 @@ var _ = Describe("Config Daemon", func() {
 
 			Expect(sut.isNodeDraining()).To(BeFalse())
 
-			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.Draining
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent] = consts.Draining
 			Expect(sut.isNodeDraining()).To(BeTrue())
 
-			sut.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainMcpPaused
+			sut.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent] = consts.DrainMcpPaused
 			Expect(sut.isNodeDraining()).To(BeTrue())
 		})
 	})

@@ -99,7 +99,7 @@ func (DrainStateAnnotationPredicate) Create(e event.CreateEvent) bool {
 		return false
 	}
 
-	if _, hasAnno := e.Object.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]; hasAnno {
+	if _, hasAnno := e.Object.GetLabels()[constants.NodeStateDrainLabelCurrent]; hasAnno {
 		logger.Info("Create event: node has no drain annotation", "node", e.Object.GetName())
 		return true
 	}
@@ -117,8 +117,8 @@ func (DrainStateAnnotationPredicate) Update(e event.UpdateEvent) bool {
 		return false
 	}
 
-	oldAnno, hasOldAnno := e.ObjectOld.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
-	newAnno, hasNewAnno := e.ObjectNew.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+	oldAnno, hasOldAnno := e.ObjectOld.GetLabels()[constants.NodeStateDrainLabelCurrent]
+	newAnno, hasNewAnno := e.ObjectNew.GetLabels()[constants.NodeStateDrainLabelCurrent]
 
 	if !hasOldAnno || !hasNewAnno {
 		return true

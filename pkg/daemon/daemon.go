@@ -343,7 +343,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	latest := dn.desiredNodeState.GetGeneration()
 	log.Log.V(0).Info("nodeStateSyncHandler(): new generation", "generation", latest)
 
-	if dn.currentNodeState.GetGeneration() == latest && !utils.ObjectHasAnnotation(dn.desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainComplete) {
+	if dn.currentNodeState.GetGeneration() == latest && !utils.ObjectHasAnnotation(dn.desiredNodeState, consts.NodeStateDrainLabelCurrent, consts.DrainComplete) {
 		if dn.useSystemdService {
 			serviceEnabled, err := dn.serviceManager.IsServiceEnabled(systemd.SriovServicePath)
 			if err != nil {
@@ -502,9 +502,9 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	}
 
 	if reqDrain ||
-		(utils.ObjectHasAnnotationKey(dn.desiredNodeState, consts.NodeStateDrainAnnotationCurrent) &&
-			!utils.ObjectHasAnnotation(dn.desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainIdle)) {
-		if utils.ObjectHasAnnotation(dn.desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainComplete) {
+		(utils.ObjectHasAnnotationKey(dn.desiredNodeState, consts.NodeStateDrainLabelCurrent) &&
+			!utils.ObjectHasAnnotation(dn.desiredNodeState, consts.NodeStateDrainLabelCurrent, consts.DrainIdle)) {
+		if utils.ObjectHasAnnotation(dn.desiredNodeState, consts.NodeStateDrainLabelCurrent, consts.DrainComplete) {
 			log.Log.Info("nodeStateSyncHandler(): the node complete the draining")
 		} else if !dn.isNodeDraining() {
 			if !dn.disableDrain {
@@ -584,7 +584,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 // isNodeDraining: check if the node is draining
 // both Draining and MCP paused labels will return true
 func (dn *Daemon) isNodeDraining() bool {
-	anno, ok := dn.desiredNodeState.Annotations[consts.NodeStateDrainAnnotationCurrent]
+	anno, ok := dn.desiredNodeState.Annotations[consts.NodeStateDrainLabelCurrent]
 	if !ok {
 		return false
 	}

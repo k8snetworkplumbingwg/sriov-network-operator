@@ -19,28 +19,29 @@ package controllers
 import (
 	"context"
 	"fmt"
-	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
-	mcfginformers "github.com/openshift/machine-config-operator/pkg/generated/informers/externalversions"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/util/workqueue"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/kubectl/pkg/drain"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
+	mcfginformers "github.com/openshift/machine-config-operator/pkg/generated/informers/externalversions"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -70,15 +71,21 @@ type DrainReconcile struct {
 	openshiftContext      *utils.OpenshiftContext
 	mcpPauseDrainSelector labels.Selector
 	drainingSelector      labels.Selector
+	drainCompleteSelector labels.Selector
 }
 
 func NewDrainReconcileController(client client.Client, Scheme *runtime.Scheme, kubeClient kubernetes.Interface, openshiftContext *utils.OpenshiftContext) (*DrainReconcile, error) {
-	mcpPauseDrainSelector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{constants.NodeDrainAnnotation: constants.DrainMcpPaused}})
+	mcpPauseDrainSelector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{constants.NodeStateDrainLabelCurrent: constants.DrainMcpPaused}})
 	if err != nil {
 		return nil, err
 	}
 
-	drainingSelector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{constants.NodeDrainAnnotation: constants.Draining}})
+	drainingSelector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{constants.NodeStateDrainLabelCurrent: constants.Draining}})
+	if err != nil {
+		return nil, err
+	}
+
+	drainCompleteSelector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{constants.NodeStateDrainLabelCurrent: constants.DrainComplete}})
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +96,8 @@ func NewDrainReconcileController(client client.Client, Scheme *runtime.Scheme, k
 		kubeClient,
 		openshiftContext,
 		mcpPauseDrainSelector,
-		drainingSelector}, nil
+		drainingSelector,
+		drainCompleteSelector}, nil
 }
 
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
@@ -108,6 +116,7 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	err := dr.Get(ctx, req.NamespacedName, node)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			reqLogger.Info("node doesn't exist")
 			return ctrl.Result{}, nil
 		}
 
@@ -118,6 +127,7 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	err = dr.Get(ctx, req.NamespacedName, nodeNetworkState)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			reqLogger.Info("SriovNetworkNodeState doesn't exist")
 			return ctrl.Result{}, nil
 		}
 
@@ -125,9 +135,9 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// create the drain state annotation if it doesn't exist in the sriovNetworkNodeState object
-	nodeStateDrainAnnotationCurrent, NodeStateDrainAnnotationCurrentExist := nodeNetworkState.Annotations[constants.NodeStateDrainAnnotationCurrent]
+	nodeStateDrainAnnotationCurrent, NodeStateDrainAnnotationCurrentExist := nodeNetworkState.Labels[constants.NodeStateDrainLabelCurrent]
 	if !NodeStateDrainAnnotationCurrentExist {
-		err = utils.AnnotateObject(nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainIdle, dr.Client)
+		err = utils.LabelObject(nodeNetworkState, constants.NodeStateDrainLabelCurrent, constants.DrainIdle, dr.Client)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -145,16 +155,24 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	//TODO: change this to save it on runtime
-	mcpPauseDrainNodeList := &corev1.NodeList{}
-	err = dr.List(ctx, mcpPauseDrainNodeList, &client.ListOptions{LabelSelector: dr.mcpPauseDrainSelector})
+	mcpPauseDrainNodeList := &sriovnetworkv1.SriovNetworkNodeStateList{}
+	err = dr.List(ctx, mcpPauseDrainNodeList, &client.ListOptions{LabelSelector: dr.mcpPauseDrainSelector, Namespace: namespace})
 	if err != nil {
 		// Failed to get node list
 		reqLogger.Error(err, "Error occurred on LIST nodes request from API server")
 		return reconcile.Result{}, err
 	}
 
-	DrainingNodeList := &corev1.NodeList{}
-	err = dr.List(ctx, DrainingNodeList, &client.ListOptions{LabelSelector: dr.mcpPauseDrainSelector})
+	DrainingNodeList := &sriovnetworkv1.SriovNetworkNodeStateList{}
+	err = dr.List(ctx, DrainingNodeList, &client.ListOptions{LabelSelector: dr.mcpPauseDrainSelector, Namespace: namespace})
+	if err != nil {
+		// Failed to get node list
+		reqLogger.Error(err, "Error occurred on LIST nodes request from API server")
+		return reconcile.Result{}, err
+	}
+
+	DrainCompleteNodeList := &sriovnetworkv1.SriovNetworkNodeStateList{}
+	err = dr.List(ctx, DrainingNodeList, &client.ListOptions{LabelSelector: dr.drainCompleteSelector, Namespace: namespace})
 	if err != nil {
 		// Failed to get node list
 		reqLogger.Error(err, "Error occurred on LIST nodes request from API server")
@@ -162,7 +180,7 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	reqLogger.Info("Max node allowed to be draining at the same time", "MaxParallelNodeConfiguration", maxParallelNodeConfiguration)
-	drainingNodes := len(mcpPauseDrainNodeList.Items) + len(DrainingNodeList.Items)
+	drainingNodes := len(mcpPauseDrainNodeList.Items) + len(DrainingNodeList.Items) + len(DrainCompleteNodeList.Items)
 	reqLogger.Info("Count of draining", "drainingNodes", drainingNodes)
 
 	// if both are Idle we don't need to do anything
@@ -179,27 +197,26 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, err
 		}
 
-		err = utils.AnnotateObject(nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainIdle, dr.Client)
+		err = utils.LabelObject(nodeNetworkState, constants.NodeStateDrainLabelCurrent, constants.DrainIdle, dr.Client)
 		return ctrl.Result{}, err
 	}
 
+	// the node request to drain, but we are at the limit so we re-enqueue the request
 	if drainingNodes >= maxParallelNodeConfiguration {
 		reqLogger.Info("MaxParallelNodeConfiguration limit reached for draining nodes re-enqueue the request")
 		// TODO: make this time configurable
-		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// the node request to drain, but we are at the limit so we re-enqueue the request
 	if nodeDrainAnnotation == constants.DrainRequired &&
 		nodeStateDrainAnnotationCurrent == constants.DrainIdle {
 		// pause MCP if we are on openshift but not hypershift deployment method as there is MCP in hypershift
 		if !dr.openshiftContext.IsOpenshiftCluster() || (dr.openshiftContext.IsOpenshiftCluster() && dr.openshiftContext.IsHypershift()) {
-			err = utils.AnnotateObject(nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.Draining, dr.Client)
+			err = utils.LabelObject(nodeNetworkState, constants.NodeStateDrainLabelCurrent, constants.Draining, dr.Client)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 			nodeStateDrainAnnotationCurrent = constants.Draining
-
 		} else if dr.openshiftContext.IsOpenshiftCluster() && !dr.openshiftContext.IsHypershift() {
 			nodePoolName, err := dr.openshiftContext.GetNodeMachinePoolName(node)
 			if err != nil {
@@ -210,23 +227,27 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				return reconcile.Result{}, err
 			}
 
-			nodeStateDrainAnnotationCurrent = nodeNetworkState.Annotations[constants.NodeStateDrainAnnotationCurrent]
+			nodeStateDrainAnnotationCurrent = nodeNetworkState.Annotations[constants.NodeStateDrainLabelCurrent]
 		}
-
 	}
 
 	// the node is MCP paused already, so we need to continue from here
 	// TODO: with parallel draining we need to also check that there is no other reconcile loop that is working
 	if nodeDrainAnnotation == constants.DrainRequired &&
 		(nodeStateDrainAnnotationCurrent == constants.DrainMcpPaused || nodeStateDrainAnnotationCurrent == constants.Draining) {
+		err = utils.LabelObject(nodeNetworkState, constants.NodeStateDrainLabelCurrent, constants.Draining, dr.Client)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		nodeStateDrainAnnotationCurrent = nodeNetworkState.Annotations[constants.NodeStateDrainLabelCurrent]
+
 		err = dr.drainNode(ctx, node)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 
-		err = utils.AnnotateObject(nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainComplete, dr.Client)
+		err = utils.LabelObject(nodeNetworkState, constants.NodeStateDrainLabelCurrent, constants.DrainComplete, dr.Client)
 		return ctrl.Result{}, err
-
 	}
 
 	if nodeDrainAnnotation == constants.DrainIdle &&
@@ -236,11 +257,9 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			return ctrl.Result{}, err
 		}
 
-		err = utils.AnnotateObject(nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainIdle, dr.Client)
+		err = utils.LabelObject(nodeNetworkState, constants.NodeStateDrainLabelCurrent, constants.DrainIdle, dr.Client)
 		return ctrl.Result{}, err
-
 	}
-
 	return reconcile.Result{}, nil
 }
 
@@ -257,9 +276,9 @@ func (dr *DrainReconcile) drainNode(ctx context.Context, node *corev1.Node) erro
 		GracePeriodSeconds:  -1,
 		Timeout:             90 * time.Second,
 		OnPodDeletedOrEvicted: func(pod *corev1.Pod, usingEviction bool) {
-			verbStr := "Deleted"
+			verbStr := constants.DrainDeleted
 			if usingEviction {
-				verbStr = "Evicted"
+				verbStr = constants.DrainEvicted
 			}
 			log.Log.Info(fmt.Sprintf("%s pod from Node %s/%s", verbStr, pod.Namespace, pod.Name))
 		},
@@ -312,7 +331,7 @@ func (dr *DrainReconcile) pauseMCP(nodeState *sriovnetworkv1.SriovNetworkNodeSta
 
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
-	paused := nodeState.Annotations[constants.NodeStateDrainAnnotationCurrent] == constants.DrainMcpPaused
+	paused := nodeState.Annotations[constants.NodeStateDrainLabelCurrent] == constants.DrainMcpPaused
 
 	mcpEventHandler := func(obj interface{}) {
 		mcp := obj.(*mcfgv1.MachineConfigPool)
@@ -345,12 +364,12 @@ func (dr *DrainReconcile) pauseMCP(nodeState *sriovnetworkv1.SriovNetworkNodeSta
 				log.Log.V(2).Error(err, "pauseMCP(): failed to pause MCP", "mcp-name", mcpName)
 				return
 			}
-			err = utils.AnnotateObject(nodeState, constants.NodeStateDrainAnnotationCurrent, constants.DrainMcpPaused, dr.Client)
+			err = utils.LabelObject(nodeState, constants.NodeStateDrainLabelCurrent, constants.DrainMcpPaused, dr.Client)
 			if err != nil {
 				log.Log.V(2).Error(err, "pauseMCP(): Failed to annotate node")
 				return
 			}
-			nodeState.Annotations[constants.NodeStateDrainAnnotationCurrent] = constants.DrainMcpPaused
+			nodeState.Annotations[constants.NodeStateDrainLabelCurrent] = constants.DrainMcpPaused
 			paused = true
 			return
 		}
@@ -362,12 +381,12 @@ func (dr *DrainReconcile) pauseMCP(nodeState *sriovnetworkv1.SriovNetworkNodeSta
 				log.Log.V(2).Error(err, "pauseMCP(): fail to resume MCP", "mcp-name", mcpName)
 				return
 			}
-			err = utils.AnnotateObject(nodeState, constants.NodeStateDrainAnnotationCurrent, constants.DrainIdle, dr.Client)
+			err = utils.LabelObject(nodeState, constants.NodeStateDrainLabelCurrent, constants.DrainIdle, dr.Client)
 			if err != nil {
 				log.Log.V(2).Error(err, "pauseMCP(): Failed to annotate node")
 				return
 			}
-			nodeState.Annotations[constants.NodeStateDrainAnnotationCurrent] = constants.DrainIdle
+			nodeState.Annotations[constants.NodeStateDrainLabelCurrent] = constants.DrainIdle
 			paused = false
 		}
 		log.Log.Info("pauseMCP():MCP is not ready, wait...",
@@ -401,9 +420,9 @@ func (dr *DrainReconcile) completeDrain(ctx context.Context, node *corev1.Node) 
 		GracePeriodSeconds:  -1,
 		Timeout:             90 * time.Second,
 		OnPodDeletedOrEvicted: func(pod *corev1.Pod, usingEviction bool) {
-			verbStr := "Deleted"
+			verbStr := constants.DrainDeleted
 			if usingEviction {
-				verbStr = "Evicted"
+				verbStr = constants.DrainEvicted
 			}
 			log.Log.Info(fmt.Sprintf("%s pod from Node %s/%s", verbStr, pod.Namespace, pod.Name))
 		},
@@ -431,7 +450,6 @@ func (dr *DrainReconcile) completeDrain(ctx context.Context, node *corev1.Node) 
 		pausePatch := []byte("{\"spec\":{\"paused\":false}}")
 		if _, err := dr.openshiftContext.McClient.MachineconfigurationV1().MachineConfigPools().Patch(context.Background(),
 			mcpName, types.MergePatchType, pausePatch, metav1.PatchOptions{}); err != nil {
-
 			log.Log.Error(err, "completeDrain(): failed to resume MCP", "mcp-name", mcpName)
 			return err
 		}
@@ -445,14 +463,13 @@ func (dr *DrainReconcile) SetupWithManager(mgr ctrl.Manager) error {
 	createUpdateEnqueue := handler.Funcs{
 		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.RateLimitingInterface) {
 			q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
-				Namespace: namespace,
+				Namespace: e.Object.GetNamespace(),
 				Name:      e.Object.GetName(),
 			}})
-
 		},
 		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.RateLimitingInterface) {
 			q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
-				Namespace: namespace,
+				Namespace: e.ObjectNew.GetNamespace(),
 				Name:      e.ObjectNew.GetName(),
 			}})
 		},
@@ -460,7 +477,7 @@ func (dr *DrainReconcile) SetupWithManager(mgr ctrl.Manager) error {
 
 	// Watch for spec and annotation changes
 	nodePredicates := builder.WithPredicates(DrainAnnotationPredicate{})
-	nodeStatePredicates := builder.WithPredicates(DrainAnnotationPredicate{})
+	nodeStatePredicates := builder.WithPredicates(DrainStateAnnotationPredicate{})
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, nodePredicates).
