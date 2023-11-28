@@ -14,16 +14,13 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	listerv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/kubectl/pkg/drain"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
@@ -87,17 +84,9 @@ type Daemon struct {
 
 	mu *sync.Mutex
 
-	drainer *drain.Helper
-
-	node *corev1.Node
-
 	disableDrain bool
 
-	nodeLister listerv1.NodeLister
-
 	workqueue workqueue.RateLimitingInterface
-
-	mcpName string
 
 	storeManager utils.StoreManagerInterface
 
@@ -114,17 +103,6 @@ const (
 )
 
 var namespace = os.Getenv("NAMESPACE")
-
-// writer implements io.Writer interface as a pass-through for log.Log.
-type writer struct {
-	logFunc func(msg string, keysAndValues ...interface{})
-}
-
-// Write passes string(p) into writer's logFunc and always returns len(p)
-func (w writer) Write(p []byte) (n int, err error) {
-	w.logFunc(string(p))
-	return len(p), nil
-}
 
 func New(
 	nodeName string,
@@ -336,19 +314,6 @@ func (dn *Daemon) processNextWorkItem() bool {
 	}
 
 	return true
-}
-
-func (dn *Daemon) nodeAddHandler(obj interface{}) {
-	dn.nodeUpdateHandler(nil, obj)
-}
-
-func (dn *Daemon) nodeUpdateHandler(old, new interface{}) {
-	node, err := dn.nodeLister.Get(dn.name)
-	if errors.IsNotFound(err) {
-		log.Log.V(2).Info("nodeUpdateHandler(): node has been deleted", "name", dn.name)
-		return
-	}
-	dn.node = node.DeepCopy()
 }
 
 func (dn *Daemon) operatorConfigAddHandler(obj interface{}) {

@@ -31,6 +31,9 @@ const (
 	Draining                        = "Draining"
 	DrainComplete                   = "DrainComplete"
 
+	DrainDeleted = "Deleted"
+	DrainEvicted = "Evicted"
+
 	LinkTypeEthernet   = "ether"
 	LinkTypeInfiniband = "infiniband"
 

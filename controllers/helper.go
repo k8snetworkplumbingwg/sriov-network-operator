@@ -21,10 +21,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
+
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"strings"
 
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 )

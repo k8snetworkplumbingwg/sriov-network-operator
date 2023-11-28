@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"flag"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -17,6 +16,7 @@ import (
 
 	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
 	fakesnclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned/fake"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/fake"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/generic"

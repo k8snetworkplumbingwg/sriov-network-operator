@@ -64,10 +64,6 @@ func (p *MellanoxPlugin) Spec() string {
 // OnNodeStateChange Invoked when SriovNetworkNodeState CR is created or updated, return if need dain and/or reboot node
 func (p *MellanoxPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState) (needDrain bool, needReboot bool, err error) {
 	log.Log.Info("mellanox-Plugin OnNodeStateChange()")
-
-	needDrain = false
-	needReboot = false
-	err = nil
 	attributesToChange = map[string]mlnxNic{}
 	mellanoxNicsSpec = map[string]sriovnetworkv1.Interface{}
 	processedNics := map[string]bool{}
@@ -224,7 +220,6 @@ func configFW() error {
 
 func getMlnxNicFwData(pciAddress string) (current, next *mlnxNic, err error) {
 	log.Log.Info("mellanox-plugin getMlnxNicFwData()", "device", pciAddress)
-	err = nil
 	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2}
 
 	out, err := utils.MstConfigReadData(pciAddress)

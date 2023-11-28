@@ -109,9 +109,6 @@ func (p *GenericPlugin) Spec() string {
 // OnNodeStateChange Invoked when SriovNetworkNodeState CR is created or updated, return if need drain and/or reboot node
 func (p *GenericPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState) (needDrain bool, needReboot bool, err error) {
 	log.Log.Info("generic-plugin OnNodeStateChange()")
-	needDrain = false
-	needReboot = false
-	err = nil
 	p.DesireState = new
 
 	needDrain = p.needDrainNode(new.Spec.Interfaces, new.Status.Interfaces)
