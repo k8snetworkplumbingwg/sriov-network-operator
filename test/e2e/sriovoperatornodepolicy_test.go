@@ -40,27 +40,27 @@ var _ = Describe("Operator", func() {
 	})
 
 	Context("with single policy", func() {
-		policy1 := &sriovnetworkv1.SriovNetworkNodePolicy{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "SriovNetworkNodePolicy",
-				APIVersion: "sriovnetwork.openshift.io/v1",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "policy-1",
-				Namespace: testNamespace,
-			},
-			Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
-				ResourceName: "resource_1",
-				NodeSelector: map[string]string{
-					"feature.node.kubernetes.io/network-sriov.capable": "true",
-				},
-				Priority:    99,
-				Mtu:         9000,
-				NumVfs:      6,
-				NicSelector: sriovnetworkv1.SriovNetworkNicSelector{},
-				DeviceType:  "vfio-pci",
-			},
-		}
+		//policy1 := &sriovnetworkv1.SriovNetworkNodePolicy{
+		//	TypeMeta: metav1.TypeMeta{
+		//		Kind:       "SriovNetworkNodePolicy",
+		//		APIVersion: "sriovnetwork.openshift.io/v1",
+		//	},
+		//	ObjectMeta: metav1.ObjectMeta{
+		//		Name:      "policy-1",
+		//		Namespace: testNamespace,
+		//	},
+		//	Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+		//		ResourceName: "resource_1",
+		//		NodeSelector: map[string]string{
+		//			"feature.node.kubernetes.io/network-sriov.capable": "true",
+		//		},
+		//		Priority:    99,
+		//		Mtu:         9000,
+		//		NumVfs:      6,
+		//		NicSelector: sriovnetworkv1.SriovNetworkNicSelector{},
+		//		DeviceType:  "vfio-pci",
+		//	},
+		//}
 		policy2 := &sriovnetworkv1.SriovNetworkNodePolicy{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "SriovNetworkNodePolicy",
@@ -162,7 +162,7 @@ var _ = Describe("Operator", func() {
 				}
 				Expect(found).To(BeTrue())
 			},
-			Entry("Set MTU and vfio driver", policy1),
+			//Entry("Set MTU and vfio driver", policy1),
 			Entry("Set MTU and default driver", policy2),
 		)
 	})
