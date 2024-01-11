@@ -181,6 +181,34 @@ func (mr *MockHostHelpersInterfaceMockRecorder) ConfigSriovInterfaces(arg0, arg1
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigSriovInterfaces", reflect.TypeOf((*MockHostHelpersInterface)(nil).ConfigSriovInterfaces), arg0, arg1, arg2, arg3)
 }
 
+// CreateVDPADevice mocks base method.
+func (m *MockHostHelpersInterface) CreateVDPADevice(pciAddr, vdpaType string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateVDPADevice", pciAddr, vdpaType)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateVDPADevice indicates an expected call of CreateVDPADevice.
+func (mr *MockHostHelpersInterfaceMockRecorder) CreateVDPADevice(pciAddr, vdpaType interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateVDPADevice", reflect.TypeOf((*MockHostHelpersInterface)(nil).CreateVDPADevice), pciAddr, vdpaType)
+}
+
+// DeleteVDPADevice mocks base method.
+func (m *MockHostHelpersInterface) DeleteVDPADevice(pciAddr string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteVDPADevice", pciAddr)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteVDPADevice indicates an expected call of DeleteVDPADevice.
+func (mr *MockHostHelpersInterfaceMockRecorder) DeleteVDPADevice(pciAddr interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteVDPADevice", reflect.TypeOf((*MockHostHelpersInterface)(nil).DeleteVDPADevice), pciAddr)
+}
+
 // DiscoverSriovDevices mocks base method.
 func (m *MockHostHelpersInterface) DiscoverSriovDevices(arg0 host.StoreManagerInterface) ([]v1.InterfaceExt, error) {
 	m.ctrl.T.Helper()
@@ -194,6 +222,20 @@ func (m *MockHostHelpersInterface) DiscoverSriovDevices(arg0 host.StoreManagerIn
 func (mr *MockHostHelpersInterfaceMockRecorder) DiscoverSriovDevices(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverSriovDevices", reflect.TypeOf((*MockHostHelpersInterface)(nil).DiscoverSriovDevices), arg0)
+}
+
+// DiscoverVDPAType mocks base method.
+func (m *MockHostHelpersInterface) DiscoverVDPAType(pciAddr string) string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DiscoverVDPAType", pciAddr)
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// DiscoverVDPAType indicates an expected call of DiscoverVDPAType.
+func (mr *MockHostHelpersInterfaceMockRecorder) DiscoverVDPAType(pciAddr interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverVDPAType", reflect.TypeOf((*MockHostHelpersInterface)(nil).DiscoverVDPAType), pciAddr)
 }
 
 // EnableRDMA mocks base method.
