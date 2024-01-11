@@ -15,6 +15,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
+//go:generate ../../bin/mockgen -destination mock/mock_kernel.go -source kernel.go
 type KernelInterface interface {
 	// TryEnableTun load the tun kernel module
 	TryEnableTun()
