@@ -178,8 +178,8 @@ func (p *K8sPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState)
 }
 
 // OnNodeStatusChange verify whether SriovNetworkNodeState CR status present changes on configured VFs.
-func (p *K8sPlugin) CheckStatusChanges(*sriovnetworkv1.SriovNetworkNodeState) bool {
-	return false
+func (p *K8sPlugin) CheckStatusChanges(*sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	return false, nil
 }
 
 // Apply config change
