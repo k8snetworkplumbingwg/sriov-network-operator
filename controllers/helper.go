@@ -36,6 +36,7 @@ const (
 	mutatingWebhookConfigurationCRDName   = "MutatingWebhookConfiguration"
 	validatingWebhookConfigurationCRDName = "ValidatingWebhookConfiguration"
 	machineConfigCRDName                  = "MachineConfig"
+	trueString                            = "true"
 )
 
 var namespace = os.Getenv("NAMESPACE")
@@ -55,4 +56,9 @@ func formatJSON(str string) (string, error) {
 		return "", err
 	}
 	return prettyJSON.String(), nil
+}
+
+func GetDefaultNodeSelector() map[string]string {
+	return map[string]string{"node-role.kubernetes.io/worker": "",
+		"kubernetes.io/os": "linux"}
 }

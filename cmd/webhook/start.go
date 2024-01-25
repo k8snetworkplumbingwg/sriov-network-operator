@@ -4,22 +4,25 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	v1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/webhook"
 )
 
 var (
-	certFile string
-	keyFile  string
-	port     int
+	certFile    string
+	keyFile     string
+	port        int
+	enableHTTP2 bool
 )
 
 var (
@@ -48,14 +51,17 @@ func init() {
 		"File containing the default x509 private key matching --tls-cert-file.")
 	startCmd.Flags().IntVar(&port, "port", 443,
 		"Secure port that the webhook listens on")
+	startCmd.Flags().BoolVar(&enableHTTP2, "enable-http2", false, "If HTTP/2 should be enabled for the metrics and webhook servers.")
 }
 
 // serve handles the http portion of a request prior to handing to an admit
 // function
 func serve(w http.ResponseWriter, r *http.Request, admit admitHandler) {
+	serveLog := log.Log.WithName("serve")
+
 	var body []byte
 	if r.Body != nil {
-		if data, err := ioutil.ReadAll(r.Body); err == nil {
+		if data, err := io.ReadAll(r.Body); err == nil {
 			body = data
 		}
 	}
@@ -63,17 +69,18 @@ func serve(w http.ResponseWriter, r *http.Request, admit admitHandler) {
 	// verify the content type is accurate
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
-		glog.Errorf("contentType=%s, expect application/json", contentType)
+		serveLog.Error(fmt.Errorf("unexpected content type"),
+			"expect Content-Type application/json", "Content-Type", contentType)
 		return
 	}
 
-	glog.V(2).Info(fmt.Sprintf("handling request: %s", body))
+	serveLog.V(2).Info("handling request", "request-body", string(body))
 
 	deserializer := webhook.Codecs.UniversalDeserializer()
 	obj, gvk, err := deserializer.Decode(body, nil, nil)
 	if err != nil {
 		msg := fmt.Sprintf("Request could not be decoded: %v", err)
-		glog.Error(msg)
+		serveLog.Error(nil, msg)
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
@@ -83,7 +90,8 @@ func serve(w http.ResponseWriter, r *http.Request, admit admitHandler) {
 	case v1.SchemeGroupVersion.WithKind("AdmissionReview"):
 		requestedAdmissionReview, ok := obj.(*v1.AdmissionReview)
 		if !ok {
-			glog.Errorf("Expected v1.AdmissionReview but got: %T", obj)
+			err := fmt.Errorf("unexpected object")
+			serveLog.Error(err, "Expected v1.AdmissionReview", "Actual-Type", reflect.TypeOf(obj).String())
 			return
 		}
 		responseAdmissionReview := &v1.AdmissionReview{}
@@ -93,21 +101,21 @@ func serve(w http.ResponseWriter, r *http.Request, admit admitHandler) {
 		responseObj = responseAdmissionReview
 	default:
 		msg := fmt.Sprintf("Unsupported group version kind: %v", gvk)
-		glog.Error(msg)
+		serveLog.Error(nil, msg)
 		http.Error(w, msg, http.StatusBadRequest)
 		return
 	}
 
 	respBytes, err := json.Marshal(responseObj)
 	if err != nil {
-		glog.Error(err)
+		serveLog.Error(err, "failed to marshal response object")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	glog.V(2).Info(fmt.Sprintf("sending response: %s", string(respBytes[:])))
+	serveLog.V(2).Info("sending response", "response", string(respBytes[:]))
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(respBytes); err != nil {
-		glog.Error(err)
+		serveLog.Error(err, "failed to write response")
 	}
 }
 
@@ -126,19 +134,26 @@ func newDelegateToV1AdmitHandler(f admitv1Func) admitHandler {
 }
 
 func runStartCmd(cmd *cobra.Command, args []string) {
+	// init logger
+	snolog.InitLog()
+	setupLog := log.Log.WithName("sriov-network-operator-webhook")
+
+	setupLog.Info("Run sriov-network-operator-webhook")
+
 	if err := webhook.SetupInClusterClient(); err != nil {
-		glog.Error(err)
+		setupLog.Error(err, "failed to setup in-cluster client")
 		panic(err)
 	}
 
 	if err := webhook.RetriveSupportedNics(); err != nil {
-		glog.Error(err)
+		setupLog.Error(err, "failed to retrieve supported NICs")
 		panic(err)
 	}
 
 	keyPair, err := webhook.NewTLSKeypairReloader(certFile, keyFile)
 	if err != nil {
-		glog.Fatalf("error load certificate: %s", err.Error())
+		setupLog.Error(err, "failed to load certificates", "cert-file", certFile, "key-file", keyFile)
+		panic(err)
 	}
 
 	http.HandleFunc("/mutating-custom-resource", serveMutateCustomResource)
@@ -146,23 +161,29 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, req *http.Request) { w.Write([]byte("ok")) })
 
 	go func() {
-		glog.Info("start server")
+		setupLog.Info("start server")
 		server := &http.Server{
 			Addr: fmt.Sprintf(":%d", port),
 			TLSConfig: &tls.Config{
 				GetCertificate: keyPair.GetCertificateFunc(),
 			},
+			// CVE-2023-39325 https://github.com/golang/go/issues/63417
+			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		}
+		if enableHTTP2 {
+			server.TLSNextProto = nil
 		}
 		err := server.ListenAndServeTLS("", "")
 		if err != nil {
-			glog.Error(err)
+			setupLog.Error(err, "failed to listen for requests")
 			panic(err)
 		}
 	}()
 	/* watch the cert file and restart http sever if the file updated. */
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		glog.Fatalf("error starting fsnotify watcher: %v", err)
+		setupLog.Error(err, "error starting fsnotify watcher")
+		panic(err)
 	}
 	defer watcher.Close()
 
@@ -178,11 +199,11 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 			if !ok {
 				continue
 			}
-			glog.Infof("watcher event: %v", event)
+			setupLog.Info("watcher event", "event", event)
 			mask := fsnotify.Create | fsnotify.Rename | fsnotify.Remove |
 				fsnotify.Write | fsnotify.Chmod
 			if (event.Op & mask) != 0 {
-				glog.Infof("modified file: %v", event.Name)
+				setupLog.Info("modified file", "name", event.Name)
 				if event.Name == certFile {
 					certUpdated = true
 				}
@@ -191,7 +212,8 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 				}
 				if keyUpdated && certUpdated {
 					if err := keyPair.Reload(); err != nil {
-						glog.Fatalf("Failed to reload certificate: %v", err)
+						setupLog.Error(err, "failed to reload certificate")
+						panic("failed to reload certificate")
 					}
 					certUpdated = false
 					keyUpdated = false
@@ -201,7 +223,7 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 			if !ok {
 				continue
 			}
-			glog.Infof("watcher error: %v", err)
+			setupLog.Error(err, "watcher error")
 		}
 	}
 }

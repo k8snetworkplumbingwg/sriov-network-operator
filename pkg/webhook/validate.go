@@ -8,18 +8,16 @@ import (
 	"strconv"
 	"strings"
 
-	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
-
-	"github.com/golang/glog"
 	v1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 const (
@@ -34,15 +32,15 @@ var (
 )
 
 func validateSriovOperatorConfig(cr *sriovnetworkv1.SriovOperatorConfig, operation v1.Operation) (bool, []string, error) {
-	glog.V(2).Infof("validateSriovOperatorConfig: %v", cr)
+	log.Log.V(2).Info("validateSriovOperatorConfig", "object", cr)
 	var warnings []string
 
-	if cr.GetName() != constants.DefaultConfigName {
+	if cr.GetName() != consts.DefaultConfigName {
 		return false, warnings, fmt.Errorf("only default SriovOperatorConfig is used")
 	}
 
 	if operation == v1.Delete {
-		return false, warnings, fmt.Errorf("default SriovOperatorConfig shouldn't be deleted")
+		warnings = append(warnings, "default SriovOperatorConfig shouldn't be deleted")
 	}
 
 	if cr.Spec.DisableDrain {
@@ -94,17 +92,16 @@ func validateSriovOperatorConfigDisableDrain(cr *sriovnetworkv1.SriovOperatorCon
 }
 
 func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, operation v1.Operation) (bool, []string, error) {
-	glog.V(2).Infof("validateSriovNetworkNodePolicy: %v", cr)
+	log.Log.V(2).Info("validateSriovNetworkNodePolicy", "object", cr)
 	var warnings []string
 
-	if cr.GetName() == constants.DefaultPolicyName && cr.GetNamespace() == os.Getenv("NAMESPACE") {
+	if cr.GetName() == consts.DefaultPolicyName && cr.GetNamespace() == os.Getenv("NAMESPACE") {
 		if operation == v1.Delete {
-			// reject deletion of default policy
-			return false, warnings, fmt.Errorf("default SriovNetworkNodePolicy shouldn't be deleted")
-		} else {
-			// skip validating default policy
-			return true, warnings, nil
+			warnings = append(warnings, "default SriovNetworkNodePolicy shouldn't be deleted")
 		}
+
+		// skip validating default policy
+		return true, warnings, nil
 	}
 
 	if cr.GetNamespace() != os.Getenv("NAMESPACE") {
@@ -112,7 +109,6 @@ func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, o
 			fmt.Sprintf(" is created or updated but not used. Only policy in %s namespace is respected.", os.Getenv("NAMESPACE")))
 	}
 
-	// DELETE should always succeed unless it's for the default object
 	if operation == v1.Delete {
 		return true, warnings, nil
 	}
@@ -143,7 +139,7 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	devMode := false
 	if os.Getenv("DEV_MODE") == "TRUE" {
 		devMode = true
-		glog.V(0).Info("dev mode enabled - Admitting not supported NICs")
+		log.Log.V(0).Info("dev mode enabled - Admitting not supported NICs")
 	}
 
 	if !devMode {
@@ -195,27 +191,35 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	// To configure RoCE on baremetal or virtual machine:
 	// BM: DeviceType = netdevice && isRdma = true
 	// VM: DeviceType = vfio-pci && isRdma = false
-	if cr.Spec.DeviceType == constants.DeviceTypeVfioPci && cr.Spec.IsRdma {
+	if cr.Spec.DeviceType == consts.DeviceTypeVfioPci && cr.Spec.IsRdma {
 		return false, fmt.Errorf("'deviceType: vfio-pci' conflicts with 'isRdma: true'; Set 'deviceType' to (string)'netdevice' Or Set 'isRdma' to (bool)'false'")
 	}
-	if strings.EqualFold(cr.Spec.LinkType, constants.LinkTypeIB) && !cr.Spec.IsRdma {
+	if strings.EqualFold(cr.Spec.LinkType, consts.LinkTypeIB) && !cr.Spec.IsRdma {
 		return false, fmt.Errorf("'linkType: ib or IB' requires 'isRdma: true'; Set 'isRdma' to (bool)'true'")
 	}
 
 	// vdpa: deviceType must be set to 'netdevice'
-	if cr.Spec.DeviceType != constants.DeviceTypeNetDevice && cr.Spec.VdpaType == constants.VdpaTypeVirtio {
-		return false, fmt.Errorf("'deviceType: %s' conflicts with 'vdpaType: virtio'; Set 'deviceType' to (string)'netdevice' Or Remove 'vdpaType'", cr.Spec.DeviceType)
+	if cr.Spec.DeviceType != consts.DeviceTypeNetDevice && (cr.Spec.VdpaType == consts.VdpaTypeVirtio || cr.Spec.VdpaType == consts.VdpaTypeVhost) {
+		return false, fmt.Errorf("'deviceType: %s' conflicts with '%s'; Set 'deviceType' to (string)'netdevice' Or Remove 'vdpaType'", cr.Spec.DeviceType, cr.Spec.VdpaType)
 	}
 	// vdpa: device must be configured in switchdev mode
-	if cr.Spec.VdpaType == constants.VdpaTypeVirtio && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
-		return false, fmt.Errorf("virtio/vdpa requires the device to be configured in switchdev mode")
+	if (cr.Spec.VdpaType == consts.VdpaTypeVirtio || cr.Spec.VdpaType == consts.VdpaTypeVhost) && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
+		return false, fmt.Errorf("vdpa requires the device to be configured in switchdev mode")
 	}
+
+	// Externally created: we don't support  ExternallyManaged + EswitchMode
+	//TODO: if needed we will need to add this in the future as today EswitchMode is for HWOFFLOAD
+	if cr.Spec.ExternallyManaged && cr.Spec.EswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+		return false, fmt.Errorf("ExternallyManaged doesn't support the device to be configured in switchdev mode")
+	}
+
 	return true, nil
 }
 
 func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy) (bool, error) {
 	nodesSelected = false
 	interfaceSelected = false
+	nodeInterfaceErrorList := make(map[string][]string)
 
 	nodeList, err := kubeclient.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{
 		LabelSelector: labels.Set(cr.Spec.NodeSelector).String(),
@@ -234,7 +238,7 @@ func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePo
 	for _, node := range nodeList.Items {
 		if cr.Selected(&node) {
 			nodesSelected = true
-			err = validatePolicyForNodeStateAndPolicy(nsList, npList, &node, cr)
+			err = validatePolicyForNodeStateAndPolicy(nsList, npList, &node, cr, nodeInterfaceErrorList)
 			if err != nil {
 				return false, err
 			}
@@ -245,20 +249,31 @@ func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePo
 		return false, fmt.Errorf("no matched node is selected by the nodeSelector in CR %s", cr.GetName())
 	}
 	if !interfaceSelected {
+		for nodeName, messages := range nodeInterfaceErrorList {
+			for _, message := range messages {
+				log.Log.V(2).Info("interface selection errors", "nodeName", nodeName, "message", message)
+			}
+		}
 		return false, fmt.Errorf("no supported NIC is selected by the nicSelector in CR %s", cr.GetName())
 	}
 
 	return true, nil
 }
 
-func validatePolicyForNodeStateAndPolicy(nsList *sriovnetworkv1.SriovNetworkNodeStateList, npList *sriovnetworkv1.SriovNetworkNodePolicyList, node *corev1.Node, cr *sriovnetworkv1.SriovNetworkNodePolicy) error {
+func validatePolicyForNodeStateAndPolicy(nsList *sriovnetworkv1.SriovNetworkNodeStateList, npList *sriovnetworkv1.SriovNetworkNodePolicyList, node *corev1.Node, cr *sriovnetworkv1.SriovNetworkNodePolicy, nodeInterfaceErrorList map[string][]string) error {
 	for _, ns := range nsList.Items {
 		if ns.GetName() == node.GetName() {
-			if err := validatePolicyForNodeState(cr, &ns, node); err != nil {
+			interfaceAndErrorList, err := validatePolicyForNodeState(cr, &ns, node)
+			if err != nil {
 				return err
 			}
+			if interfaceAndErrorList != nil {
+				nodeInterfaceErrorList[ns.GetName()] = interfaceAndErrorList
+			}
+			break
 		}
 	}
+
 	// validate current policy against policies in API (may not be converted to SriovNetworkNodeState yet)
 	for _, np := range npList.Items {
 		if np.GetName() != cr.GetName() && np.Selected(node) {
@@ -270,33 +285,59 @@ func validatePolicyForNodeStateAndPolicy(nsList *sriovnetworkv1.SriovNetworkNode
 	return nil
 }
 
-func validatePolicyForNodeState(policy *sriovnetworkv1.SriovNetworkNodePolicy, state *sriovnetworkv1.SriovNetworkNodeState, node *corev1.Node) error {
-	glog.V(2).Infof("validatePolicyForNodeState(): validate policy %s for node %s.", policy.GetName(), state.GetName())
+func validatePolicyForNodeState(policy *sriovnetworkv1.SriovNetworkNodePolicy, state *sriovnetworkv1.SriovNetworkNodeState, node *corev1.Node) ([]string, error) {
+	log.Log.V(2).Info("validatePolicyForNodeState(): validate policy for node", "policy-name",
+		policy.GetName(), "node-name", state.GetName())
+	interfaceSelectedForNode := false
+	var noInterfacesSelectedLog []string
 	for _, iface := range state.Status.Interfaces {
 		err := validateNicModel(&policy.Spec.NicSelector, &iface, node)
 		if err == nil {
 			interfaceSelected = true
-			if policy.GetName() != constants.DefaultPolicyName && policy.Spec.NumVfs == 0 {
-				return fmt.Errorf("numVfs(%d) in CR %s is not allowed", policy.Spec.NumVfs, policy.GetName())
+			interfaceSelectedForNode = true
+			if policy.GetName() != consts.DefaultPolicyName && policy.Spec.NumVfs == 0 {
+				return nil, fmt.Errorf("numVfs(%d) in CR %s is not allowed", policy.Spec.NumVfs, policy.GetName())
 			}
 			if policy.Spec.NumVfs > iface.TotalVfs && iface.Vendor == IntelID {
-				return fmt.Errorf("numVfs(%d) in CR %s exceed the maximum allowed value(%d)", policy.Spec.NumVfs, policy.GetName(), iface.TotalVfs)
+				return nil, fmt.Errorf("numVfs(%d) in CR %s exceed the maximum allowed value(%d) interface(%s)", policy.Spec.NumVfs, policy.GetName(), iface.TotalVfs, iface.Name)
 			}
 			if policy.Spec.NumVfs > MlxMaxVFs && iface.Vendor == MellanoxID {
-				return fmt.Errorf("numVfs(%d) in CR %s exceed the maximum allowed value(%d)", policy.Spec.NumVfs, policy.GetName(), MlxMaxVFs)
+				return nil, fmt.Errorf("numVfs(%d) in CR %s exceed the maximum allowed value(%d) interface(%s)", policy.Spec.NumVfs, policy.GetName(), MlxMaxVFs, iface.Name)
+			}
+
+			// Externally create validations
+			if policy.Spec.ExternallyManaged {
+				if policy.Spec.NumVfs > iface.NumVfs {
+					return nil, fmt.Errorf("numVfs(%d) in CR %s is higher than the virtual functions allocated for the PF externally value(%d)", policy.Spec.NumVfs, policy.GetName(), iface.NumVfs)
+				}
+
+				if policy.Spec.Mtu != 0 && policy.Spec.Mtu > iface.Mtu {
+					return nil, fmt.Errorf("MTU(%d) in CR %s is higher than the MTU for the PF externally value(%d)", policy.Spec.Mtu, policy.GetName(), iface.Mtu)
+				}
+
+				if policy.Spec.LinkType != "" && strings.ToLower(policy.Spec.LinkType) != strings.ToLower(iface.LinkType) {
+					return nil, fmt.Errorf("LinkType(%s) in CR %s is not equal to the LinkType for the PF externally value(%s)", policy.Spec.LinkType, policy.GetName(), iface.LinkType)
+				}
 			}
 			// vdpa: only mellanox cards are supported
-			if policy.Spec.VdpaType == constants.VdpaTypeVirtio && iface.Vendor != MellanoxID {
-				return fmt.Errorf("vendor(%s) in CR %s not supported for virtio-vdpa", iface.Vendor, policy.GetName())
+			if (policy.Spec.VdpaType == consts.VdpaTypeVirtio || policy.Spec.VdpaType == consts.VdpaTypeVhost) && iface.Vendor != MellanoxID {
+				return nil, fmt.Errorf("vendor(%s) in CR %s not supported for vdpa interface(%s)", iface.Vendor, policy.GetName(), iface.Name)
 			}
+		} else {
+			errorMessage := fmt.Sprintf("Interface: %s was not selected, since NIC model could not be validated due to the following error: %s \n", iface.Name, err)
+			noInterfacesSelectedLog = append(noInterfacesSelectedLog, errorMessage)
 		}
 	}
-	return nil
+
+	if !interfaceSelectedForNode {
+		return noInterfacesSelectedLog, nil
+	}
+	return nil, nil
 }
 
 func validatePolicyForNodePolicy(current *sriovnetworkv1.SriovNetworkNodePolicy, previous *sriovnetworkv1.SriovNetworkNodePolicy) error {
-	glog.V(2).Infof("validateConflictPolicy(): validate policy %s against policy %s",
-		current.GetName(), previous.GetName())
+	log.Log.V(2).Info("validateConflictPolicy(): validate policy against policy",
+		"source", current.GetName(), "target", previous.GetName())
 
 	if current.GetName() == previous.GetName() {
 		return nil
@@ -326,6 +367,22 @@ func validatePfNames(current *sriovnetworkv1.SriovNetworkNodePolicy, previous *s
 			// since it should already be evaluated in previous run.
 			preName, preRngSt, preRngEnd, _ := sriovnetworkv1.ParsePFName(prePf)
 			if curName == preName {
+				// reject policy with externallyManage if there is a policy on the same PF without it
+				if current.Spec.ExternallyManaged != previous.Spec.ExternallyManaged {
+					return fmt.Errorf("externallyManage is inconsistent with existing policy %s", previous.GetName())
+				}
+
+				// reject policy with externallyManage if there is a policy on the same PF with switch dev
+				if current.Spec.ExternallyManaged && previous.Spec.EswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+					return fmt.Errorf("externallyManage overlap with switchdev mode in existing policy %s", previous.GetName())
+				}
+
+				// reject policy with externallyManage if there is a policy on the same PF with switch dev
+				if previous.Spec.ExternallyManaged && current.Spec.EswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+					return fmt.Errorf("switchdev overlap with externallyManage mode in existing policy %s", previous.GetName())
+				}
+
+				// Check for overlapping ranges
 				if curRngEnd < preRngSt || curRngSt > preRngEnd {
 					return nil
 				} else {
@@ -381,7 +438,7 @@ func validateNicModel(selector *sriovnetworkv1.SriovNetworkNicSelector, iface *s
 	}
 
 	// Check the vendor and device ID of the VF only if we are on a virtual environment
-	for key := range utils.PlatformMap {
+	for key := range vars.PlatformsMap {
 		if strings.Contains(strings.ToLower(node.Spec.ProviderID), strings.ToLower(key)) &&
 			selector.NetFilter != "" && selector.NetFilter == iface.NetFilter &&
 			sriovnetworkv1.IsVfSupportedModel(iface.Vendor, iface.DeviceID) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	runtimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	sriovv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	testclient "github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/client"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/nodes"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/pod"
@@ -28,11 +31,29 @@ type EnabledNodes struct {
 }
 
 var (
-	supportedPFDrivers = []string{"mlx5_core", "i40e", "ixgbe", "ice"}
-	supportedVFDrivers = []string{"iavf", "vfio-pci", "mlx5_core"}
+	supportedPFDrivers = []string{"mlx5_core", "i40e", "ixgbe", "ice", "igb"}
+	supportedVFDrivers = []string{"iavf", "vfio-pci", "mlx5_core", "igbvf"}
 	mlxVendorID        = "15b3"
 	intelVendorID      = "8086"
 )
+
+// Name of environment variable to filter which decives can be discovered by FindSriovDevices and FindOneSriovDevice.
+// The filter is a regexp matched against node names and device name in the form <node_name>:<device_name>
+//
+// For example, given the following devices in the cluster:
+//
+// worker-0:eno1
+// worker-0:eno2
+// worker-1:eno1
+// worker-1:eno2
+// worker-1:ens1f0
+// worker-1:ens1f1
+//
+// Values:
+// - `.*:eno1` matches `worker-0:eno1,worker-1:eno1`
+// - `worker-0:eno.*` matches `worker-0:eno1,worker-0:eno2`
+// - `worker-0:eno1|worker-1:eno2` matches `worker-0:eno1,worker-1:eno2`
+const NodeAndDeviceNameFilterEnvVar string = "SRIOV_NODE_AND_DEVICE_NAME_FILTER"
 
 // DiscoverSriov retrieves Sriov related information of a given cluster.
 func DiscoverSriov(clients *testclient.ClientSet, operatorNamespace string) (*EnabledNodes, error) {
@@ -90,35 +111,49 @@ func DiscoverSriov(clients *testclient.ClientSet, operatorNamespace string) (*En
 	return res, nil
 }
 
-// FindOneSriovDevice retrieves a valid sriov device for the given node.
+// FindOneSriovDevice retrieves a valid sriov device for the given node, filtered by `SRIOV_NODE_AND_DEVICE_NAME_FILTER` environment variable.
 func (n *EnabledNodes) FindOneSriovDevice(node string) (*sriovv1.InterfaceExt, error) {
-	s, ok := n.States[node]
-	if !ok {
-		return nil, fmt.Errorf("node %s not found", node)
+	ret, err := n.FindSriovDevices(node)
+	if err != nil {
+		return nil, err
 	}
-	for _, itf := range s.Status.Interfaces {
-		if IsPFDriverSupported(itf.Driver) && sriovv1.IsSupportedDevice(itf.DeviceID) {
-			// Skip mlx interfaces if secure boot is enabled
-			// TODO: remove this when mlx support secure boot/lockdown mode
-			if itf.Vendor == mlxVendorID && n.IsSecureBootEnabled[node] {
-				continue
-			}
 
-			// if the sriov is not enable in the kernel for intel nic the totalVF will be 0 so we skip the device
-			// That is not the case for Mellanox devices that will report 0 until we configure the sriov interfaces
-			// with the mstconfig package
-			if itf.Vendor == intelVendorID && itf.TotalVfs == 0 {
-				continue
-			}
-
-			return &itf, nil
-		}
+	if len(ret) == 0 {
+		return nil, fmt.Errorf("unable to find sriov devices in node %s", node)
 	}
-	return nil, fmt.Errorf("unable to find sriov devices in node %s", node)
+
+	return ret[0], nil
 }
 
-// FindSriovDevices retrieves all valid sriov devices for the given node.
+// FindSriovDevices retrieves all valid sriov devices for the given node, filtered by `SRIOV_NODE_AND_DEVICE_NAME_FILTER` environment variable.
 func (n *EnabledNodes) FindSriovDevices(node string) ([]*sriovv1.InterfaceExt, error) {
+	devices, err := n.FindSriovDevicesIgnoreFilters(node)
+	if err != nil {
+		return nil, err
+	}
+
+	sriovDeviceNameFilter, ok := os.LookupEnv(NodeAndDeviceNameFilterEnvVar)
+	if !ok {
+		return devices, nil
+	}
+
+	filteredDevices := []*sriovv1.InterfaceExt{}
+	for _, device := range devices {
+		match, err := regexp.MatchString(sriovDeviceNameFilter, node+":"+device.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		if match {
+			filteredDevices = append(filteredDevices, device)
+		}
+	}
+
+	return filteredDevices, nil
+}
+
+// FindSriovDevicesIgnoreFilters retrieves all valid sriov devices for the given node.
+func (n *EnabledNodes) FindSriovDevicesIgnoreFilters(node string) ([]*sriovv1.InterfaceExt, error) {
 	devices := []*sriovv1.InterfaceExt{}
 	s, ok := n.States[node]
 	if !ok {
@@ -289,7 +324,7 @@ func GetNodeSecureBootState(clients *testclient.ClientSet, nodeName, namespace s
 	podDefinition.Namespace = namespace
 
 	volume := corev1.Volume{Name: "host", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/"}}}
-	mount := corev1.VolumeMount{Name: "host", MountPath: "/host"}
+	mount := corev1.VolumeMount{Name: "host", MountPath: consts.Host}
 	podDefinition = pod.RedefineWithMount(podDefinition, volume, mount)
 	created, err := clients.Pods(namespace).Create(context.Background(), podDefinition, metav1.CreateOptions{})
 	if err != nil {
@@ -330,4 +365,11 @@ func GetNodeSecureBootState(clients *testclient.ClientSet, nodeName, namespace s
 	}
 
 	return strings.Contains(stdout, "[integrity]") || strings.Contains(stdout, "[confidentiality]"), nil
+}
+
+func VirtualCluster() bool {
+	if v, exist := os.LookupEnv("CLUSTER_HAS_EMULATED_PF"); exist && v != "" {
+		return true
+	}
+	return false
 }

@@ -13,12 +13,17 @@ BUILD_GOPATH=$(TARGET_DIR):$(TARGET_DIR)/vendor:$(CURPATH)/cmd
 IMAGE_BUILDER?=docker
 IMAGE_BUILD_OPTS?=
 DOCKERFILE?=Dockerfile
+DOCKERFILE_CONFIG_DAEMON?=Dockerfile.sriov-network-config-daemon
+DOCKERFILE_WEBHOOK?=Dockerfile.webhook
 
 CRD_BASES=./config/crd/bases
 
 export APP_NAME?=sriov-network-operator
 TARGET=$(TARGET_DIR)/bin/$(APP_NAME)
-IMAGE_TAG?=ghcr.io/k8snetworkplumbingwg/$(APP_NAME):latest
+IMAGE_REPO?=ghcr.io/k8snetworkplumbingwg
+IMAGE_TAG?=$(IMAGE_REPO)/$(APP_NAME):latest
+CONFIG_DAEMON_IMAGE_TAG?=$(IMAGE_REPO)/$(APP_NAME)-config-daemon:latest
+WEBHOOK_IMAGE_TAG?=$(IMAGE_REPO)/$(APP_NAME)-webhook:latest
 MAIN_PKG=cmd/manager/main.go
 export NAMESPACE?=openshift-sriov-network-operator
 export WATCH_NAMESPACE?=openshift-sriov-network-operator
@@ -29,11 +34,6 @@ PKGS=$(shell go list ./... | grep -v -E '/vendor/|/test|/examples')
 # go source files, ignore vendor directory
 SRC = $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 
-# Current Operator version
-VERSION ?= 4.7.0
-# Default bundle image tag
-BUNDLE_IMG ?= controller-bundle:$(VERSION)
-# Options for 'bundle-build'
 ifneq ($(origin CHANNELS), undefined)
 BUNDLE_CHANNELS := --channels=$(CHANNELS)
 endif
@@ -51,7 +51,7 @@ GOLANGCI_LINT = $(BIN_DIR)/golangci-lint
 # golangci-lint version should be updated periodically
 # we keep it fixed to avoid it from unexpectedly failing on the project
 # in case of a version bump
-GOLANGCI_LINT_VER = v1.46.1
+GOLANGCI_LINT_VER = v1.55.2
 
 
 .PHONY: all build clean gendeepcopy test test-e2e test-e2e-k8s run image fmt sync-manifests test-e2e-conformance manifests update-codegen
@@ -70,8 +70,10 @@ clean:
 update-codegen:
 	hack/update-codegen.sh
 
-image: ; $(info Building image...)
+image: ; $(info Building images...)
 	$(IMAGE_BUILDER) build -f $(DOCKERFILE) -t $(IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
+	$(IMAGE_BUILDER) build -f $(DOCKERFILE_CONFIG_DAEMON) -t $(CONFIG_DAEMON_IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
+	$(IMAGE_BUILDER) build -f $(DOCKERFILE_WEBHOOK) -t $(WEBHOOK_IMAGE_TAG) $(CURPATH) $(IMAGE_BUILD_OPTS)
 
 # Run tests
 test: generate vet manifests envtest
@@ -151,11 +153,11 @@ kustomize: ## Download kustomize locally if necessary.
 
 ENVTEST = $(BIN_DIR)/setup-envtest
 envtest: ## Download envtest-setup locally if necessary.
-	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.16)
 
 GOMOCK = $(shell pwd)/bin/mockgen
 gomock:
-	$(call go-get-tool,$(GOMOCK),github.com/golang/mock/mockgen@v1.6.0)
+	$(call go-install-tool,$(GOMOCK),github.com/golang/mock/mockgen@v1.6.0)
 
 # go-install-tool will 'go install' any package $2 and install it to $1.
 define go-install-tool
@@ -172,25 +174,11 @@ skopeo:
 fakechroot:
 	if ! which fakechroot; then if [ -f /etc/redhat-release ]; then dnf -y install fakechroot; elif [ -f /etc/lsb-release ]; then sudo apt-get -y update; sudo apt-get -y install fakechroot; fi; fi
 
-# Generate bundle manifests and metadata, then validate generated files.
-.PHONY: bundle
-bundle: manifests
-	operator-sdk generate kustomize manifests --interactive=false -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
-	operator-sdk bundle validate ./bundle
-
-# Build the bundle image.
-.PHONY: bundle-build
-bundle-build:
-	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
-
-deploy-setup: export ENABLE_ADMISSION_CONTROLLER?=true
+deploy-setup: export ADMISSION_CONTROLLERS_ENABLED?=false
 deploy-setup: skopeo install
 	hack/deploy-setup.sh $(NAMESPACE)
 
 deploy-setup-k8s: export NAMESPACE=sriov-network-operator
-deploy-setup-k8s: export ENABLE_ADMISSION_CONTROLLER?=false
 deploy-setup-k8s: export CNI_BIN_PATH=/opt/cni/bin
 deploy-setup-k8s: export OPERATOR_EXEC=kubectl
 deploy-setup-k8s: export CLUSTER_TYPE=kubernetes
@@ -198,6 +186,21 @@ deploy-setup-k8s: deploy-setup
 
 test-e2e-conformance:
 	SUITE=./test/conformance ./hack/run-e2e-conformance.sh
+
+test-e2e-conformance-virtual-k8s-cluster-ci:
+	./hack/run-e2e-conformance-virtual-cluster.sh
+
+test-e2e-conformance-virtual-k8s-cluster:
+	SKIP_DELETE=TRUE ./hack/run-e2e-conformance-virtual-cluster.sh
+
+test-e2e-conformance-virtual-ocp-cluster-ci:
+	./hack/run-e2e-conformance-virtual-ocp.sh
+
+test-e2e-conformance-virtual-ocp-cluster:
+	SKIP_DELETE=TRUE ./hack/run-e2e-conformance-virtual-ocp.sh
+
+redeploy-operator-virtual-cluster:
+	./hack/virtual-cluster-redeploy.sh
 
 test-e2e-validation-only:
 	SUITE=./test/validation ./hack/run-e2e-conformance.sh	
@@ -215,7 +218,7 @@ test-%: generate vet manifests envtest
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir=/tmp -p path)" HOME="$(shell pwd)" go test ./$*/... -coverprofile cover-$*.out -coverpkg ./... -v
 
 # deploy-setup-k8s: export NAMESPACE=sriov-network-operator
-# deploy-setup-k8s: export ENABLE_ADMISSION_CONTROLLER=false
+# deploy-setup-k8s: export ADMISSION_CONTROLLERS_ENABLED=false
 # deploy-setup-k8s: export CNI_BIN_PATH=/opt/cni/bin
 # test-e2e-k8s: test-e2e
 

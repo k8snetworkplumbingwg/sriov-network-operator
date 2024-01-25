@@ -20,7 +20,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 const (
@@ -35,7 +37,8 @@ const (
 	SriovCniStateAuto    = "auto"
 	SriovCniStateOff     = "off"
 	SriovCniStateOn      = "on"
-	SriovCniIpamEmpty    = "\"ipam\":{}"
+	SriovCniIpam         = "\"ipam\""
+	SriovCniIpamEmpty    = SriovCniIpam + ":{}"
 )
 
 const invalidVfIndex = -1
@@ -46,6 +49,8 @@ var log = logf.Log.WithName("sriovnetwork")
 // NicIDMap contains supported mapping of IDs with each in the format of:
 // Vendor ID, Physical Function Device ID, Virtual Function Device ID
 var NicIDMap = []string{}
+
+var InitialState SriovNetworkNodeState
 
 // NetFilterType Represents the NetFilter tags to be used
 type NetFilterType int
@@ -121,7 +126,7 @@ func IsSupportedModel(vendorID, deviceID string) bool {
 			return true
 		}
 	}
-	log.Info("IsSupportedModel():", "Unsupported model:", "vendorId:", vendorID, "deviceId:", deviceID)
+	log.Info("IsSupportedModel(): found unsupported model", "vendorId:", vendorID, "deviceId:", deviceID)
 	return false
 }
 
@@ -132,7 +137,7 @@ func IsVfSupportedModel(vendorID, deviceID string) bool {
 			return true
 		}
 	}
-	log.Info("IsVfSupportedModel():", "Unsupported VF model:", "vendorId:", vendorID, "deviceId:", deviceID)
+	log.Info("IsVfSupportedModel(): found unsupported VF model", "vendorId:", vendorID, "deviceId:", deviceID)
 	return false
 }
 
@@ -211,6 +216,80 @@ func GetVfDeviceID(deviceID string) string {
 	return ""
 }
 
+func IsSwitchdevModeSpec(spec SriovNetworkNodeStateSpec) bool {
+	for _, iface := range spec.Interfaces {
+		if iface.EswitchMode == ESwithModeSwitchDev {
+			return true
+		}
+	}
+	return false
+}
+
+func FindInterface(interfaces Interfaces, name string) (iface Interface, err error) {
+	for _, i := range interfaces {
+		if i.Name == name {
+			return i, nil
+		}
+	}
+	return Interface{}, fmt.Errorf("unable to find interface: %v", name)
+}
+
+func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
+	if ifaceSpec.Mtu > 0 {
+		mtu := ifaceSpec.Mtu
+		if mtu != ifaceStatus.Mtu {
+			log.V(2).Info("NeedToUpdateSriov(): MTU needs update", "desired", mtu, "current", ifaceStatus.Mtu)
+			return true
+		}
+	}
+
+	if ifaceSpec.NumVfs != ifaceStatus.NumVfs {
+		log.V(2).Info("NeedToUpdateSriov(): NumVfs needs update", "desired", ifaceSpec.NumVfs, "current", ifaceStatus.NumVfs)
+		return true
+	}
+	if ifaceSpec.NumVfs > 0 {
+		for _, vfStatus := range ifaceStatus.VFs {
+			ingroup := false
+			for _, groupSpec := range ifaceSpec.VfGroups {
+				if IndexInRange(vfStatus.VfID, groupSpec.VfRange) {
+					ingroup = true
+					if groupSpec.DeviceType != consts.DeviceTypeNetDevice {
+						if groupSpec.DeviceType != vfStatus.Driver {
+							log.V(2).Info("NeedToUpdateSriov(): Driver needs update",
+								"desired", groupSpec.DeviceType, "current", vfStatus.Driver)
+							return true
+						}
+					} else {
+						if StringInArray(vfStatus.Driver, vars.DpdkDrivers) {
+							log.V(2).Info("NeedToUpdateSriov(): Driver needs update",
+								"desired", groupSpec.DeviceType, "current", vfStatus.Driver)
+							return true
+						}
+						if vfStatus.Mtu != 0 && groupSpec.Mtu != 0 && vfStatus.Mtu != groupSpec.Mtu {
+							log.V(2).Info("NeedToUpdateSriov(): VF MTU needs update",
+								"vf", vfStatus.VfID, "desired", groupSpec.Mtu, "current", vfStatus.Mtu)
+							return true
+						}
+
+						// this is needed to be sure the admin mac address is configured as expected
+						if ifaceSpec.ExternallyManaged {
+							log.V(2).Info("NeedToUpdateSriov(): need to update the device as it's externally manage",
+								"device", ifaceStatus.PciAddress)
+							return true
+						}
+					}
+					break
+				}
+			}
+			if !ingroup && StringInArray(vfStatus.Driver, vars.DpdkDrivers) {
+				// VF which has DPDK driver loaded but not in any group, needs to be reset to default driver.
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type ByPriority []SriovNetworkNodePolicy
 
 func (a ByPriority) Len() int {
@@ -282,12 +361,13 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 		if s.Selected(&iface) {
 			log.Info("Update interface", "name:", iface.Name)
 			result := Interface{
-				PciAddress:  iface.PciAddress,
-				Mtu:         p.Spec.Mtu,
-				Name:        iface.Name,
-				LinkType:    p.Spec.LinkType,
-				EswitchMode: p.Spec.EswitchMode,
-				NumVfs:      p.Spec.NumVfs,
+				PciAddress:        iface.PciAddress,
+				Mtu:               p.Spec.Mtu,
+				Name:              iface.Name,
+				LinkType:          p.Spec.LinkType,
+				EswitchMode:       p.Spec.EswitchMode,
+				NumVfs:            p.Spec.NumVfs,
+				ExternallyManaged: p.Spec.ExternallyManaged,
 			}
 			if p.Spec.NumVfs > 0 {
 				group, err := p.generateVfGroup(&iface)
@@ -482,8 +562,8 @@ func (s *SriovNetworkNodeState) GetDriverByPciAddress(addr string) string {
 
 // RenderNetAttDef renders a net-att-def for ib-sriov CNI
 func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
-	logger := log.WithName("renderNetAttDef")
-	logger.Info("Start to render IB SRIOV CNI NetworkAttachementDefinition")
+	logger := log.WithName("RenderNetAttDef")
+	logger.Info("Start to render IB SRIOV CNI NetworkAttachmentDefinition")
 
 	// render RawCNIConfig manifests
 	data := render.MakeRenderData()
@@ -516,7 +596,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	}
 
 	if cr.Spec.IPAM != "" {
-		data.Data["SriovCniIpam"] = "\"ipam\":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
+		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
 	} else {
 		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
 	}
@@ -528,13 +608,17 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
+	// logLevel and logFile are currently not supports by the ip-sriov-cni -> hardcode them to false.
+	data.Data["LogLevelConfigured"] = false
+	data.Data["LogFileConfigured"] = false
+
 	objs, err := render.RenderDir(ManifestsPath, &data)
 	if err != nil {
 		return nil, err
 	}
 	for _, obj := range objs {
 		raw, _ := json.Marshal(obj)
-		logger.Info("render NetworkAttachementDefinition output", "raw", string(raw))
+		logger.Info("render NetworkAttachmentDefinition output", "raw", string(raw))
 	}
 	return objs[0], nil
 }
@@ -563,8 +647,8 @@ func (cr *SriovIBNetwork) DeleteNetAttDef(c client.Client) error {
 
 // RenderNetAttDef renders a net-att-def for sriov CNI
 func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
-	logger := log.WithName("renderNetAttDef")
-	logger.Info("Start to render SRIOV CNI NetworkAttachementDefinition")
+	logger := log.WithName("RenderNetAttDef")
+	logger.Info("Start to render SRIOV CNI NetworkAttachmentDefinition")
 
 	// render RawCNIConfig manifests
 	data := render.MakeRenderData()
@@ -583,6 +667,12 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["SriovCniVlanQoS"] = cr.Spec.VlanQoS
 	} else {
 		data.Data["VlanQoSConfigured"] = false
+	}
+
+	data.Data["VlanProtoConfigured"] = false
+	if cr.Spec.VlanProto != "" {
+		data.Data["VlanProtoConfigured"] = true
+		data.Data["SriovCniVlanProto"] = cr.Spec.VlanProto
 	}
 
 	if cr.Spec.Capabilities == "" {
@@ -641,7 +731,7 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	}
 
 	if cr.Spec.IPAM != "" {
-		data.Data["SriovCniIpam"] = "\"ipam\":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
+		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
 	} else {
 		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
 	}
@@ -652,13 +742,18 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
+	data.Data["LogLevelConfigured"] = (cr.Spec.LogLevel != "")
+	data.Data["LogLevel"] = cr.Spec.LogLevel
+	data.Data["LogFileConfigured"] = (cr.Spec.LogFile != "")
+	data.Data["LogFile"] = cr.Spec.LogFile
+
 	objs, err := render.RenderDir(ManifestsPath, &data)
 	if err != nil {
 		return nil, err
 	}
 	for _, obj := range objs {
 		raw, _ := json.Marshal(obj)
-		logger.Info("render NetworkAttachementDefinition output", "raw", string(raw))
+		logger.Info("render NetworkAttachmentDefinition output", "raw", string(raw))
 	}
 	return objs[0], nil
 }
