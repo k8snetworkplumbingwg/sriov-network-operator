@@ -77,7 +77,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 	defaultConfig := &sriovnetworkv1.SriovOperatorConfig{}
 	err := r.Get(ctx, types.NamespacedName{
-		Name: consts.DefaultConfigName, Namespace: namespace}, defaultConfig)
+		Name: consts.DefaultConfigName, Namespace: vars.Namespace}, defaultConfig)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			singleNode, err := utils.IsSingleNodeCluster(r.Client)
@@ -86,7 +86,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 			}
 
 			// Default Config object not found, create it.
-			defaultConfig.SetNamespace(namespace)
+			defaultConfig.SetNamespace(vars.Namespace)
 			defaultConfig.SetName(consts.DefaultConfigName)
 			defaultConfig.Spec = sriovnetworkv1.SriovOperatorConfigSpec{
 				EnableInjector:           func() *bool { b := vars.EnableAdmissionController; return &b }(),
@@ -100,7 +100,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 			err = r.Create(ctx, defaultConfig)
 			if err != nil {
 				logger.Error(err, "Failed to create default Operator Config", "Namespace",
-					namespace, "Name", consts.DefaultConfigName)
+					vars.Namespace, "Name", consts.DefaultConfigName)
 				return reconcile.Result{}, err
 			}
 			return reconcile.Result{}, nil
@@ -109,7 +109,22 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	if req.Namespace != namespace {
+	// Fetch the SriovNetworkNodePolicyList
+	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
+	err = r.List(ctx, policyList, &client.ListOptions{})
+	if err != nil {
+		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
+	}
+
+	defaultPolicy := &sriovnetworkv1.SriovNetworkNodePolicy{}
+	err = r.Get(ctx, types.NamespacedName{Name: consts.DefaultPolicyName, Namespace: vars.Namespace}, defaultPolicy)
+	if err != nil {
+		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
+	}
+
+	if req.Namespace != vars.Namespace {
 		return reconcile.Result{}, nil
 	}
 
@@ -123,7 +138,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	if err = r.syncPluginDaemonSet(ctx, defaultConfig); err != nil {
+	if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultPolicy, policyList); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -152,44 +167,13 @@ func (r *SriovOperatorConfigReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Complete(r)
 }
 
-func (r *SriovOperatorConfigReconciler) syncPluginDaemonSet(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
-	logger := log.Log.WithName("syncConfigDaemonset")
-	logger.V(1).Info("Start to sync SRIOV plugin daemonsets nodeSelector")
-	ds := &appsv1.DaemonSet{}
-
-	names := []string{"sriov-cni", "sriov-device-plugin"}
-
-	for _, name := range names {
-		err := r.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ds)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			logger.Error(err, "Couldn't get daemonset", "name", name)
-			return err
-		}
-		if len(dc.Spec.ConfigDaemonNodeSelector) == 0 {
-			ds.Spec.Template.Spec.NodeSelector = GetDefaultNodeSelector()
-		} else {
-			ds.Spec.Template.Spec.NodeSelector = dc.Spec.ConfigDaemonNodeSelector
-		}
-		err = r.Client.Update(ctx, ds)
-		if err != nil {
-			logger.Error(err, "Couldn't update daemonset", "name", name)
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
 	logger := log.Log.WithName("syncConfigDaemonset")
 	logger.V(1).Info("Start to sync config daemonset")
 
 	data := render.MakeRenderData()
 	data.Data["Image"] = os.Getenv("SRIOV_NETWORK_CONFIG_DAEMON_IMAGE")
-	data.Data["Namespace"] = namespace
+	data.Data["Namespace"] = vars.Namespace
 	data.Data["SRIOVCNIImage"] = os.Getenv("SRIOV_CNI_IMAGE")
 	data.Data["SRIOVInfiniBandCNIImage"] = os.Getenv("SRIOV_INFINIBAND_CNI_IMAGE")
 	data.Data["ReleaseVersion"] = os.Getenv("RELEASEVERSION")
@@ -247,7 +231,7 @@ func (r *SriovOperatorConfigReconciler) syncWebhookObjs(ctx context.Context, dc 
 	for name, path := range webhooks {
 		// Render Webhook manifests
 		data := render.MakeRenderData()
-		data.Data["Namespace"] = namespace
+		data.Data["Namespace"] = vars.Namespace
 		data.Data["SRIOVMutatingWebhookName"] = name
 		data.Data["NetworkResourcesInjectorImage"] = os.Getenv("NETWORK_RESOURCES_INJECTOR_IMAGE")
 		data.Data["SriovNetworkWebhookImage"] = os.Getenv("SRIOV_NETWORK_WEBHOOK_IMAGE")

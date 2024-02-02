@@ -46,6 +46,7 @@ import (
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	mock_platforms "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platforms/mock"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platforms/openshift"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
 )
 
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
@@ -60,14 +61,9 @@ var (
 )
 
 // Define utility constants for object names and testing timeouts/durations and intervals.
-const (
-	testNamespace = "openshift-sriov-network-operator"
+const testNamespace = "openshift-sriov-network-operator"
 
-	timeout  = time.Second * 10
-	interval = time.Millisecond * 250
-)
-
-var _ = BeforeSuite(func(done Done) {
+var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(
 		zap.WriteTo(GinkgoWriter),
 		zap.UseDevMode(true),
@@ -169,12 +165,6 @@ var _ = BeforeSuite(func(done Done) {
 
 	ctx, cancel = context.WithCancel(ctrl.SetupSignalHandler())
 
-	go func() {
-		defer GinkgoRecover()
-		err = k8sManager.Start(ctx)
-		Expect(err).ToNot(HaveOccurred())
-	}()
-
 	// Create test namespace
 	ns := &corev1.Namespace{
 		TypeMeta: metav1.TypeMeta{},
@@ -186,6 +176,7 @@ var _ = BeforeSuite(func(done Done) {
 	}
 	Expect(k8sClient.Create(context.TODO(), ns)).Should(Succeed())
 
+	// Create default SriovOperatorConfig
 	config := &sriovnetworkv1.SriovOperatorConfig{}
 	config.SetNamespace(testNamespace)
 	config.SetName(constants.DefaultConfigName)
@@ -197,6 +188,18 @@ var _ = BeforeSuite(func(done Done) {
 	}
 	Expect(k8sClient.Create(context.TODO(), config)).Should(Succeed())
 
+	// Create default SriovNetworkNodePolicy
+	defaultPolicy := &sriovnetworkv1.SriovNetworkNodePolicy{}
+	defaultPolicy.SetNamespace(testNamespace)
+	defaultPolicy.SetName(constants.DefaultPolicyName)
+	defaultPolicy.Spec = sriovnetworkv1.SriovNetworkNodePolicySpec{
+		NumVfs:       0,
+		NodeSelector: make(map[string]string),
+		NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{},
+	}
+	Expect(k8sClient.Create(context.TODO(), defaultPolicy)).Should(Succeed())
+
+	// Create openshift Infrastructure
 	infra := &openshiftconfigv1.Infrastructure{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "cluster",
@@ -208,20 +211,28 @@ var _ = BeforeSuite(func(done Done) {
 	}
 	Expect(k8sClient.Create(context.TODO(), infra)).Should(Succeed())
 
+	// Create default SriovNetworkPoolConfig
 	poolConfig := &sriovnetworkv1.SriovNetworkPoolConfig{}
 	poolConfig.SetNamespace(testNamespace)
 	poolConfig.SetName(constants.DefaultConfigName)
 	poolConfig.Spec = sriovnetworkv1.SriovNetworkPoolConfigSpec{}
 	Expect(k8sClient.Create(context.TODO(), poolConfig)).Should(Succeed())
-	close(done)
+
+	go func() {
+		defer GinkgoRecover()
+		err = k8sManager.Start(ctx)
+		Expect(err).ToNot(HaveOccurred())
+	}()
 })
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	cancel()
-	Eventually(func() error {
-		return testEnv.Stop()
-	}, timeout, time.Second).ShouldNot(HaveOccurred())
+	if testEnv != nil {
+		Eventually(func() error {
+			return testEnv.Stop()
+		}, util.APITimeout, time.Second).ShouldNot(HaveOccurred())
+	}
 })
 
 func TestAPIs(t *testing.T) {
