@@ -39,6 +39,7 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	snclientset "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/clientset/versioned"
 	sninformer "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/informers/externalversions"
+	sriovnetworklisterv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/client/listers/sriovnetwork/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
@@ -97,6 +98,8 @@ type Daemon struct {
 	drainable bool
 
 	disableDrain bool
+
+	sriovNetworkNodeStateLister sriovnetworklisterv1.SriovNetworkNodeStateLister
 
 	nodeLister listerv1.NodeLister
 
@@ -220,6 +223,7 @@ func (dn *Daemon) Run(stopCh <-chan struct{}, exitCh <-chan error) error {
 		},
 	)
 
+	dn.sriovNetworkNodeStateLister = informerFactory.Sriovnetwork().V1().SriovNetworkNodeStates().Lister()
 	informer := informerFactory.Sriovnetwork().V1().SriovNetworkNodeStates().Informer()
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: dn.enqueueNodeState,
@@ -286,6 +290,13 @@ func (dn *Daemon) Run(stopCh <-chan struct{}, exitCh <-chan error) error {
 			}
 		}
 	}
+}
+
+func (dn *Daemon) getSriovNetworkNodeState() (*sriovnetworkv1.SriovNetworkNodeState, error) {
+	if dn.sriovNetworkNodeStateLister != nil {
+		return dn.sriovNetworkNodeStateLister.SriovNetworkNodeStates(vars.Namespace).Get(vars.NodeName)
+	}
+	return dn.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(context.Background(), vars.NodeName, metav1.GetOptions{ResourceVersion: "0"})
 }
 
 func (dn *Daemon) runWorker() {
@@ -413,7 +424,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	// Get the latest NodeState
 	var latestState *sriovnetworkv1.SriovNetworkNodeState
 	var sriovResult = &systemd.SriovResult{SyncStatus: consts.SyncStatusSucceeded, LastSyncError: ""}
-	latestState, err = dn.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(context.Background(), vars.NodeName, metav1.GetOptions{})
+	latestState, err = dn.getSriovNetworkNodeState()
 	if err != nil {
 		log.Log.Error(err, "nodeStateSyncHandler(): Failed to fetch node state", "name", vars.NodeName)
 		return err
@@ -511,7 +522,7 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	// we need to load the latest status to our object
 	// if we don't do it we can have a race here where the user remove the virtual functions but the operator didn't
 	// trigger the refresh
-	updatedState, err := dn.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(context.Background(), vars.NodeName, metav1.GetOptions{})
+	updatedState, err := dn.getSriovNetworkNodeState()
 	if err != nil {
 		log.Log.Error(err, "nodeStateSyncHandler(): Failed to fetch node state", "name", vars.NodeName)
 		return err
@@ -1062,11 +1073,7 @@ func (dn *Daemon) drainNode() error {
 // TODO: move this to host interface
 func (dn *Daemon) tryCreateSwitchdevUdevRule() error {
 	log.Log.V(2).Info("tryCreateSwitchdevUdevRule()")
-	nodeState, nodeStateErr := dn.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(
-		context.Background(),
-		vars.NodeName,
-		metav1.GetOptions{},
-	)
+	nodeState, nodeStateErr := dn.getSriovNetworkNodeState()
 	if nodeStateErr != nil {
 		log.Log.Error(nodeStateErr, "could not fetch node state, skip updating switchdev udev rules", "name", vars.NodeName)
 		return nil
