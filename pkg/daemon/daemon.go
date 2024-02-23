@@ -1,16 +1,11 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"os"
 	"os/exec"
-	"path"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -108,11 +103,10 @@ type Daemon struct {
 }
 
 const (
-	udevScriptsPath = "/bindata/scripts/load-udev.sh"
-	annoKey         = "sriovnetwork.openshift.io/state"
-	annoIdle        = "Idle"
-	annoDraining    = "Draining"
-	annoMcpPaused   = "Draining_MCP_Paused"
+	annoKey       = "sriovnetwork.openshift.io/state"
+	annoIdle      = "Idle"
+	annoDraining  = "Draining"
+	annoMcpPaused = "Draining_MCP_Paused"
 )
 
 // writer implements io.Writer interface as a pass-through for log.Log.
@@ -207,9 +201,6 @@ func (dn *Daemon) Run(stopCh <-chan struct{}, exitCh <-chan error) error {
 	if err := dn.HostHelpers.PrepareVFRepUdevRule(); err != nil {
 		log.Log.Error(err, "failed to prepare udev files to rename VF representors for requested VFs")
 	}
-	if err := dn.tryCreateSwitchdevUdevRule(); err != nil {
-		log.Log.Error(err, "failed to create udev files for switchdev")
-	}
 
 	var timeout int64 = 5
 	var metadataKey = "metadata.name"
@@ -282,11 +273,6 @@ func (dn *Daemon) Run(stopCh <-chan struct{}, exitCh <-chan error) error {
 				}
 			}
 			return err
-		case <-time.After(30 * time.Second):
-			log.Log.V(2).Info("Run(): period refresh")
-			if err := dn.tryCreateSwitchdevUdevRule(); err != nil {
-				log.Log.V(2).Error(err, "Could not create udev rule")
-			}
 		}
 	}
 }
@@ -1064,75 +1050,6 @@ func (dn *Daemon) drainNode() error {
 	}
 	dn.eventRecorder.SendEvent("DrainNode", "Drain node completed")
 	log.Log.Info("drainNode(): drain complete")
-	return nil
-}
-
-// TODO: move this to host interface
-func (dn *Daemon) tryCreateSwitchdevUdevRule() error {
-	log.Log.V(2).Info("tryCreateSwitchdevUdevRule()")
-	nodeState, nodeStateErr := dn.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(
-		context.Background(),
-		vars.NodeName,
-		metav1.GetOptions{},
-	)
-	if nodeStateErr != nil {
-		log.Log.Error(nodeStateErr, "could not fetch node state, skip updating switchdev udev rules", "name", vars.NodeName)
-		return nil
-	}
-
-	var newContent string
-	filePath := path.Join(vars.FilesystemRoot, "/host/etc/udev/rules.d/20-switchdev.rules")
-
-	for _, ifaceStatus := range nodeState.Status.Interfaces {
-		if ifaceStatus.EswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
-			switchID, err := dn.HostHelpers.GetPhysSwitchID(ifaceStatus.Name)
-			if err != nil {
-				return err
-			}
-			portName, err := dn.HostHelpers.GetPhysPortName(ifaceStatus.Name)
-			if err != nil {
-				return err
-			}
-			newContent = newContent + fmt.Sprintf("SUBSYSTEM==\"net\", ACTION==\"add|move\", ATTRS{phys_switch_id}==\"%s\", ATTR{phys_port_name}==\"pf%svf*\", IMPORT{program}=\"/etc/udev/switchdev-vf-link-name.sh $attr{phys_port_name}\", NAME=\"%s_$env{NUMBER}\"\n", switchID, strings.TrimPrefix(portName, "p"), ifaceStatus.Name)
-		}
-	}
-
-	oldContent, err := os.ReadFile(filePath)
-	// if oldContent = newContent, don't do anything
-	if err == nil && newContent == string(oldContent) {
-		return nil
-	}
-
-	log.Log.V(2).Info("Old udev content and new content differ. Writing new content to file.",
-		"old-content", strings.TrimSuffix(string(oldContent), "\n"),
-		"new-content", strings.TrimSuffix(newContent, "\n"),
-		"path", filePath)
-
-	// if the file does not exist or if oldContent != newContent
-	// write to file and create it if it doesn't exist
-	err = os.WriteFile(filePath, []byte(newContent), 0664)
-	if err != nil {
-		log.Log.Error(err, "tryCreateSwitchdevUdevRule(): fail to write file")
-		return err
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("/bin/bash", path.Join(vars.FilesystemRoot, udevScriptsPath))
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	log.Log.V(2).Info("tryCreateSwitchdevUdevRule(): stdout", "output", cmd.Stdout)
-
-	i, err := strconv.Atoi(strings.TrimSpace(stdout.String()))
-	if err == nil {
-		if i == 0 {
-			log.Log.V(2).Info("tryCreateSwitchdevUdevRule(): switchdev udev rules loaded")
-		} else {
-			log.Log.V(2).Info("tryCreateSwitchdevUdevRule(): switchdev udev rules not loaded")
-		}
-	}
 	return nil
 }
 
