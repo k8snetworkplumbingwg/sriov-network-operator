@@ -33,6 +33,8 @@ check_requirements() {
   return 0
 }
 
+kcli version
+
 echo "## checking requirements"
 check_requirements
 echo "## delete existing cluster name $cluster_name"
