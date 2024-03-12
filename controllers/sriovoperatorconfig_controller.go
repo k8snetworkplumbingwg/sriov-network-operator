@@ -117,6 +117,10 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
+	if err = r.syncMetricsExporter(ctx, defaultConfig); err != nil {
+		return reconcile.Result{}, err
+	}
+
 	// For Openshift we need to create the systemd files using a machine config
 	if vars.ClusterType == consts.ClusterTypeOpenshift {
 		// TODO: add support for hypershift as today there is no MCO on hypershift clusters
@@ -217,6 +221,43 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 			return err
 		}
 	}
+	return nil
+}
+
+func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
+	logger := log.Log.WithName("syncMetricsExporter")
+	logger.V(1).Info("Start to sync metrics exporter")
+
+	data := render.MakeRenderData()
+	data.Data["Image"] = os.Getenv("SRIOV_NETWORK_METRICS_EXPORTER_IMAGE")
+	data.Data["Namespace"] = vars.Namespace
+	data.Data["ReleaseVersion"] = os.Getenv("RELEASEVERSION")
+	data.Data["ImagePullSecrets"] = GetImagePullSecrets()
+
+	objs, err := render.RenderDir(consts.MetricsExporterPath, &data)
+	if err != nil {
+		logger.Error(err, "Fail to render metrics exporter manifests")
+		return err
+	}
+
+	deployMetricsExporter, ok := dc.Spec.FeatureGates[consts.MetricsExporterFeatureGate]
+	if ok && deployMetricsExporter {
+		for _, obj := range objs {
+			err = r.syncK8sResource(ctx, dc, obj)
+			if err != nil {
+				logger.Error(err, "Couldn't sync metrics exporter objects")
+				return err
+			}
+		}
+	} else {
+		for _, obj := range objs {
+			err = r.deleteWebhookObject(ctx, obj)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 

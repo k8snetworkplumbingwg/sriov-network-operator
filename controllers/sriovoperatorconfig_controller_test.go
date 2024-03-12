@@ -7,6 +7,8 @@ import (
 
 	admv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/golang/mock/gomock"
@@ -284,5 +286,35 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 				return strings.Join(daemonSet.Spec.Template.Spec.Containers[0].Args, " ")
 			}, util.APITimeout*10, util.RetryInterval).Should(ContainSubstring("disable-plugins=mellanox"))
 		})
+
+		It("should deploy the metrics-exporter when the feature gate is enabled", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			daemonSet := &appsv1.DaemonSet{}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-metrics-exporter", Namespace: testNamespace}, daemonSet)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+
+			config.Spec.FeatureGates = map[string]bool{constants.MetricsExporterFeatureGate: true}
+			err = k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			DeferCleanup(func() {
+				config.Spec.FeatureGates = map[string]bool{}
+				err = k8sClient.Update(ctx, config)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			err = util.WaitForNamespacedObject(&appsv1.DaemonSet{}, k8sClient, testNamespace, "sriov-network-metrics-exporter", util.RetryInterval, util.APITimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = util.WaitForNamespacedObject(&v1.ConfigMap{}, k8sClient, testNamespace, "sriov-network-metrics-exporter-config", util.RetryInterval, util.APITimeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = util.WaitForNamespacedObject(&v1.Service{}, k8sClient, testNamespace, "sriov-network-metrics-exporter-service", util.RetryInterval, util.APITimeout)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 	})
 })
