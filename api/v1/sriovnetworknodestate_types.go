@@ -64,6 +64,7 @@ type InterfaceExt struct {
 	NumVfs            int               `json:"numVfs,omitempty"`
 	LinkSpeed         string            `json:"linkSpeed,omitempty"`
 	LinkType          string            `json:"linkType,omitempty"`
+	LinkAdmState      string            `json:"linkAdmState,omitempty"`
 	EswitchMode       string            `json:"eSwitchMode,omitempty"`
 	ExternallyManaged bool              `json:"externallyManaged,omitempty"`
 	TotalVfs          int               `json:"totalvfs,omitempty"`
@@ -83,6 +84,7 @@ type VirtualFunction struct {
 	Mtu        int    `json:"mtu,omitempty"`
 	VfID       int    `json:"vfID"`
 	VdpaType   string `json:"vdpaType,omitempty"`
+	GUID       string `json:"guid,omitempty"`
 }
 
 // SriovNetworkNodeStateStatus defines the observed state of SriovNetworkNodeState

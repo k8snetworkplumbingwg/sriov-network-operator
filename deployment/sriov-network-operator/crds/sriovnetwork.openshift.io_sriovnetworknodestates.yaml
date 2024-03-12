@@ -104,6 +104,8 @@ spec:
                             type: string
                           driver:
                             type: string
+                          guid:
+                            type: string
                           mac:
                             type: string
                           mtu:
@@ -131,6 +133,8 @@ spec:
                       type: string
                     externallyManaged:
                       type: boolean
+                    linkAdmState:
+                      type: string
                     linkSpeed:
                       type: string
                     linkType:
