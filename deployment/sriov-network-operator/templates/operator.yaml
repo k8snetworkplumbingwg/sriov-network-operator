@@ -66,6 +66,8 @@ spec:
               value: {{ .Values.images.sriovConfigDaemon }}
             - name: SRIOV_NETWORK_WEBHOOK_IMAGE
               value: {{ .Values.images.webhook }}
+            - name: SRIOV_NETWORK_METRICS_EXPORTER_IMAGE
+              value: {{ .Values.images.metricsExporter }}
             - name: RESOURCE_PREFIX
               value: {{ .Values.operator.resourcePrefix }}
             - name: IMAGE_PULL_SECRETS

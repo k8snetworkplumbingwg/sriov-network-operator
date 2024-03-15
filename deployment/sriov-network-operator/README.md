@@ -127,3 +127,4 @@ This section contains general parameters that apply to both the operator and dae
 | `images.sriovDevicePlugin` | SR-IOV device plugin image |
 | `images.resourcesInjector` | Resources Injector image |
 | `images.webhook` | Operator Webhook image |
+| `images.metricsExporter` | Network Metrics Exporter image |

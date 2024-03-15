@@ -19,6 +19,7 @@ const (
 	ConfigDaemonPath                   = "./bindata/manifests/daemon"
 	InjectorWebHookPath                = "./bindata/manifests/webhook"
 	OperatorWebHookPath                = "./bindata/manifests/operator-webhook"
+	MetricsExporterPath                = "./bindata/manifests/metrics-exporter"
 	SystemdServiceOcpPath              = "./bindata/manifests/sriov-config-service/openshift"
 	SystemdServiceOcpMachineConfigName = "sriov-config-service"
 	ServiceCAConfigMapAnnotation       = "service.beta.openshift.io/inject-cabundle"
@@ -112,6 +113,7 @@ const (
 	KernelArgIommuPt    = "iommu=pt"
 
 	ParallelNicConfigFeatureGate = "parallelNicConfig"
+	MetricsExporterFeatureGate   = "metricsExporter"
 )
 
 const (
