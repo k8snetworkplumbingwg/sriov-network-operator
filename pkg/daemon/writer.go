@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/pkg/errors"
@@ -88,6 +89,7 @@ func (w *NodeStateStatusWriter) RunOnce() error {
 func (w *NodeStateStatusWriter) Run(stop <-chan struct{}, refresh <-chan Message, syncCh chan<- struct{}) error {
 	log.Log.V(0).Info("Run(): start writer")
 	msg := Message{}
+	lastInterfaces := w.status.Interfaces
 
 	for {
 		select {
@@ -99,6 +101,7 @@ func (w *NodeStateStatusWriter) Run(stop <-chan struct{}, refresh <-chan Message
 			if err := w.pollNicStatus(); err != nil {
 				continue
 			}
+			lastInterfaces = w.status.Interfaces
 			_, err := w.setNodeStateStatus(msg)
 			if err != nil {
 				log.Log.Error(err, "Run() refresh: writing to node status failed")
@@ -109,7 +112,10 @@ func (w *NodeStateStatusWriter) Run(stop <-chan struct{}, refresh <-chan Message
 			if err := w.pollNicStatus(); err != nil {
 				continue
 			}
-			w.setNodeStateStatus(msg)
+			if !reflect.DeepEqual(lastInterfaces, w.status.Interfaces) {
+				lastInterfaces = w.status.Interfaces
+				w.setNodeStateStatus(msg)
+			}
 		}
 	}
 }
@@ -207,7 +213,7 @@ func (w *NodeStateStatusWriter) getNodeState() (*sriovnetworkv1.SriovNetworkNode
 	var lastErr error
 	var n *sriovnetworkv1.SriovNetworkNodeState
 	err := wait.PollImmediate(10*time.Second, 5*time.Minute, func() (bool, error) {
-		n, lastErr = w.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(context.Background(), vars.NodeName, metav1.GetOptions{})
+		n, lastErr = w.client.SriovnetworkV1().SriovNetworkNodeStates(vars.Namespace).Get(context.Background(), vars.NodeName, metav1.GetOptions{ResourceVersion: "0"})
 		if lastErr == nil {
 			return true, nil
 		}
