@@ -118,12 +118,13 @@ This section contains general parameters that apply to both the operator and dae
 
 ### Images parameters
 
-| Name | description |
-| ---- | ----------- |
-| `images.operator` | Operator controller image |
-| `images.sriovConfigDaemon` | Daemon node agent image |
-| `images.sriovCni` | SR-IOV CNI image |
-| `images.ibSriovCni` | InfiniBand SR-IOV CNI image |
-| `images.sriovDevicePlugin` | SR-IOV device plugin image |
-| `images.resourcesInjector` | Resources Injector image |
-| `images.webhook` | Operator Webhook image |
+| Name                       | description                 |
+|----------------------------|-----------------------------|
+| `images.operator`          | Operator controller image   |
+| `images.sriovConfigDaemon` | Daemon node agent image     |
+| `images.sriovCni`          | SR-IOV CNI image            |
+| `images.ibSriovCni`        | InfiniBand SR-IOV CNI image |
+| `images.rdmaCni`           | RDMA CNI image              |
+| `images.sriovDevicePlugin` | SR-IOV device plugin image  |
+| `images.resourcesInjector` | Resources Injector image    |
+| `images.webhook`           | Operator Webhook image      |
