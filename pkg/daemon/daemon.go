@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -420,6 +421,13 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 	// When using systemd configuration we write the file
 	if vars.UsingSystemdMode {
 		log.Log.V(0).Info("nodeStateSyncHandler(): writing systemd config file to host")
+		// get node object
+		node := &corev1.Node{}
+		err := dn.client.Get(context.TODO(), client.ObjectKey{Name: vars.NodeName}, node)
+		if err != nil {
+			log.Log.Error(err, "nodeStateSyncHandler(): failed to get node object")
+			return err
+		}
 		systemdConfModified, err := systemd.WriteConfFile(dn.desiredNodeState)
 		if err != nil {
 			log.Log.Error(err, "nodeStateSyncHandler(): failed to write configuration file for systemd mode")
