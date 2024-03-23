@@ -73,6 +73,19 @@ func (r *SriovNetworkPoolConfigReconciler) Reconcile(ctx context.Context, req ct
 		return reconcile.Result{}, err
 	}
 
+	// RdmaMode could be set in systemd mode only
+	if instance.Spec.RdmaMode != "" {
+		operatorConfig := &sriovnetworkv1.SriovOperatorConfig{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: constants.DefaultConfigName}, operatorConfig)
+		if err != nil {
+			logger.Error(err, "failed to list SriovOperatorConfig")
+			return reconcile.Result{}, err
+		}
+		if operatorConfig.Spec.ConfigurationMode == sriovnetworkv1.DaemonConfigurationMode {
+			logger.Info("rdmaSpec is ignored in 'daemon' configuration mode")
+		}
+	}
+
 	// we don't need a finalizer for pools that doesn't use the ovs hardware offload feature
 	if instance.Spec.OvsHardwareOffloadConfig.Name == "" {
 		return ctrl.Result{}, nil

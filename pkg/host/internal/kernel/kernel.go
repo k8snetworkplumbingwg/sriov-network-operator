@@ -522,6 +522,34 @@ func (k *kernel) InstallRDMA(packageManager string) error {
 	return nil
 }
 
+func (k *kernel) GetRDMASubsystem() (string, error) {
+	log.Log.Info("GetRDMASubsystem(): retrieving RDMA subsystem mode")
+	chrootDefinition := utils.GetChrootExtension()
+
+	stdout, stderr, err := k.utilsHelper.RunCommand("/bin/sh", "-c", fmt.Sprintf("%s /usr/bin/rdma system show", chrootDefinition))
+	if err != nil && len(stderr) != 0 {
+		log.Log.Error(err, "GetRDMASubsystem(): failed to get RDMA subsystem mode", "stdout", stdout, "stderr", stderr)
+		return "", err
+	}
+
+	// Example of an =output: netns shared copy-on-fork on
+	subsystem := strings.Fields(stdout)[1]
+	return subsystem, nil
+}
+
+func (k *kernel) SetRDMASubsystem(mode string) error {
+	log.Log.Info("SetRDMASubsystem(): Updating RDMA subsystem mode")
+	chrootDefinition := utils.GetChrootExtension()
+
+	stdout, stderr, err := k.utilsHelper.RunCommand("/bin/sh", "-c", fmt.Sprintf("%s /usr/bin/rdma system set net %s", chrootDefinition, mode))
+	if err != nil && len(stderr) != 0 {
+		log.Log.Error(err, "SetRDMASubsystem(): failed to update RDMA subsystem mode", "stdout", stdout, "stderr", stderr)
+		return err
+	}
+
+	return nil
+}
+
 func (k *kernel) TriggerUdevEvent() error {
 	log.Log.Info("TriggerUdevEvent(): installing RDMA")
 

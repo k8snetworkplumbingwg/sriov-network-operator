@@ -70,6 +70,10 @@ type KernelInterface interface {
 	EnableRDMA(conditionFilePath, serviceName, packageManager string) (bool, error)
 	// InstallRDMA install RDMA packages on the system
 	InstallRDMA(packageManager string) error
+	// GetRDMASubsystem returns RDMA subsystem mode
+	GetRDMASubsystem() (string, error)
+	// SetRDMASubsystem changes RDMA subsystem mode
+	SetRDMASubsystem(mode string) error
 	// EnableRDMAOnRHELMachine enable RDMA on a RHEL base system
 	EnableRDMAOnRHELMachine() (bool, error)
 	// GetOSPrettyName returns OS name
