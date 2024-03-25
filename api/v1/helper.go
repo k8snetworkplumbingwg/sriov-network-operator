@@ -260,6 +260,12 @@ func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
 		log.V(2).Info("NeedToUpdateSriov(): NumVfs needs update", "desired", ifaceSpec.NumVfs, "current", ifaceStatus.NumVfs)
 		return true
 	}
+
+	if ifaceStatus.LinkAdmState == "down" {
+		log.V(2).Info("NeedToUpdateSriov(): PF link status needs update", "desired to include", "up", "current", ifaceStatus.LinkAdmState)
+		return true
+	}
+
 	if ifaceSpec.NumVfs > 0 {
 		for _, vfStatus := range ifaceStatus.VFs {
 			ingroup := false
@@ -287,6 +293,37 @@ func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
 							log.V(2).Info("NeedToUpdateSriov(): VF MTU needs update",
 								"vf", vfStatus.VfID, "desired", groupSpec.Mtu, "current", vfStatus.Mtu)
 							return true
+						}
+
+						if strings.EqualFold(ifaceStatus.LinkType, consts.LinkTypeETH) {
+							// We do this check only if a MAC address is set to ensure that we were able to read the MAC
+							// address. We intentionally skip empty MAC address in vfStatus because this may happen
+							// when the VF is allocated to a workload.
+							if vfStatus.Mac == consts.DefaultMAC {
+								log.V(2).Info("NeedToUpdateSriov(): VF MAC Address needs update",
+									"vf", vfStatus.VfID, "current", vfStatus.Mac)
+								return true
+							}
+
+							if groupSpec.IsRdma {
+								// We do this check only if a Node GUID is set to ensure that we were able to read the
+								// Node GUID. We intentionally skip empty Node GUID in vfStatus because this may happen
+								// when the VF is allocated to a workload.
+								if vfStatus.GUID == consts.DefaultNodeGUID {
+									log.V(2).Info("NeedToUpdateSriov(): VF GUID needs update",
+										"vf", vfStatus.VfID, "current", vfStatus.GUID)
+									return true
+								}
+							}
+						} else {
+							// We do this check only if a Node GUID is set to ensure that we were able to read the
+							// Node GUID. We intentionally skip empty Node GUID in vfStatus because this may happen
+							// when the VF is allocated to a workload.
+							if vfStatus.GUID == consts.DefaultNodeGUID {
+								log.V(2).Info("NeedToUpdateSriov(): VF GUID needs update",
+									"vf", vfStatus.VfID, "current", vfStatus.GUID)
+								return true
+							}
 						}
 
 						// this is needed to be sure the admin mac address is configured as expected

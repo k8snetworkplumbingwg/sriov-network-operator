@@ -42,6 +42,9 @@ const (
 	LinkTypeIB  = "IB"
 	LinkTypeETH = "ETH"
 
+	DefaultNodeGUID = "0000:0000:0000:0000"
+	DefaultMAC      = "00:00:00:00:00:00"
+
 	DeviceTypeVfioPci   = "vfio-pci"
 	DeviceTypeNetDevice = "netdevice"
 	VdpaTypeVirtio      = "virtio"
