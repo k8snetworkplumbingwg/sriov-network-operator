@@ -120,6 +120,8 @@ const (
 	// ResourceInjectorMatchConditionFeatureGate: switch injector to fail policy and add mactch condition
 	// this will make the mutating webhook to be called only when a pod has 'k8s.v1.cni.cncf.io/networks' annotation
 	ResourceInjectorMatchConditionFeatureGate = "resourceInjectorMatchCondition"
+
+	InfinibandGUIDConfigFilePath = "/var/opt/infiniband_guids"
 )
 
 const (

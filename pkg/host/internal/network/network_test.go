@@ -15,6 +15,8 @@ import (
 	ethtoolMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/ethtool/mock"
 	netlinkMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/netlink/mock"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/fakefilesystem"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/helpers"
 )
 
 func getDevlinkParam(t uint8, value interface{}) *netlink.DevlinkParam {
@@ -200,6 +202,18 @@ var _ = Describe("Network", func() {
 			ethtoolLibMock.EXPECT().Change("enp216s0f0np0", map[string]bool{"hw-tc-offload": true}).Return(nil)
 			ethtoolLibMock.EXPECT().Features("enp216s0f0np0").Return(nil, testErr)
 			Expect(n.EnableHwTcOffload("enp216s0f0np0")).To(MatchError(testErr))
+		})
+	})
+	Context("GetPciAddressFromInterfaceName", func() {
+		It("Should get PCI address from sys fs", func() {
+			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
+				Dirs:     []string{"/sys/bus/pci/0000:3b:00.0", "/sys/class/net/ib216s0f0"},
+				Symlinks: map[string]string{"/sys/class/net/ib216s0f0/device": "/sys/bus/pci/0000:3b:00.0"},
+			})
+
+			pci, err := n.GetPciAddressFromInterfaceName("ib216s0f0")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pci).To(Equal("0000:3b:00.0"))
 		})
 	})
 })
