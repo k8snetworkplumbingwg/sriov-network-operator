@@ -46,6 +46,7 @@ type SriovConfig struct {
 	Spec            sriovnetworkv1.SriovNetworkNodeStateSpec `yaml:"spec"`
 	UnsupportedNics bool                                     `yaml:"unsupportedNics"`
 	PlatformType    consts.PlatformTypes                     `yaml:"platformType"`
+	RdmaMode        string                                   `yaml:"rdmaMode"`
 }
 
 type SriovResult struct {
@@ -64,15 +65,21 @@ func ReadConfFile() (spec *SriovConfig, err error) {
 	return spec, err
 }
 
-func WriteConfFile(newState *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+func WriteConfFile(newState *sriovnetworkv1.SriovNetworkNodeState, netPoolConfig *sriovnetworkv1.SriovNetworkPoolConfig) (bool, error) {
 	newFile := false
 	// remove the device plugin revision as we don't need it here
 	newState.Spec.DpConfigVersion = ""
 
+	// do not set any mode be default
+	rdmaMode := ""
+	if netPoolConfig != nil {
+		rdmaMode = netPoolConfig.Spec.RdmaMode
+	}
 	sriovConfig := &SriovConfig{
 		newState.Spec,
 		vars.DevMode,
 		vars.PlatformType,
+		rdmaMode,
 	}
 
 	_, err := os.Stat(utils.GetHostExtensionPath(SriovSystemdConfigPath))

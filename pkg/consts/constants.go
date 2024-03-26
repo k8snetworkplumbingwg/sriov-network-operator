@@ -47,6 +47,9 @@ const (
 	VdpaTypeVirtio      = "virtio"
 	VdpaTypeVhost       = "vhost"
 
+	RdmaSubsystemModeShared    = "shared"
+	RdmaSubsystemModeExclusive = "exclusive"
+
 	ClusterTypeOpenshift  = "openshift"
 	ClusterTypeKubernetes = "kubernetes"
 

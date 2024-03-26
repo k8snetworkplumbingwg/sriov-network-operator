@@ -152,6 +152,21 @@ func phasePre(setupLog logr.Logger, conf *systemd.SriovConfig, hostHelpers helpe
 	hostHelpers.TryEnableTun()
 	hostHelpers.TryEnableVhostNet()
 
+	if conf.RdmaMode != "" {
+		rdmaSubsystem, err := hostHelpers.GetRDMASubsystem()
+		if err != nil {
+			setupLog.Error(err, "failed to get RDMA subsystem mode")
+			return fmt.Errorf("failed to get RDMA subsystem mode: %v", err)
+		}
+		if rdmaSubsystem != conf.RdmaMode {
+			err = hostHelpers.SetRDMASubsystem(conf.RdmaMode)
+			if err != nil {
+				setupLog.Error(err, "failed to set RDMA subsystem mode")
+				return fmt.Errorf("failed to set RDMA subsystem mode: %v", err)
+			}
+		}
+	}
+
 	return callPlugin(setupLog, PhasePre, conf, hostHelpers)
 }
 

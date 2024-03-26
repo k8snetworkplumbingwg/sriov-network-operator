@@ -70,6 +70,23 @@ spec:
             - name: os-release
               mountPath: /host/etc/os-release
               readOnly: true
+        {{- if ne .RDMACNIImage "" }}
+        - name: rdma-cni
+          image: {{.RDMACNIImage}}
+          command:
+            - /bin/sh
+            - -c
+            - cp /usr/bin/rdma /host/opt/cni/bin/
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 10Mi
+          volumeMounts:
+            - name: cnibin
+              mountPath: /host/opt/cni/bin
+      {{- end }}
       {{- if .UsedSystemdMode}}
         - name: sriov-service-copy
           image: {{.Image}}
