@@ -5,6 +5,7 @@
 package mock_host
 
 import (
+	net "net"
 	reflect "reflect"
 
 	unit "github.com/coreos/go-systemd/v22/unit"
@@ -150,6 +151,20 @@ func (m *MockHostManagerInterface) ConfigSriovInterfaces(storeManager store.Mana
 func (mr *MockHostManagerInterfaceMockRecorder) ConfigSriovInterfaces(storeManager, interfaces, ifaceStatuses, pfsToConfig, skipVFConfiguration interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigSriovInterfaces", reflect.TypeOf((*MockHostManagerInterface)(nil).ConfigSriovInterfaces), storeManager, interfaces, ifaceStatuses, pfsToConfig, skipVFConfiguration)
+}
+
+// ConfigureVfGUID mocks base method.
+func (m *MockHostManagerInterface) ConfigureVfGUID(vfAddr, pfAddr string, vfId int, pfLink netlink.Link) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ConfigureVfGUID", vfAddr, pfAddr, vfId, pfLink)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ConfigureVfGUID indicates an expected call of ConfigureVfGUID.
+func (mr *MockHostManagerInterfaceMockRecorder) ConfigureVfGUID(vfAddr, pfAddr, vfId, pfLink interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureVfGUID", reflect.TypeOf((*MockHostManagerInterface)(nil).ConfigureVfGUID), vfAddr, pfAddr, vfId, pfLink)
 }
 
 // CreateVDPADevice mocks base method.
@@ -395,6 +410,21 @@ func (m *MockHostManagerInterface) GetOSPrettyName() (string, error) {
 func (mr *MockHostManagerInterfaceMockRecorder) GetOSPrettyName() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetOSPrettyName", reflect.TypeOf((*MockHostManagerInterface)(nil).GetOSPrettyName))
+}
+
+// GetPciAddressFromInterfaceName mocks base method.
+func (m *MockHostManagerInterface) GetPciAddressFromInterfaceName(interfaceName string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPciAddressFromInterfaceName", interfaceName)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPciAddressFromInterfaceName indicates an expected call of GetPciAddressFromInterfaceName.
+func (mr *MockHostManagerInterfaceMockRecorder) GetPciAddressFromInterfaceName(interfaceName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPciAddressFromInterfaceName", reflect.TypeOf((*MockHostManagerInterface)(nil).GetPciAddressFromInterfaceName), interfaceName)
 }
 
 // GetPhysPortName mocks base method.
@@ -871,17 +901,17 @@ func (mr *MockHostManagerInterfaceMockRecorder) SetVfAdminMac(vfAddr, pfLink, vf
 }
 
 // SetVfGUID mocks base method.
-func (m *MockHostManagerInterface) SetVfGUID(vfAddr string, pfLink netlink.Link) error {
+func (m *MockHostManagerInterface) SetVfGUID(vfAddr string, guid net.HardwareAddr, pfLink netlink.Link) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetVfGUID", vfAddr, pfLink)
+	ret := m.ctrl.Call(m, "SetVfGUID", vfAddr, guid, pfLink)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetVfGUID indicates an expected call of SetVfGUID.
-func (mr *MockHostManagerInterfaceMockRecorder) SetVfGUID(vfAddr, pfLink interface{}) *gomock.Call {
+func (mr *MockHostManagerInterfaceMockRecorder) SetVfGUID(vfAddr, guid, pfLink interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetVfGUID", reflect.TypeOf((*MockHostManagerInterface)(nil).SetVfGUID), vfAddr, pfLink)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetVfGUID", reflect.TypeOf((*MockHostManagerInterface)(nil).SetVfGUID), vfAddr, guid, pfLink)
 }
 
 // TriggerUdevEvent mocks base method.
