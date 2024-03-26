@@ -134,6 +134,9 @@ const (
 
 	// MetricsExporterFeatureGate: enable SriovNetworkMetricsExporter on the same node as where the config-daemon run
 	MetricsExporterFeatureGate = "metricsExporter"
+
+	// The path to the file on the host filesystem that contains the IB GUID distribution for IB VFs
+	InfinibandGUIDConfigFilePath = SriovConfBasePath + "/infiniband/guids"
 )
 
 const (
