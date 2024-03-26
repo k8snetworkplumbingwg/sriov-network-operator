@@ -1,6 +1,8 @@
 package types
 
 import (
+	"net"
+
 	"github.com/coreos/go-systemd/v22/unit"
 	"github.com/jaypipes/ghw"
 	"github.com/vishvananda/netlink"
@@ -9,6 +11,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/store"
 )
 
+//go:generate ../../../bin/mockgen -destination ../internal/kernel/mock/mock_kernel.go -source interfaces.go -package mock_kernel
 type KernelInterface interface {
 	// TryEnableTun load the tun kernel module
 	TryEnableTun()
@@ -106,6 +109,8 @@ type NetworkInterface interface {
 	SetDevlinkDeviceParam(pciAddr, paramName, value string) error
 	// EnableHwTcOffload make sure that hw-tc-offload feature is enabled if device supports it
 	EnableHwTcOffload(ifaceName string) error
+	// GetPciAddressFromInterfaceName parses sysfs to get pci address of an interface by name
+	GetPciAddressFromInterfaceName(interfaceName string) (string, error)
 }
 
 type ServiceInterface interface {
@@ -138,7 +143,7 @@ type SriovInterface interface {
 	// GetVfInfo returns the virtual function information is the operator struct from the host information
 	GetVfInfo(pciAddr string, devices []*ghw.PCIDevice) sriovnetworkv1.VirtualFunction
 	// SetVfGUID sets the GUID for a virtual function
-	SetVfGUID(vfAddr string, pfLink netlink.Link) error
+	SetVfGUID(vfAddr string, guid net.HardwareAddr, pfLink netlink.Link) error
 	// VFIsReady returns the interface virtual function if the device is ready
 	VFIsReady(pciAddr string) (netlink.Link, error)
 	// SetVfAdminMac sets the virtual function administrative mac address via the physical function
@@ -188,4 +193,9 @@ type VdpaInterface interface {
 	// DiscoverVDPAType returns type of existing VDPA device for VF,
 	// returns empty string if VDPA device not found or unknown driver is in use
 	DiscoverVDPAType(pciAddr string) string
+}
+
+type InfinibandInterface interface {
+	// ConfigureVfGUID configures and sets a GUID for an IB VF device
+	ConfigureVfGUID(vfAddr string, pfAddr string, vfID int, pfLink netlink.Link) error
 }
