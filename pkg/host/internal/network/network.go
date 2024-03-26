@@ -329,3 +329,15 @@ func (n *network) EnableHwTcOffload(ifaceName string) error {
 	log.Log.V(0).Info("EnableHwTcOffload(): feature is still disabled, not supported by device", "device", ifaceName)
 	return nil
 }
+
+func (n *network) GetPciAddressFromInterfaceName(interfaceName string) (string, error) {
+	sysfsPath := filepath.Join(vars.FilesystemRoot, "/sys/class/net", interfaceName, "device")
+
+	pciDevDir, err := os.Readlink(sysfsPath)
+
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Base(pciDevDir), nil
+}

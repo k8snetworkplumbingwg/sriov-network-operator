@@ -9,7 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	utils "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
 var _ = Describe("HashConfigMap", func() {
@@ -75,6 +75,17 @@ var _ = Describe("HashConfigMap", func() {
 		hash2 := utils.HashConfigMap(cm2)
 
 		Expect(hash1).To(Equal(hash2))
+	})
+
+	It("should parse and process GUIDs correctly", func() {
+		guidStr := "00:01:02:03:04:05:06:08"
+		nextGuidStr := "00:01:02:03:04:05:06:09"
+
+		guid, err := utils.ParseGUID(guidStr)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(guid.String()).To(Equal(guidStr))
+		Expect((guid + 1).String()).To(Equal(nextGuidStr))
 	})
 })
 
