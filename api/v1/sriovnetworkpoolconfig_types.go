@@ -9,7 +9,6 @@ import (
 type SriovNetworkPoolConfigSpec struct {
 	// OvsHardwareOffloadConfig describes the OVS HWOL configuration for selected Nodes
 	OvsHardwareOffloadConfig OvsHardwareOffloadConfig `json:"ovsHardwareOffloadConfig,omitempty"`
-
 	// nodeSelector specifies a label selector for Nodes
 	NodeSelector *metav1.LabelSelector `json:"nodeSelector,omitempty"`
 

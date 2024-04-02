@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -389,8 +391,7 @@ func UniqueAppend(inSlice []string, strings ...string) []string {
 // Apply policy to SriovNetworkNodeState CR
 func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriority bool) error {
 	s := p.Spec.NicSelector
-	if s.Vendor == "" && s.DeviceID == "" && len(s.RootDevices) == 0 && len(s.PfNames) == 0 &&
-		len(s.NetFilter) == 0 {
+	if s.IsEmpty() {
 		// Empty NicSelector match none
 		return nil
 	}
@@ -424,6 +425,61 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 				if !found {
 					state.Spec.Interfaces = append(state.Spec.Interfaces, result)
 				}
+			}
+		}
+	}
+	return nil
+}
+
+// ApplyBridgeConfig applies bridge configuration from the policy to the provided state
+func (p *SriovNetworkNodePolicy) ApplyBridgeConfig(state *SriovNetworkNodeState) error {
+	if p.Spec.NicSelector.IsEmpty() {
+		// Empty NicSelector match none
+		return nil
+	}
+	// sanity check the policy
+	if !p.Spec.Bridge.IsEmpty() {
+		if p.Spec.EswitchMode != ESwithModeSwitchDev {
+			return fmt.Errorf("eSwitchMode must be switchdev to use software bridge management")
+		}
+		if p.Spec.LinkType != "" && !strings.EqualFold(p.Spec.LinkType, consts.LinkTypeETH) {
+			return fmt.Errorf("linkType must be eth or ETH to use software bridge management")
+		}
+		if p.Spec.ExternallyManaged {
+			return fmt.Errorf("software bridge management can't be used when link is externally managed")
+		}
+	}
+	for _, iface := range state.Status.Interfaces {
+		if p.Spec.NicSelector.Selected(&iface) {
+			if p.Spec.Bridge.OVS == nil {
+				state.Spec.Bridges.OVS = slices.DeleteFunc(state.Spec.Bridges.OVS, func(br OVSConfigExt) bool {
+					return slices.ContainsFunc(br.Uplinks, func(uplink OVSUplinkConfigExt) bool {
+						return uplink.PciAddress == iface.PciAddress
+					})
+				})
+				if len(state.Spec.Bridges.OVS) == 0 {
+					state.Spec.Bridges.OVS = nil
+				}
+				continue
+			}
+			ovsBridge := OVSConfigExt{
+				Name:   GenerateBridgeName(&iface),
+				Bridge: p.Spec.Bridge.OVS.Bridge,
+				Uplinks: []OVSUplinkConfigExt{{
+					PciAddress: iface.PciAddress,
+					Name:       iface.Name,
+					Interface:  p.Spec.Bridge.OVS.Uplink.Interface,
+				}},
+			}
+			log.Info("Update bridge for interface", "name", iface.Name, "bridge", ovsBridge.Name)
+
+			pos, exist := slices.BinarySearchFunc(state.Spec.Bridges.OVS, ovsBridge, func(x, y OVSConfigExt) int {
+				return strings.Compare(x.Name, y.Name)
+			})
+			if exist {
+				state.Spec.Bridges.OVS[pos] = ovsBridge
+			} else {
+				state.Spec.Bridges.OVS = slices.Insert(state.Spec.Bridges.OVS, pos, ovsBridge)
 			}
 		}
 	}
@@ -546,6 +602,15 @@ func ParsePFName(name string) (ifName string, rngSt, rngEnd int, err error) {
 		ifName = name
 	}
 	return
+}
+
+// IsEmpty returns true if nicSelector is empty
+func (selector *SriovNetworkNicSelector) IsEmpty() bool {
+	return selector.Vendor == "" &&
+		selector.DeviceID == "" &&
+		len(selector.RootDevices) == 0 &&
+		len(selector.PfNames) == 0 &&
+		len(selector.NetFilter) == 0
 }
 
 func (selector *SriovNetworkNicSelector) Selected(iface *InterfaceExt) bool {
@@ -902,4 +967,15 @@ func (s *SriovNetworkPoolConfig) MaxUnavailable(numOfNodes int) (int, error) {
 	}
 
 	return maxunavail, nil
+}
+
+// GenerateBridgeName generate predictable name for the software bridge
+// current format is: br-0000_00_03.0
+func GenerateBridgeName(iface *InterfaceExt) string {
+	return fmt.Sprintf("br-%s", strings.ReplaceAll(iface.PciAddress, ":", "_"))
+}
+
+// NeedToUpdateBridges returns true if bridge for the host requires update
+func NeedToUpdateBridges(bridgeSpec, bridgeStatus *Bridges) bool {
+	return !reflect.DeepEqual(bridgeSpec, bridgeStatus)
 }
