@@ -124,6 +124,9 @@ const (
 	// ResourceInjectorMatchConditionFeatureGate: switch injector to fail policy and add mactch condition
 	// this will make the mutating webhook to be called only when a pod has 'k8s.v1.cni.cncf.io/networks' annotation
 	ResourceInjectorMatchConditionFeatureGate = "resourceInjectorMatchCondition"
+
+	// ManageSoftwareBridgesFeatureGate: enables management of software bridges by the operator
+	ManageSoftwareBridgesFeatureGate = "manageSoftwareBridges"
 )
 
 const (
