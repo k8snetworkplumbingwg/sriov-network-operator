@@ -24,7 +24,10 @@ func NewDefaultPlatformHelper() (Interface, error) {
 		return nil, err
 	}
 	utilsHelper := utils.New()
-	hostManager := host.NewHostManager(utilsHelper)
+	hostManager, err := host.NewHostManager(utilsHelper)
+	if err != nil {
+		return nil, err
+	}
 	openstackContext := openstack.New(hostManager)
 
 	return &platformHelper{

@@ -18,6 +18,8 @@ import (
 	hostTypes "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/fakefilesystem"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/helpers"
 )
 
 func TestK8sPlugin(t *testing.T) {
@@ -70,16 +72,17 @@ func (snm *serviceNameMatcher) String() string {
 var _ = Describe("K8s plugin", func() {
 	var (
 		k8sPlugin  plugin.VendorPlugin
-		err        error
 		testCtrl   *gomock.Controller
 		hostHelper *mock_helper.MockHostHelpersInterface
 	)
 
 	BeforeEach(func() {
+		helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
+			Dirs: []string{"/host/etc/sriov-operator"}})
 		testCtrl = gomock.NewController(GinkgoT())
-
 		hostHelper = mock_helper.NewMockHostHelpersInterface(testCtrl)
-		realHostMgr := host.NewHostManager(hostHelper)
+		realHostMgr, err := host.NewHostManager(hostHelper)
+		Expect(err).NotTo(HaveOccurred())
 
 		// proxy some functions to real host manager to simplify testing and to additionally validate manifests
 		for _, f := range []string{

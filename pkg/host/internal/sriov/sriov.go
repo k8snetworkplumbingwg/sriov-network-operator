@@ -36,6 +36,7 @@ type sriov struct {
 	networkHelper types.NetworkInterface
 	udevHelper    types.UdevInterface
 	vdpaHelper    types.VdpaInterface
+	bridgeHelper  types.BridgeInterface
 	netlinkLib    netlinkPkg.NetlinkLib
 	dputilsLib    dputilsPkg.DPUtilsLib
 }
@@ -45,6 +46,7 @@ func New(utilsHelper utils.CmdInterface,
 	networkHelper types.NetworkInterface,
 	udevHelper types.UdevInterface,
 	vdpaHelper types.VdpaInterface,
+	bridgeHelper types.BridgeInterface,
 	netlinkLib netlinkPkg.NetlinkLib,
 	dputilsLib dputilsPkg.DPUtilsLib) types.SriovInterface {
 	return &sriov{utilsHelper: utilsHelper,
@@ -52,6 +54,7 @@ func New(utilsHelper utils.CmdInterface,
 		networkHelper: networkHelper,
 		udevHelper:    udevHelper,
 		vdpaHelper:    vdpaHelper,
+		bridgeHelper:  bridgeHelper,
 		netlinkLib:    netlinkLib,
 		dputilsLib:    dputilsLib,
 	}
@@ -985,6 +988,11 @@ func (s *sriov) setEswitchModeAndNumVFs(pciAddr string, desiredEswitchMode strin
 	// always switch NIC to the legacy mode before creating VFs. This is required because some drivers
 	// may not support VF creation in the switchdev mode
 	if s.GetNicSriovMode(pciAddr) != sriovnetworkv1.ESwithModeLegacy {
+		// detach PF from the managed bridge before switching the mode,
+		// changing of eSwitch mode may fail if NIC is part of the bridge (has offloaded TC rules)
+		if err := s.detachPFFromBridge(pciAddr); err != nil {
+			return err
+		}
 		if err := s.setEswitchMode(pciAddr, sriovnetworkv1.ESwithModeLegacy); err != nil {
 			return err
 		}
@@ -995,6 +1003,19 @@ func (s *sriov) setEswitchModeAndNumVFs(pciAddr string, desiredEswitchMode strin
 
 	if desiredEswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
 		return s.setEswitchMode(pciAddr, sriovnetworkv1.ESwithModeSwitchDev)
+	}
+	return nil
+}
+
+// detach PF from the managed bridge
+func (s *sriov) detachPFFromBridge(pciAddr string) error {
+	log.Log.V(2).Info("detachPFFromBridge(): detach PF", "device", pciAddr)
+	if !vars.ManageSoftwareBridges {
+		return nil
+	}
+	if err := s.bridgeHelper.DetachInterfaceFromManagedBridge(pciAddr); err != nil {
+		log.Log.Error(err, "detachPFFromBridge(): failed to detach interface from the managed bridge", "device", pciAddr)
+		return err
 	}
 	return nil
 }
