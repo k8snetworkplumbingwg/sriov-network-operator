@@ -217,6 +217,11 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 		return false, fmt.Errorf("'linkType: ib or IB' requires 'isRdma: true'; Set 'isRdma' to (bool)'true'")
 	}
 
+	// switchdev mode can be used only with ethernet links
+	if cr.Spec.LinkType != "" && !strings.EqualFold(cr.Spec.LinkType, consts.LinkTypeETH) && cr.Spec.EswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+		return false, fmt.Errorf("'eSwitchMode: switchdev' can be used only with ethernet links")
+	}
+
 	// vdpa: deviceType must be set to 'netdevice'
 	if cr.Spec.DeviceType != consts.DeviceTypeNetDevice && (cr.Spec.VdpaType == consts.VdpaTypeVirtio || cr.Spec.VdpaType == consts.VdpaTypeVhost) {
 		return false, fmt.Errorf("'deviceType: %s' conflicts with '%s'; Set 'deviceType' to (string)'netdevice' Or Remove 'vdpaType'", cr.Spec.DeviceType, cr.Spec.VdpaType)
@@ -224,6 +229,14 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	// vdpa: device must be configured in switchdev mode
 	if (cr.Spec.VdpaType == consts.VdpaTypeVirtio || cr.Spec.VdpaType == consts.VdpaTypeVhost) && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
 		return false, fmt.Errorf("vdpa requires the device to be configured in switchdev mode")
+	}
+	// software bridge management: device must be configured in switchdev mode
+	if !cr.Spec.Bridge.IsEmpty() && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
+		return false, fmt.Errorf("software bridge management requires the device to be configured in switchdev mode")
+	}
+	// software bridge management: device can't be externally managed
+	if !cr.Spec.Bridge.IsEmpty() && cr.Spec.ExternallyManaged {
+		return false, fmt.Errorf("software bridge management can't be used when the device externally managed")
 	}
 	return true, nil
 }
