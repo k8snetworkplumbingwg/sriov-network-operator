@@ -6,6 +6,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/dputils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/ethtool"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/netlink"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/sriovnet"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/network"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/service"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/sriov"
@@ -43,6 +44,7 @@ func NewHostManager(utilsInterface utils.CmdInterface) (HostManagerInterface, er
 	dpUtils := dputils.New()
 	netlinkLib := netlink.New()
 	ethtoolLib := ethtool.New()
+	sriovnetLib := sriovnet.New()
 	k := kernel.New(utilsInterface)
 	n := network.New(utilsInterface, dpUtils, netlinkLib, ethtoolLib)
 	sv := service.New(utilsInterface)
@@ -52,7 +54,7 @@ func NewHostManager(utilsInterface utils.CmdInterface) (HostManagerInterface, er
 	if err != nil {
 		return nil, err
 	}
-	sr := sriov.New(utilsInterface, k, n, u, v, br, netlinkLib, dpUtils)
+	sr := sriov.New(utilsInterface, k, n, u, v, br, netlinkLib, dpUtils, sriovnetLib)
 
 	return &hostManager{
 		utilsInterface,

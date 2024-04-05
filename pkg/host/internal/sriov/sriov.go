@@ -19,6 +19,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	dputilsPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/dputils"
 	netlinkPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/netlink"
+	sriovnetPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/sriovnet"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/store"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
@@ -39,6 +40,7 @@ type sriov struct {
 	bridgeHelper  types.BridgeInterface
 	netlinkLib    netlinkPkg.NetlinkLib
 	dputilsLib    dputilsPkg.DPUtilsLib
+	sriovnetLib   sriovnetPkg.SriovnetLib
 }
 
 func New(utilsHelper utils.CmdInterface,
@@ -48,7 +50,8 @@ func New(utilsHelper utils.CmdInterface,
 	vdpaHelper types.VdpaInterface,
 	bridgeHelper types.BridgeInterface,
 	netlinkLib netlinkPkg.NetlinkLib,
-	dputilsLib dputilsPkg.DPUtilsLib) types.SriovInterface {
+	dputilsLib dputilsPkg.DPUtilsLib,
+	sriovnetLib sriovnetPkg.SriovnetLib) types.SriovInterface {
 	return &sriov{utilsHelper: utilsHelper,
 		kernelHelper:  kernelHelper,
 		networkHelper: networkHelper,
@@ -57,6 +60,7 @@ func New(utilsHelper utils.CmdInterface,
 		bridgeHelper:  bridgeHelper,
 		netlinkLib:    netlinkLib,
 		dputilsLib:    dputilsLib,
+		sriovnetLib:   sriovnetLib,
 	}
 }
 
@@ -111,26 +115,35 @@ func (s *sriov) ResetSriovDevice(ifaceStatus sriovnetworkv1.InterfaceExt) error 
 	return nil
 }
 
-func (s *sriov) GetVfInfo(pciAddr string, devices []*ghw.PCIDevice) sriovnetworkv1.VirtualFunction {
-	driver, err := s.dputilsLib.GetDriverName(pciAddr)
+func (s *sriov) getVfInfo(vfAddr string, pfName string, eswitchMode string, devices []*ghw.PCIDevice) sriovnetworkv1.VirtualFunction {
+	driver, err := s.dputilsLib.GetDriverName(vfAddr)
 	if err != nil {
-		log.Log.Error(err, "getVfInfo(): unable to parse device driver", "device", pciAddr)
+		log.Log.Error(err, "getVfInfo(): unable to parse device driver", "device", vfAddr)
 	}
-	id, err := s.dputilsLib.GetVFID(pciAddr)
+	id, err := s.dputilsLib.GetVFID(vfAddr)
 	if err != nil {
-		log.Log.Error(err, "getVfInfo(): unable to get VF index", "device", pciAddr)
+		log.Log.Error(err, "getVfInfo(): unable to get VF index", "device", vfAddr)
 	}
 	vf := sriovnetworkv1.VirtualFunction{
-		PciAddress: pciAddr,
+		PciAddress: vfAddr,
 		Driver:     driver,
 		VfID:       id,
-		VdpaType:   s.vdpaHelper.DiscoverVDPAType(pciAddr),
+		VdpaType:   s.vdpaHelper.DiscoverVDPAType(vfAddr),
 	}
 
-	if name := s.networkHelper.TryGetInterfaceName(pciAddr); name != "" {
+	if eswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+		repName, err := s.sriovnetLib.GetVfRepresentor(pfName, id)
+		if err != nil {
+			log.Log.Error(err, "getVfInfo(): failed to get VF representor name", "device", vfAddr)
+		} else {
+			vf.RepresentorName = repName
+		}
+	}
+
+	if name := s.networkHelper.TryGetInterfaceName(vfAddr); name != "" {
 		link, err := s.netlinkLib.LinkByName(name)
 		if err != nil {
-			log.Log.Error(err, "getVfInfo(): unable to get VF Link Object", "name", name, "device", pciAddr)
+			log.Log.Error(err, "getVfInfo(): unable to get VF Link Object", "name", name, "device", vfAddr)
 		} else {
 			vf.Name = name
 			vf.Mtu = link.Attrs().MTU
@@ -139,7 +152,7 @@ func (s *sriov) GetVfInfo(pciAddr string, devices []*ghw.PCIDevice) sriovnetwork
 	}
 
 	for _, device := range devices {
-		if pciAddr == device.Address {
+		if vfAddr == device.Address {
 			vf.Vendor = device.Vendor.ID
 			vf.DeviceID = device.Product.ID
 			break
@@ -294,7 +307,7 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 					continue
 				}
 				for _, vf := range vfs {
-					instance := s.GetVfInfo(vf, devices)
+					instance := s.getVfInfo(vf, pfNetName, iface.EswitchMode, devices)
 					iface.VFs = append(iface.VFs, instance)
 				}
 			}
