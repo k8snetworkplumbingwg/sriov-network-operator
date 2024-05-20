@@ -326,58 +326,62 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovNetworkNodeState(ctx context
 				return fmt.Errorf("couldn't create SriovNetworkNodeState: %v", err)
 			}
 			logger.Info("Created SriovNetworkNodeState for", ns.Namespace, ns.Name)
+			err = r.Get(ctx, types.NamespacedName{Namespace: ns.Namespace, Name: ns.Name}, found)
+			if err != nil {
+				return fmt.Errorf("failed to get SriovNetworkNodeState: %v", err)
+			}
 		} else {
 			return fmt.Errorf("failed to get SriovNetworkNodeState: %v", err)
 		}
-	} else {
-		if len(found.Status.Interfaces) == 0 {
-			logger.Info("SriovNetworkNodeState Status Interfaces are empty. Skip update of policies in spec",
-				"namespace", ns.Namespace, "name", ns.Name)
-			return nil
+	}
+
+	if len(found.Status.Interfaces) == 0 {
+		logger.Info("SriovNetworkNodeState Status Interfaces are empty. Skip update of policies in spec",
+			"namespace", ns.Namespace, "name", ns.Name)
+		return nil
+	}
+
+	logger.V(1).Info("SriovNetworkNodeState already exists, updating")
+	newVersion := found.DeepCopy()
+	newVersion.Spec = ns.Spec
+	newVersion.OwnerReferences = ns.OwnerReferences
+
+	// Previous Policy Priority(ppp) records the priority of previous evaluated policy in node policy list.
+	// Since node policy list is already sorted with priority number, comparing current priority with ppp shall
+	// be sufficient.
+	// ppp is set to 100 as initial value to avoid matching with the first policy in policy list, although
+	// it should not matter since the flag used in p.Apply() will only be applied when VF partition is detected.
+	ppp := 100
+	for _, p := range npl.Items {
+		// Note(adrianc): default policy is deprecated and ignored.
+		if p.Name == constants.DefaultPolicyName {
+			continue
 		}
-
-		logger.V(1).Info("SriovNetworkNodeState already exists, updating")
-		newVersion := found.DeepCopy()
-		newVersion.Spec = ns.Spec
-		newVersion.OwnerReferences = ns.OwnerReferences
-
-		// Previous Policy Priority(ppp) records the priority of previous evaluated policy in node policy list.
-		// Since node policy list is already sorted with priority number, comparing current priority with ppp shall
-		// be sufficient.
-		// ppp is set to 100 as initial value to avoid matching with the first policy in policy list, although
-		// it should not matter since the flag used in p.Apply() will only be applied when VF partition is detected.
-		ppp := 100
-		for _, p := range npl.Items {
-			// Note(adrianc): default policy is deprecated and ignored.
-			if p.Name == constants.DefaultPolicyName {
-				continue
+		if p.Selected(node) {
+			logger.Info("apply", "policy", p.Name, "node", node.Name)
+			// Merging only for policies with the same priority (ppp == p.Spec.Priority)
+			// This boolean flag controls merging of PF configuration (e.g. mtu, numvfs etc)
+			// when VF partition is configured.
+			err = p.Apply(newVersion, ppp == p.Spec.Priority)
+			if err != nil {
+				return err
 			}
-			if p.Selected(node) {
-				logger.Info("apply", "policy", p.Name, "node", node.Name)
-				// Merging only for policies with the same priority (ppp == p.Spec.Priority)
-				// This boolean flag controls merging of PF configuration (e.g. mtu, numvfs etc)
-				// when VF partition is configured.
-				err = p.Apply(newVersion, ppp == p.Spec.Priority)
-				if err != nil {
-					return err
-				}
-				// record the evaluated policy priority for next loop
-				ppp = p.Spec.Priority
-			}
+			// record the evaluated policy priority for next loop
+			ppp = p.Spec.Priority
 		}
+	}
 
-		// Note(adrianc): we check same ownerReferences since SriovNetworkNodeState
-		// was owned by a default SriovNetworkNodePolicy. if we encounter a descripancy
-		// we need to update.
-		if reflect.DeepEqual(newVersion.OwnerReferences, found.OwnerReferences) &&
-			equality.Semantic.DeepEqual(newVersion.Spec, found.Spec) {
-			logger.V(1).Info("SriovNetworkNodeState did not change, not updating")
-			return nil
-		}
-		err = r.Update(ctx, newVersion)
-		if err != nil {
-			return fmt.Errorf("couldn't update SriovNetworkNodeState: %v", err)
-		}
+	// Note(adrianc): we check same ownerReferences since SriovNetworkNodeState
+	// was owned by a default SriovNetworkNodePolicy. if we encounter a descripancy
+	// we need to update.
+	if reflect.DeepEqual(newVersion.OwnerReferences, found.OwnerReferences) &&
+		equality.Semantic.DeepEqual(newVersion.Spec, found.Spec) {
+		logger.V(1).Info("SriovNetworkNodeState did not change, not updating")
+		return nil
+	}
+	err = r.Update(ctx, newVersion)
+	if err != nil {
+		return fmt.Errorf("couldn't update SriovNetworkNodeState: %v", err)
 	}
 	return nil
 }
