@@ -12,8 +12,8 @@ SR-IOV network is an optional feature of an Openshift cluster. To make it work, 
 - Provision/upgrade SR-IOV device plugin executable on selected node.  
 - Provision/upgrade SR-IOV CNI plugin executable on selected nodes.
 - Manage configuration of SR-IOV device plugin on host.
-- Generate net-att-def CRs for SR-IOV CNI plugin
-- Supports operation in a virtualized Kubernetes deployment
+- Generate net-att-def CRs for SR-IOV CNI plugin.
+- Supports operation in a virtualized Kubernetes deployment.
   - Discovers VFs attached to the Virtual Machine (VM)
   - Does not require attached of associated PFs
   - VFs can be associated to SriovNetworks by selecting the appropriate PciAddress as the RootDevice in the SriovNetworkNodePolicy
