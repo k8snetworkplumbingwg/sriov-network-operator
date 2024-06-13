@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sriov-network-metrics-exporter-config
+  namespace: {{.Namespace}}
+data:
+  drivers.yaml: |-
+    drivers:
+      - name: ice
+        version: 0.0.0
+      - name: mlx5_core
+        version: 0.0.0
