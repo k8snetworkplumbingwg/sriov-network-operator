@@ -23,7 +23,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/pod"
 )
 
-var _ = Describe("[sriov] operator", func() {
+var _ = Describe("[sriov] operator", Ordered, func() {
 	var sriovInfos *cluster.EnabledNodes
 
 	BeforeAll(func() {
@@ -387,7 +387,44 @@ var _ = Describe("[sriov] operator", func() {
 					err = clients.Create(context.Background(), secondConfig)
 					Expect(err).To(HaveOccurred())
 				})
+
+				// https://issues.redhat.com/browse/OCPBUGS-34934
+				It("Should be possible to delete a vfio-pci policy without getting a reconfiguration", func() {
+					vfioNode, vfioNic := sriovInfos.FindOneVfioSriovDevice()
+					if vfioNode == "" {
+						Skip("skip test as no vfio-pci capable PF was found")
+					}
+					By("Using device " + vfioNic.Name + " on node " + vfioNode)
+
+					By("Creating a vfio-pci policy")
+					_, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, vfioNic.Name+"#0-1", vfioNode, 5, "resvfiopci", "vfio-pci")
+					Expect(err).ToNot(HaveOccurred())
+
+					By("Creating a netdevice policy")
+					vfiopolicy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, vfioNic.Name+"#2-4", vfioNode, 5, "resnetdevice", "netdevice")
+					Expect(err).ToNot(HaveOccurred())
+
+					By("Checking the SriovNetworkNodeState is correctly configured")
+					assertNodeStateHasVFMatching(vfioNode,
+						Fields{"VfID": Equal(0), "Driver": Equal("vfio-pci")})
+					assertNodeStateHasVFMatching(vfioNode,
+						Fields{"VfID": Equal(1), "Driver": Equal("vfio-pci")})
+					assertNodeStateHasVFMatching(vfioNode,
+						Fields{"VfID": Equal(2), "Name": Not(BeEmpty())})
+
+					By("Deleting the vfio-pci policy")
+					err = clients.Delete(context.Background(), vfiopolicy)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("Checking the SriovNetworkNodeState is not reconfiguring")
+					Consistently(func(g Gomega) {
+						nodeState, err := clients.SriovNetworkNodeStates(operatorNamespace).Get(context.Background(), vfioNode, metav1.GetOptions{})
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(nodeState.Status.SyncStatus).To(Equal("Succeeded"))
+					}, "15s", "1s").Should(Succeed())
+				})
 			})
+
 			Context("Main PF", func() {
 				It("should work when vfs are used by pods", func() {
 					if !discovery.Enabled() {
