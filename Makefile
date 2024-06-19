@@ -243,8 +243,7 @@ undeploy-k8s: export OPERATOR_EXEC=kubectl
 undeploy-k8s: undeploy
 
 deps-update:
-	go mod tidy && \
-	go mod vendor
+	go mod tidy
 
 check-deps: deps-update
 	@set +e; git diff --quiet HEAD go.sum go.mod vendor; \
