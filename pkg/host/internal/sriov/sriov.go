@@ -193,8 +193,16 @@ func (s *sriov) VFIsReady(pciAddr string) (netlink.Link, error) {
 		vfLink, err = s.netlinkLib.LinkByName(vfName)
 		if err != nil {
 			log.Log.Error(err, "VFIsReady(): unable to get VF link", "device", pciAddr)
+			return false, nil
 		}
-		return err == nil, nil
+
+		// try to get the interface name again and check if the name changed
+		vfName = s.networkHelper.TryGetInterfaceName(pciAddr)
+		if vfName != vfLink.Attrs().Name {
+			log.Log.Error(err, "VFIsReady(): VF changed name for device", "device", pciAddr, "previewsName", vfLink.Attrs().Name, "currentName", vfName)
+		}
+
+		return vfName == vfLink.Attrs().Name, nil
 	})
 	if err != nil {
 		return vfLink, err
