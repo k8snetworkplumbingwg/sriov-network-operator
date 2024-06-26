@@ -13,6 +13,19 @@ import (
 //
 // Compatibility level 1: Stable within a major release for a minimum of 12 months or 3 minor releases (whichever is longer).
 // +openshift:compatibility-gen:level=1
+// +openshift:api-approved.openshift.io=https://github.com/openshift/api/pull/495
+// +openshift:file-pattern=cvoRunLevel=0000_00,operatorName=cluster-version-operator,operatorOrdering=01
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:path=clusterversions,scope=Cluster
+// +kubebuilder:validation:XValidation:rule="has(self.spec.capabilities) && has(self.spec.capabilities.additionalEnabledCapabilities) && self.spec.capabilities.baselineCapabilitySet == 'None' && 'baremetal' in self.spec.capabilities.additionalEnabledCapabilities ? 'MachineAPI' in self.spec.capabilities.additionalEnabledCapabilities || (has(self.status) && has(self.status.capabilities) && has(self.status.capabilities.enabledCapabilities) && 'MachineAPI' in self.status.capabilities.enabledCapabilities) : true",message="the `baremetal` capability requires the `MachineAPI` capability, which is neither explicitly or implicitly enabled in this cluster, please enable the `MachineAPI` capability"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.capabilities) && has(self.spec.capabilities.additionalEnabledCapabilities) && self.spec.capabilities.baselineCapabilitySet == 'None' && 'marketplace' in self.spec.capabilities.additionalEnabledCapabilities ? 'OperatorLifecycleManager' in self.spec.capabilities.additionalEnabledCapabilities || (has(self.status) && has(self.status.capabilities) && has(self.status.capabilities.enabledCapabilities) && 'OperatorLifecycleManager' in self.status.capabilities.enabledCapabilities) : true",message="the `marketplace` capability requires the `OperatorLifecycleManager` capability, which is neither explicitly or implicitly enabled in this cluster, please enable the `OperatorLifecycleManager` capability"
+// +kubebuilder:printcolumn:name=Version,JSONPath=.status.history[?(@.state=="Completed")].version,type=string
+// +kubebuilder:printcolumn:name=Available,JSONPath=.status.conditions[?(@.type=="Available")].status,type=string
+// +kubebuilder:printcolumn:name=Progressing,JSONPath=.status.conditions[?(@.type=="Progressing")].status,type=string
+// +kubebuilder:printcolumn:name=Since,JSONPath=.status.conditions[?(@.type=="Progressing")].lastTransitionTime,type=date
+// +kubebuilder:printcolumn:name=Status,JSONPath=.status.conditions[?(@.type=="Progressing")].message,type=string
+// +kubebuilder:metadata:annotations=include.release.openshift.io/self-managed-high-availability=true
 type ClusterVersion struct {
 	metav1.TypeMeta `json:",inline"`
 
@@ -86,9 +99,32 @@ type ClusterVersionSpec struct {
 	// +optional
 	Capabilities *ClusterVersionCapabilitiesSpec `json:"capabilities,omitempty"`
 
+	// signatureStores contains the upstream URIs to verify release signatures and optional
+	// reference to a config map by name containing the PEM-encoded CA bundle.
+	//
+	// By default, CVO will use existing signature stores if this property is empty.
+	// The CVO will check the release signatures in the local ConfigMaps first. It will search for a valid signature
+	// in these stores in parallel only when local ConfigMaps did not include a valid signature.
+	// Validation will fail if none of the signature stores reply with valid signature before timeout.
+	// Setting signatureStores will replace the default signature stores with custom signature stores.
+	// Default stores can be used with custom signature stores by adding them manually.
+	//
+	// A maximum of 32 signature stores may be configured.
+	// +kubebuilder:validation:MaxItems=32
+	// +openshift:enable:FeatureGate=SignatureStores
+	// +listType=map
+	// +listMapKey=url
+	// +optional
+	SignatureStores []SignatureStore `json:"signatureStores"`
+
 	// overrides is list of overides for components that are managed by
 	// cluster version operator. Marking a component unmanaged will prevent
 	// the operator from creating or updating the object.
+	// +listType=map
+	// +listMapKey=kind
+	// +listMapKey=group
+	// +listMapKey=namespace
+	// +listMapKey=name
 	// +optional
 	Overrides []ComponentOverride `json:"overrides,omitempty"`
 }
@@ -114,6 +150,7 @@ type ClusterVersionStatus struct {
 	// Completed if the rollout completed - if an update was failing or halfway
 	// applied the state will be Partial. Only a limited amount of update history
 	// is preserved.
+	// +listType=atomic
 	// +optional
 	History []UpdateHistory `json:"history,omitempty"`
 
@@ -141,8 +178,12 @@ type ClusterVersionStatus struct {
 	// by a temporary or permanent error. Conditions are only valid for the
 	// current desiredUpdate when metadata.generation is equal to
 	// status.generation.
+	// +listType=map
+	// +listMapKey=type
+	// +patchMergeKey=type
+	// +patchStrategy=merge
 	// +optional
-	Conditions []ClusterOperatorStatusCondition `json:"conditions,omitempty"`
+	Conditions []ClusterOperatorStatusCondition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 
 	// availableUpdates contains updates recommended for this
 	// cluster. Updates which appear in conditionalUpdates but not in
@@ -151,6 +192,7 @@ type ClusterVersionStatus struct {
 	// is unavailable, or if an invalid channel has been specified.
 	// +nullable
 	// +kubebuilder:validation:Required
+	// +listType=atomic
 	// +required
 	AvailableUpdates []Release `json:"availableUpdates"`
 
@@ -247,7 +289,7 @@ const (
 )
 
 // ClusterVersionCapability enumerates optional, core cluster components.
-// +kubebuilder:validation:Enum=openshift-samples;baremetal;marketplace;Console;Insights;Storage;CSISnapshot;NodeTuning;MachineAPI;Build;DeploymentConfig
+// +kubebuilder:validation:Enum=openshift-samples;baremetal;marketplace;Console;Insights;Storage;CSISnapshot;NodeTuning;MachineAPI;Build;DeploymentConfig;ImageRegistry;OperatorLifecycleManager;CloudCredential;Ingress;CloudControllerManager
 type ClusterVersionCapability string
 
 const (
@@ -266,6 +308,9 @@ const (
 	// ClusterVersionCapabilityMarketplace manages the Marketplace operator which
 	// supplies Operator Lifecycle Manager (OLM) users with default catalogs of
 	// "optional" operators.
+	//
+	// Note that Marketplace has a hard requirement on OLM. OLM can not be disabled
+	// while Marketplace is enabled.
 	ClusterVersionCapabilityMarketplace ClusterVersionCapability = "marketplace"
 
 	// ClusterVersionCapabilityConsole manages the Console operator which
@@ -330,6 +375,37 @@ const (
 	// The following resources are taken into account:
 	// - deploymentconfigs
 	ClusterVersionCapabilityDeploymentConfig ClusterVersionCapability = "DeploymentConfig"
+
+	// ClusterVersionCapabilityImageRegistry manages the image registry which
+	// allows to distribute Docker images
+	ClusterVersionCapabilityImageRegistry ClusterVersionCapability = "ImageRegistry"
+
+	// ClusterVersionCapabilityOperatorLifecycleManager manages the Operator Lifecycle Manager
+	// which itself manages the lifecycle of operators
+	ClusterVersionCapabilityOperatorLifecycleManager ClusterVersionCapability = "OperatorLifecycleManager"
+
+	// ClusterVersionCapabilityCloudCredential manages credentials for cloud providers
+	// in openshift cluster
+	ClusterVersionCapabilityCloudCredential ClusterVersionCapability = "CloudCredential"
+
+	// ClusterVersionCapabilityIngress manages the cluster ingress operator
+	// which is responsible for running the ingress controllers (including OpenShift router).
+	//
+	// The following CRDs are part of the capability as well:
+	// IngressController
+	// DNSRecord
+	// GatewayClass
+	// Gateway
+	// HTTPRoute
+	// ReferenceGrant
+	//
+	// WARNING: This capability cannot be disabled on the standalone OpenShift.
+	ClusterVersionCapabilityIngress ClusterVersionCapability = "Ingress"
+
+	// ClusterVersionCapabilityCloudControllerManager manages various Cloud Controller
+	// Managers deployed on top of OpenShift. They help you to work with cloud
+	// provider API and embeds cloud-specific control logic.
+	ClusterVersionCapabilityCloudControllerManager ClusterVersionCapability = "CloudControllerManager"
 )
 
 // KnownClusterVersionCapabilities includes all known optional, core cluster components.
@@ -345,10 +421,15 @@ var KnownClusterVersionCapabilities = []ClusterVersionCapability{
 	ClusterVersionCapabilityMachineAPI,
 	ClusterVersionCapabilityBuild,
 	ClusterVersionCapabilityDeploymentConfig,
+	ClusterVersionCapabilityImageRegistry,
+	ClusterVersionCapabilityOperatorLifecycleManager,
+	ClusterVersionCapabilityCloudCredential,
+	ClusterVersionCapabilityIngress,
+	ClusterVersionCapabilityCloudControllerManager,
 }
 
 // ClusterVersionCapabilitySet defines sets of cluster version capabilities.
-// +kubebuilder:validation:Enum=None;v4.11;v4.12;v4.13;v4.14;vCurrent
+// +kubebuilder:validation:Enum=None;v4.11;v4.12;v4.13;v4.14;v4.15;v4.16;vCurrent
 type ClusterVersionCapabilitySet string
 
 const (
@@ -380,6 +461,18 @@ const (
 	// version of OpenShift is installed.
 	ClusterVersionCapabilitySet4_14 ClusterVersionCapabilitySet = "v4.14"
 
+	// ClusterVersionCapabilitySet4_15 is the recommended set of
+	// optional capabilities to enable for the 4.15 version of
+	// OpenShift.  This list will remain the same no matter which
+	// version of OpenShift is installed.
+	ClusterVersionCapabilitySet4_15 ClusterVersionCapabilitySet = "v4.15"
+
+	// ClusterVersionCapabilitySet4_16 is the recommended set of
+	// optional capabilities to enable for the 4.16 version of
+	// OpenShift.  This list will remain the same no matter which
+	// version of OpenShift is installed.
+	ClusterVersionCapabilitySet4_16 ClusterVersionCapabilitySet = "v4.16"
+
 	// ClusterVersionCapabilitySetCurrent is the recommended set
 	// of optional capabilities to enable for the cluster's
 	// current version of OpenShift.
@@ -393,6 +486,7 @@ var ClusterVersionCapabilitySets = map[ClusterVersionCapabilitySet][]ClusterVers
 		ClusterVersionCapabilityBaremetal,
 		ClusterVersionCapabilityMarketplace,
 		ClusterVersionCapabilityOpenShiftSamples,
+		ClusterVersionCapabilityMachineAPI,
 	},
 	ClusterVersionCapabilitySet4_12: {
 		ClusterVersionCapabilityBaremetal,
@@ -402,6 +496,7 @@ var ClusterVersionCapabilitySets = map[ClusterVersionCapabilitySet][]ClusterVers
 		ClusterVersionCapabilityStorage,
 		ClusterVersionCapabilityOpenShiftSamples,
 		ClusterVersionCapabilityCSISnapshot,
+		ClusterVersionCapabilityMachineAPI,
 	},
 	ClusterVersionCapabilitySet4_13: {
 		ClusterVersionCapabilityBaremetal,
@@ -412,6 +507,7 @@ var ClusterVersionCapabilitySets = map[ClusterVersionCapabilitySet][]ClusterVers
 		ClusterVersionCapabilityOpenShiftSamples,
 		ClusterVersionCapabilityCSISnapshot,
 		ClusterVersionCapabilityNodeTuning,
+		ClusterVersionCapabilityMachineAPI,
 	},
 	ClusterVersionCapabilitySet4_14: {
 		ClusterVersionCapabilityBaremetal,
@@ -425,6 +521,41 @@ var ClusterVersionCapabilitySets = map[ClusterVersionCapabilitySet][]ClusterVers
 		ClusterVersionCapabilityMachineAPI,
 		ClusterVersionCapabilityBuild,
 		ClusterVersionCapabilityDeploymentConfig,
+		ClusterVersionCapabilityImageRegistry,
+	},
+	ClusterVersionCapabilitySet4_15: {
+		ClusterVersionCapabilityBaremetal,
+		ClusterVersionCapabilityConsole,
+		ClusterVersionCapabilityInsights,
+		ClusterVersionCapabilityMarketplace,
+		ClusterVersionCapabilityStorage,
+		ClusterVersionCapabilityOpenShiftSamples,
+		ClusterVersionCapabilityCSISnapshot,
+		ClusterVersionCapabilityNodeTuning,
+		ClusterVersionCapabilityMachineAPI,
+		ClusterVersionCapabilityBuild,
+		ClusterVersionCapabilityDeploymentConfig,
+		ClusterVersionCapabilityImageRegistry,
+		ClusterVersionCapabilityOperatorLifecycleManager,
+		ClusterVersionCapabilityCloudCredential,
+	},
+	ClusterVersionCapabilitySet4_16: {
+		ClusterVersionCapabilityBaremetal,
+		ClusterVersionCapabilityConsole,
+		ClusterVersionCapabilityInsights,
+		ClusterVersionCapabilityMarketplace,
+		ClusterVersionCapabilityStorage,
+		ClusterVersionCapabilityOpenShiftSamples,
+		ClusterVersionCapabilityCSISnapshot,
+		ClusterVersionCapabilityNodeTuning,
+		ClusterVersionCapabilityMachineAPI,
+		ClusterVersionCapabilityBuild,
+		ClusterVersionCapabilityDeploymentConfig,
+		ClusterVersionCapabilityImageRegistry,
+		ClusterVersionCapabilityOperatorLifecycleManager,
+		ClusterVersionCapabilityCloudCredential,
+		ClusterVersionCapabilityIngress,
+		ClusterVersionCapabilityCloudControllerManager,
 	},
 	ClusterVersionCapabilitySetCurrent: {
 		ClusterVersionCapabilityBaremetal,
@@ -438,6 +569,11 @@ var ClusterVersionCapabilitySets = map[ClusterVersionCapabilitySet][]ClusterVers
 		ClusterVersionCapabilityMachineAPI,
 		ClusterVersionCapabilityBuild,
 		ClusterVersionCapabilityDeploymentConfig,
+		ClusterVersionCapabilityImageRegistry,
+		ClusterVersionCapabilityOperatorLifecycleManager,
+		ClusterVersionCapabilityCloudCredential,
+		ClusterVersionCapabilityIngress,
+		ClusterVersionCapabilityCloudControllerManager,
 	},
 }
 
@@ -577,6 +713,7 @@ type Release struct {
 
 	// channels is the set of Cincinnati channels to which the release
 	// currently belongs.
+	// +listType=set
 	// +optional
 	Channels []string `json:"channels,omitempty"`
 }
@@ -612,7 +749,6 @@ type ConditionalUpdate struct {
 
 	// conditions represents the observations of the conditional update's
 	// current status. Known types are:
-	// * Evaluating, for whether the cluster-version operator will attempt to evaluate any risks[].matchingRules.
 	// * Recommended, for whether the update is recommended for the current cluster.
 	// +patchMergeKey=type
 	// +patchStrategy=merge
@@ -706,4 +842,27 @@ type ClusterVersionList struct {
 	metav1.ListMeta `json:"metadata"`
 
 	Items []ClusterVersion `json:"items"`
+}
+
+// SignatureStore represents the URL of custom Signature Store
+type SignatureStore struct {
+
+	// url contains the upstream custom signature store URL.
+	// url should be a valid absolute http/https URI of an upstream signature store as per rfc1738.
+	// This must be provided and cannot be empty.
+	//
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="isURL(self)",message="url must be a valid absolute URL"
+	// +kubebuilder:validation:Required
+	URL string `json:"url"`
+
+	// ca is an optional reference to a config map by name containing the PEM-encoded CA bundle.
+	// It is used as a trust anchor to validate the TLS certificate presented by the remote server.
+	// The key "ca.crt" is used to locate the data.
+	// If specified and the config map or expected key is not found, the signature store is not honored.
+	// If the specified ca data is not valid, the signature store is not honored.
+	// If empty, we fall back to the CA configured via Proxy, which is appended to the default system roots.
+	// The namespace for this config map is openshift-config.
+	// +optional
+	CA ConfigMapNameReference `json:"ca"`
 }

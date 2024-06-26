@@ -12,6 +12,8 @@ func New() DPUtilsLib {
 type DPUtilsLib interface {
 	// GetNetNames returns host net interface names as string for a PCI device from its pci address
 	GetNetNames(pciAddr string) ([]string, error)
+	// GetNetIndex returns host net interface index as int for a PCI device from its pci address
+	GetNetIndex(pciAddr string) (int, error)
 	// GetDriverName returns current driver attached to a pci device from its pci address
 	GetDriverName(pciAddr string) (string, error)
 	// GetVFID returns VF ID index (within specific PF) based on PCI address
@@ -35,6 +37,10 @@ type libWrapper struct{}
 // GetNetNames returns host net interface names as string for a PCI device from its pci address
 func (w *libWrapper) GetNetNames(pciAddr string) ([]string, error) {
 	return dputils.GetNetNames(pciAddr)
+}
+
+func (w *libWrapper) GetNetIndex(pciAddr string) (int, error) {
+	return dputils.GetNetIndex(pciAddr)
 }
 
 // GetDriverName returns current driver attached to a pci device from its pci address
