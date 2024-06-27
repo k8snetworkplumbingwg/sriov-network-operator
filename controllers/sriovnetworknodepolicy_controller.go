@@ -196,7 +196,7 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 		For(&sriovnetworkv1.SriovNetworkNodePolicy{}).
 		Watches(&corev1.Node{}, nodeEvenHandler).
 		Watches(&sriovnetworkv1.SriovNetworkNodePolicy{}, delayedEventHandler).
-		WatchesRawSource(&source.Channel{Source: eventChan}, delayedEventHandler).
+		WatchesRawSource(source.Channel(eventChan, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
 

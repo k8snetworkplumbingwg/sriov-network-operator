@@ -48,6 +48,21 @@ func (mr *MockDPUtilsLibMockRecorder) GetDriverName(pciAddr interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDriverName", reflect.TypeOf((*MockDPUtilsLib)(nil).GetDriverName), pciAddr)
 }
 
+// GetNetIndex mocks base method.
+func (m *MockDPUtilsLib) GetNetIndex(pciAddr string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetNetIndex", pciAddr)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetNetIndex indicates an expected call of GetNetIndex.
+func (mr *MockDPUtilsLibMockRecorder) GetNetIndex(pciAddr interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetNetIndex", reflect.TypeOf((*MockDPUtilsLib)(nil).GetNetIndex), pciAddr)
+}
+
 // GetNetNames mocks base method.
 func (m *MockDPUtilsLib) GetNetNames(pciAddr string) ([]string, error) {
 	m.ctrl.T.Helper()

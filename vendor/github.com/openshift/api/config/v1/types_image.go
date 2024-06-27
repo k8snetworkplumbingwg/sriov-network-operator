@@ -15,6 +15,11 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 //
 // Compatibility level 1: Stable within a major release for a minimum of 12 months or 3 minor releases (whichever is longer).
 // +openshift:compatibility-gen:level=1
+// +openshift:api-approved.openshift.io=https://github.com/openshift/api/pull/470
+// +openshift:file-pattern=cvoRunLevel=0000_10,operatorName=config-operator,operatorOrdering=01
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:path=images,scope=Cluster
+// +kubebuilder:subresource:status
 type Image struct {
 	metav1.TypeMeta `json:",inline"`
 
@@ -64,12 +69,10 @@ type ImageSpec struct {
 }
 
 type ImageStatus struct {
-
 	// internalRegistryHostname sets the hostname for the default internal image
 	// registry. The value must be in "hostname[:port]" format.
 	// This value is set by the image registry operator which controls the internal registry
-	// hostname. For backward compatibility, users can still use OPENSHIFT_DEFAULT_REGISTRY
-	// environment variable but this setting overrides the environment variable.
+	// hostname.
 	// +optional
 	InternalRegistryHostname string `json:"internalRegistryHostname,omitempty"`
 

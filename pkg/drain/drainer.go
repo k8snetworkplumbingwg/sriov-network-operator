@@ -77,7 +77,7 @@ func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrai
 	var lastErr error
 
 	reqLogger.Info("drainNode(): Start draining")
-	if err = wait.ExponentialBackoff(backoff, func() (bool, error) {
+	if err = wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
 		err := drain.RunCordonOrUncordon(drainHelper, node, true)
 		if err != nil {
 			lastErr = err
@@ -143,7 +143,7 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 		DeleteEmptyDirData:  true,
 		GracePeriodSeconds:  -1,
 		Timeout:             90 * time.Second,
-		OnPodDeletedOrEvicted: func(pod *corev1.Pod, usingEviction bool) {
+		OnPodDeletionOrEvictionFinished: func(pod *corev1.Pod, usingEviction bool, err error) {
 			verbStr := constants.DrainDeleted
 			if usingEviction {
 				verbStr = constants.DrainEvicted

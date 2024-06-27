@@ -75,6 +75,7 @@ func (n *network) TryToGetVirtualInterfaceName(pciAddr string) string {
 func (n *network) TryGetInterfaceName(pciAddr string) string {
 	names, err := n.dputilsLib.GetNetNames(pciAddr)
 	if err != nil || len(names) < 1 {
+		log.Log.Error(err, "TryGetInterfaceName(): failed to get interface name")
 		return ""
 	}
 	netDevName := names[0]
@@ -95,8 +96,18 @@ func (n *network) TryGetInterfaceName(pciAddr string) string {
 		return name
 	}
 
-	log.Log.V(2).Info("tryGetInterfaceName()", "name", netDevName)
+	log.Log.V(2).Info("TryGetInterfaceName()", "name", netDevName)
 	return netDevName
+}
+
+// TryGetInterfaceName tries to find the SR-IOV virtual interface index base on pci address
+func (n *network) TryGetInterfaceIndex(pciAddr string) int {
+	ifIndex, err := n.dputilsLib.GetNetIndex(pciAddr)
+	if err != nil {
+		log.Log.Error(err, "TryGetInterfaceIndex(): failed to get interface index")
+		return -1
+	}
+	return ifIndex
 }
 
 func (n *network) GetPhysSwitchID(name string) (string, error) {

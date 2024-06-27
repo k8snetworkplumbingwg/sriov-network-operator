@@ -28,6 +28,9 @@ import (
 
 var (
 	sysBusPci = "/sys/bus/pci/devices"
+	// golangci-lint doesn't see it is used in the testing.go
+	//nolint: unused
+	sysBusAux = "/sys/bus/auxiliary/devices"
 	devDir    = "/dev"
 )
 
@@ -35,6 +38,11 @@ const (
 	totalVfFile          = "sriov_totalvfs"
 	configuredVfFile     = "sriov_numvfs"
 	eswitchModeSwitchdev = "switchdev"
+	classIDBaseInt       = 16
+	classIDBitSize       = 64
+	maxVendorName        = 20
+	maxProductName       = 40
+	ellipsis             = "..."
 )
 
 // DetectPluginWatchMode returns true if plugins registry directory exist
@@ -95,6 +103,30 @@ func GetPfName(pciAddr string) (string, error) {
 		return files[0].Name(), nil
 	}
 	return "", fmt.Errorf("the PF name is not found for device %s", pciAddr)
+}
+
+// GetPfNameFromAuxDev returns netdevice name of the PF associated with the
+// provided auxiliary device name.
+func GetPfNameFromAuxDev(auxDevName string) (string, error) {
+	pfName, err := GetSriovnetProvider().GetUplinkRepresentorFromAux(auxDevName)
+	if err != nil {
+		// fallback, try to get PF netdev name from PF PCI Address
+		pfAddr, err := GetSriovnetProvider().GetPfPciFromAux(auxDevName)
+		if err != nil {
+			return "", err
+		}
+		netdevs, err := GetNetNames(pfAddr)
+		if err != nil {
+			return "", err
+		}
+
+		if len(netdevs) == 0 {
+			return "", fmt.Errorf("no netdevs for PF address %s", pfAddr)
+		}
+
+		return netdevs[0], nil
+	}
+	return pfName, err
 }
 
 // IsSriovPF check if a pci device SRIOV capable given its pci address
@@ -266,7 +298,7 @@ func SriovConfigured(addr string) bool {
 // ValidResourceName returns true if it contains permitted characters otherwise false
 func ValidResourceName(name string) bool {
 	// name regex
-	var validString = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	var validString = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	return validString.MatchString(name)
 }
 
@@ -365,6 +397,38 @@ func GetNetNames(pciAddr string) ([]string, error) {
 	return names, nil
 }
 
+// GetNetIndex returns host net interface index as int for a PCI device from its pci address
+func GetNetIndex(pciAddr string) (int, error) {
+	// get interface name
+	names, err := GetNetNames(pciAddr)
+	if err != nil {
+		return -1, err
+	}
+
+	// check we have exactly one interface name
+	if len(names) != 1 {
+		return -1, fmt.Errorf("GetNetIndex(): unexpected number if interfaces founded: %v", len(names))
+	}
+
+	netDir := filepath.Join(sysBusPci, pciAddr, "net", names[0])
+	if _, err := os.Lstat(netDir); err != nil {
+		return -1, fmt.Errorf("GetNetIndex(): no interface name directory under pci device %s: %q", pciAddr, err)
+	}
+
+	// read the ifindex file from the interface folder
+	indexFile := filepath.Join(netDir, "ifindex")
+	ifIndex, err := os.ReadFile(indexFile)
+	if err != nil {
+		return -1, fmt.Errorf("GetNetIndex(): failed to read ifindex file %s: %q", indexFile, err)
+	}
+
+	intIfIndex, err := strconv.Atoi(strings.TrimSpace(string(ifIndex)))
+	if err != nil {
+		return -1, fmt.Errorf("GetNetIndex(): failed to parse ifindex file content %s: %q", string(ifIndex), err)
+	}
+	return intIfIndex, nil
+}
+
 // GetDriverName returns current driver attached to a pci device from its pci address
 func GetDriverName(pciAddr string) (string, error) {
 	driverLink := filepath.Join(sysBusPci, pciAddr, "driver")
@@ -373,6 +437,24 @@ func GetDriverName(pciAddr string) (string, error) {
 		return "", fmt.Errorf("error getting driver info for device %s %v", pciAddr, err)
 	}
 	return filepath.Base(driverInfo), nil
+}
+
+// GetAcpiIndex returns the ACPI index attached to a pci device from its pci address
+func GetAcpiIndex(pciAddr string) (string, error) {
+	acpiIndexLink := filepath.Join(sysBusPci, pciAddr, "acpi_index")
+	_, err := os.Stat(acpiIndexLink)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("error getting ACPI index for device %s %v", pciAddr, err)
+	}
+
+	acpiIndex, err := os.ReadFile(acpiIndexLink)
+	if err != nil {
+		return "", fmt.Errorf("error getting ACPI index for device %s %v", pciAddr, err)
+	}
+	return string(bytes.TrimSpace(acpiIndex)), nil
 }
 
 // GetVFID returns VF ID index (within specific PF) based on PCI address
@@ -422,4 +504,92 @@ func GetPfEswitchMode(pciAddr string) (string, error) {
 		return "", err
 	}
 	return devLinkDeviceAttrs.Mode, nil
+}
+
+// HasDefaultRoute returns true if PCI network device is default route interface
+func HasDefaultRoute(pciAddr string) (bool, error) {
+	// Get net interface name
+	ifNames, err := GetNetNames(pciAddr)
+	if err != nil {
+		return false, fmt.Errorf("error trying get net device name for device %s", pciAddr)
+	}
+
+	if len(ifNames) > 0 { // there's at least one interface name found
+		for _, ifName := range ifNames {
+			routes, err := GetNetlinkProvider().GetIPv4RouteList(ifName) // IPv6 routes: all interface has at least one link local route entry
+			if err != nil {
+				glog.Errorf("failed to get routes for interface: %s, %q", ifName, err)
+				continue
+			}
+			for _, r := range routes {
+				if r.Dst == nil {
+					glog.Infof("excluding interface %s:  default route found: %+v", ifName, r)
+					return true, nil
+				}
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// NormalizeVendorName returns vendor name cropped to fit into the length of maxVendorName if it is bigger
+func NormalizeVendorName(vendor string) string {
+	vendorName := vendor
+	if len(vendor) > maxVendorName {
+		vendorName = string([]byte(vendorName)[0:17]) + ellipsis
+	}
+	return vendorName
+}
+
+// NormalizeProductName returns product name cropped to fit into the length of maxProductName if it is bigger
+func NormalizeProductName(product string) string {
+	productName := product
+	if len(product) > maxProductName {
+		productName = string([]byte(productName)[0:37]) + ellipsis
+	}
+	return productName
+}
+
+// ParseDeviceID returns device ID parsed from the string as 64bit integer
+func ParseDeviceID(deviceID string) (int64, error) {
+	return strconv.ParseInt(deviceID, classIDBaseInt, classIDBitSize)
+}
+
+// ParseAuxDeviceType returns auxiliary device type parsed from device ID
+func ParseAuxDeviceType(deviceID string) string {
+	chunks := strings.Split(deviceID, ".")
+	// auxiliary device name is of form <driver_name>.<kind_of_a_type>.<id> where id is an unsigned integer
+	//nolint: gomnd
+	if len(chunks) == 3 {
+		if id, err := strconv.Atoi(chunks[2]); err == nil && id >= 0 {
+			return chunks[1]
+		}
+	}
+	// not an auxiliary device
+	return ""
+}
+
+// isInfinibandDevice checks if a pci device has infiniband config folder
+func isInfinibandDevice(pciAddr string) bool {
+	totalVfFilePath := filepath.Join(sysBusPci, pciAddr, "infiniband")
+	if _, err := os.Stat(totalVfFilePath); err != nil {
+		return false
+	}
+	return true
+}
+
+// GetPKey returns IB Partition Key for the given IB device
+// If device is not IB device or has no PKey then it will return empty string
+func GetPKey(pciAddr string) (string, error) {
+	if !isInfinibandDevice(pciAddr) {
+		return "", nil
+	}
+
+	pKey, err := GetSriovnetProvider().GetDefaultPKeyFromPci(pciAddr)
+	if err != nil {
+		return "", err
+	}
+
+	return pKey, nil
 }

@@ -189,12 +189,13 @@ func (s *sriov) VFIsReady(pciAddr string) (netlink.Link, error) {
 	var err error
 	var vfLink netlink.Link
 	err = wait.PollImmediate(time.Second, 10*time.Second, func() (bool, error) {
-		vfName := s.networkHelper.TryGetInterfaceName(pciAddr)
-		vfLink, err = s.netlinkLib.LinkByName(vfName)
+		vfIndex := s.networkHelper.TryGetInterfaceIndex(pciAddr)
+		vfLink, err = s.netlinkLib.LinkByIndex(vfIndex)
 		if err != nil {
 			log.Log.Error(err, "VFIsReady(): unable to get VF link", "device", pciAddr)
+			return false, nil
 		}
-		return err == nil, nil
+		return true, nil
 	})
 	if err != nil {
 		return vfLink, err

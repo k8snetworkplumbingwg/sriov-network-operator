@@ -970,6 +970,20 @@ func (mr *MockHostManagerInterfaceMockRecorder) TryEnableVhostNet() *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryEnableVhostNet", reflect.TypeOf((*MockHostManagerInterface)(nil).TryEnableVhostNet))
 }
 
+// TryGetInterfaceIndex mocks base method.
+func (m *MockHostManagerInterface) TryGetInterfaceIndex(pciAddr string) int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TryGetInterfaceIndex", pciAddr)
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// TryGetInterfaceIndex indicates an expected call of TryGetInterfaceIndex.
+func (mr *MockHostManagerInterfaceMockRecorder) TryGetInterfaceIndex(pciAddr interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryGetInterfaceIndex", reflect.TypeOf((*MockHostManagerInterface)(nil).TryGetInterfaceIndex), pciAddr)
+}
+
 // TryGetInterfaceName mocks base method.
 func (m *MockHostManagerInterface) TryGetInterfaceName(pciAddr string) string {
 	m.ctrl.T.Helper()

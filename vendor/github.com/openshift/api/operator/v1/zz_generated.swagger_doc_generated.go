@@ -420,10 +420,11 @@ func (AzureDiskEncryptionSet) SwaggerDoc() map[string]string {
 
 var map_CSIDriverConfigSpec = map[string]string{
 	"":           "CSIDriverConfigSpec defines configuration spec that can be used to optionally configure a specific CSI Driver.",
-	"driverType": "driverType indicates type of CSI driver for which the driverConfig is being applied to. Valid values are: AWS, Azure, GCP, vSphere and omitted. Consumers should treat unknown values as a NO-OP.",
+	"driverType": "driverType indicates type of CSI driver for which the driverConfig is being applied to. Valid values are: AWS, Azure, GCP, IBMCloud, vSphere and omitted. Consumers should treat unknown values as a NO-OP.",
 	"aws":        "aws is used to configure the AWS CSI driver.",
 	"azure":      "azure is used to configure the Azure CSI driver.",
 	"gcp":        "gcp is used to configure the GCP CSI driver.",
+	"ibmcloud":   "ibmcloud is used to configure the IBM Cloud CSI driver.",
 	"vSphere":    "vsphere is used to configure the vsphere CSI driver.",
 }
 
@@ -490,9 +491,21 @@ func (GCPKMSKeyReference) SwaggerDoc() map[string]string {
 	return map_GCPKMSKeyReference
 }
 
+var map_IBMCloudCSIDriverConfigSpec = map[string]string{
+	"":                 "IBMCloudCSIDriverConfigSpec defines the properties that can be configured for the IBM Cloud CSI driver.",
+	"encryptionKeyCRN": "encryptionKeyCRN is the IBM Cloud CRN of the customer-managed root key to use for disk encryption of volumes for the default storage classes.",
+}
+
+func (IBMCloudCSIDriverConfigSpec) SwaggerDoc() map[string]string {
+	return map_IBMCloudCSIDriverConfigSpec
+}
+
 var map_VSphereCSIDriverConfigSpec = map[string]string{
-	"":                   "VSphereCSIDriverConfigSpec defines properties that can be configured for vsphere CSI driver.",
-	"topologyCategories": "topologyCategories indicates tag categories with which vcenter resources such as hostcluster or datacenter were tagged with. If cluster Infrastructure object has a topology, values specified in Infrastructure object will be used and modifications to topologyCategories will be rejected.",
+	"":                                 "VSphereCSIDriverConfigSpec defines properties that can be configured for vsphere CSI driver.",
+	"topologyCategories":               "topologyCategories indicates tag categories with which vcenter resources such as hostcluster or datacenter were tagged with. If cluster Infrastructure object has a topology, values specified in Infrastructure object will be used and modifications to topologyCategories will be rejected.",
+	"globalMaxSnapshotsPerBlockVolume": "globalMaxSnapshotsPerBlockVolume is a global configuration parameter that applies to volumes on all kinds of datastores. If omitted, the platform chooses a default, which is subject to change over time, currently that default is 3. Snapshots can not be disabled using this parameter. Increasing number of snapshots above 3 can have negative impact on performance, for more details see: https://kb.vmware.com/s/article/1025279 Volume snapshot documentation: https://docs.vmware.com/en/VMware-vSphere-Container-Storage-Plug-in/3.0/vmware-vsphere-csp-getting-started/GUID-E0B41C69-7EEB-450F-A73D-5FD2FF39E891.html",
+	"granularMaxSnapshotsPerBlockVolumeInVSAN": "granularMaxSnapshotsPerBlockVolumeInVSAN is a granular configuration parameter on vSAN datastore only. It overrides GlobalMaxSnapshotsPerBlockVolume if set, while it falls back to the global constraint if unset. Snapshots for VSAN can not be disabled using this parameter.",
+	"granularMaxSnapshotsPerBlockVolumeInVVOL": "granularMaxSnapshotsPerBlockVolumeInVVOL is a granular configuration parameter on Virtual Volumes datastore only. It overrides GlobalMaxSnapshotsPerBlockVolume if set, while it falls back to the global constraint if unset. Snapshots for VVOL can not be disabled using this parameter.",
 }
 
 func (VSphereCSIDriverConfigSpec) SwaggerDoc() map[string]string {
@@ -645,7 +658,7 @@ func (Server) SwaggerDoc() map[string]string {
 }
 
 var map_Upstream = map[string]string{
-	"":        "Upstream can either be of type SystemResolvConf, or of type Network.\n\n* For an Upstream of type SystemResolvConf, no further fields are necessary:\n  The upstream will be configured to use /etc/resolv.conf.\n* For an Upstream of type Network, a NetworkResolver field needs to be defined\n  with an IP address or IP:port if the upstream listens on a port other than 53.",
+	"":        "Upstream can either be of type SystemResolvConf, or of type Network.\n\n  - For an Upstream of type SystemResolvConf, no further fields are necessary:\n    The upstream will be configured to use /etc/resolv.conf.\n  - For an Upstream of type Network, a NetworkResolver field needs to be defined\n    with an IP address or IP:port if the upstream listens on a port other than 53.",
 	"type":    "Type defines whether this upstream contains an IP/IP:port resolver or the local /etc/resolv.conf. Type accepts 2 possible values: SystemResolvConf or Network.\n\n* When SystemResolvConf is used, the Upstream structure does not require any further fields to be defined:\n  /etc/resolv.conf will be used\n* When Network is used, the Upstream structure must contain at least an Address",
 	"address": "Address must be defined when Type is set to Network. It will be ignored otherwise. It must be a valid ipv4 or ipv6 address.",
 	"port":    "Port may be defined when Type is set to Network. It will be ignored otherwise. Port must be between 65535",
@@ -684,6 +697,15 @@ var map_EtcdList = map[string]string{
 
 func (EtcdList) SwaggerDoc() map[string]string {
 	return map_EtcdList
+}
+
+var map_EtcdSpec = map[string]string{
+	"controlPlaneHardwareSpeed": "HardwareSpeed allows user to change the etcd tuning profile which configures the latency parameters for heartbeat interval and leader election timeouts allowing the cluster to tolerate longer round-trip-times between etcd members. Valid values are \"\", \"Standard\" and \"Slower\".\n\t\"\" means no opinion and the platform is left to choose a reasonable default\n\twhich is subject to change without notice.",
+	"backendQuotaGiB":           "backendQuotaGiB sets the etcd backend storage size limit in gibibytes. The value should be an integer not less than 8 and not more than 32. When not specified, the default value is 8.",
+}
+
+func (EtcdSpec) SwaggerDoc() map[string]string {
+	return map_EtcdSpec
 }
 
 var map_AWSClassicLoadBalancerParameters = map[string]string{
@@ -981,6 +1003,7 @@ var map_IngressControllerTuningOptions = map[string]string{
 	"serverTimeout":               "serverTimeout defines how long a connection will be held open while waiting for a server/backend response.\n\nIf unset, the default timeout is 30s",
 	"serverFinTimeout":            "serverFinTimeout defines how long a connection will be held open while waiting for the server/backend response to the client closing the connection.\n\nIf unset, the default timeout is 1s",
 	"tunnelTimeout":               "tunnelTimeout defines how long a tunnel connection (including websockets) will be held open while the tunnel is idle.\n\nIf unset, the default timeout is 1h",
+	"connectTimeout":              "ConnectTimeout defines the maximum time to wait for a connection attempt to a server/backend to succeed.\n\nThis field expects an unsigned duration string of decimal numbers, each with optional fraction and a unit suffix, e.g. \"300ms\", \"1.5h\" or \"2h45m\". Valid time units are \"ns\", \"us\" (or \"µs\" U+00B5 or \"μs\" U+03BC), \"ms\", \"s\", \"m\", \"h\".\n\nWhen omitted, this means the user has no opinion and the platform is left to choose a reasonable default. This default is subject to change over time. The current default is 5s.",
 	"tlsInspectDelay":             "tlsInspectDelay defines how long the router can hold data to find a matching route.\n\nSetting this too short can cause the router to fall back to the default certificate for edge-terminated or reencrypt routes even when a better matching certificate could be used.\n\nIf unset, the default inspect delay is 5s",
 	"healthCheckInterval":         "healthCheckInterval defines how long the router waits between two consecutive health checks on its configured backends.  This value is applied globally as a default for all routes, but may be overridden per-route by the route annotation \"router.openshift.io/haproxy.health.check.interval\".\n\nExpects an unsigned duration string of decimal numbers, each with optional fraction and a unit suffix, eg \"300ms\", \"1.5h\" or \"2h45m\". Valid time units are \"ns\", \"us\" (or \"µs\" U+00B5 or \"μs\" U+03BC), \"ms\", \"s\", \"m\", \"h\".\n\nSetting this to less than 5s can cause excess traffic due to too frequent TCP health checks and accompanying SYN packet storms.  Alternatively, setting this too high can result in increased latency, due to backend servers that are no longer available, but haven't yet been detected as such.\n\nAn empty or zero healthCheckInterval means no opinion and IngressController chooses a default, which is subject to change over time. Currently the default healthCheckInterval value is 5s.\n\nCurrently the minimum allowed value is 1s and the maximum allowed value is 2147483647ms (24.85 days).  Both are subject to change over time.",
 	"maxConnections":              "maxConnections defines the maximum number of simultaneous connections that can be established per HAProxy process. Increasing this value allows each ingress controller pod to handle more connections but at the cost of additional system resources being consumed.\n\nPermitted values are: empty, 0, -1, and the range 2000-2000000.\n\nIf this field is empty or 0, the IngressController will use the default value of 50000, but the default is subject to change in future releases.\n\nIf the value is -1 then HAProxy will dynamically compute a maximum value based on the available ulimits in the running container. Selecting -1 (i.e., auto) will result in a large value being computed (~520000 on OpenShift >=4.10 clusters) and therefore each HAProxy process will incur significant memory usage compared to the current default of 50000.\n\nSetting a value that is greater than the current operating system limit will prevent the HAProxy process from starting.\n\nIf you choose a discrete value (e.g., 750000) and the router pod is migrated to a new node, there's no guarantee that that new node has identical ulimits configured. In such a scenario the pod would fail to start. If you have nodes with different ulimits configured (e.g., different tuned profiles) and you choose a discrete value then the guidance is to use -1 and let the value be computed dynamically at runtime.\n\nYou can monitor memory usage for router containers with the following metric: 'container_memory_working_set_bytes{container=\"router\",namespace=\"openshift-ingress\"}'.\n\nYou can monitor memory usage of individual HAProxy processes in router containers with the following metric: 'container_memory_working_set_bytes{container=\"router\",namespace=\"openshift-ingress\"}/container_processes{container=\"router\",namespace=\"openshift-ingress\"}'.",
@@ -1235,6 +1258,209 @@ func (KubeStorageVersionMigratorList) SwaggerDoc() map[string]string {
 	return map_KubeStorageVersionMigratorList
 }
 
+var map_MachineConfiguration = map[string]string{
+	"":         "MachineConfiguration provides information to configure an operator to manage Machine Configuration.\n\nCompatibility level 1: Stable within a major release for a minimum of 12 months or 3 minor releases (whichever is longer).",
+	"metadata": "metadata is the standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata",
+	"spec":     "spec is the specification of the desired behavior of the Machine Config Operator",
+	"status":   "status is the most recently observed status of the Machine Config Operator",
+}
+
+func (MachineConfiguration) SwaggerDoc() map[string]string {
+	return map_MachineConfiguration
+}
+
+var map_MachineConfigurationList = map[string]string{
+	"":         "MachineConfigurationList is a collection of items\n\nCompatibility level 1: Stable within a major release for a minimum of 12 months or 3 minor releases (whichever is longer).",
+	"metadata": "metadata is the standard list's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata",
+	"items":    "Items contains the items",
+}
+
+func (MachineConfigurationList) SwaggerDoc() map[string]string {
+	return map_MachineConfigurationList
+}
+
+var map_MachineConfigurationSpec = map[string]string{
+	"managedBootImages":    "managedBootImages allows configuration for the management of boot images for machine resources within the cluster. This configuration allows users to select resources that should be updated to the latest boot images during cluster upgrades, ensuring that new machines always boot with the current cluster version's boot image. When omitted, no boot images will be updated.",
+	"nodeDisruptionPolicy": "nodeDisruptionPolicy allows an admin to set granular node disruption actions for MachineConfig-based updates, such as drains, service reloads, etc. Specifying this will allow for less downtime when doing small configuration updates to the cluster. This configuration has no effect on cluster upgrades which will still incur node disruption where required.",
+}
+
+func (MachineConfigurationSpec) SwaggerDoc() map[string]string {
+	return map_MachineConfigurationSpec
+}
+
+var map_MachineConfigurationStatus = map[string]string{
+	"observedGeneration":         "observedGeneration is the last generation change you've dealt with",
+	"conditions":                 "conditions is a list of conditions and their status",
+	"nodeDisruptionPolicyStatus": "nodeDisruptionPolicyStatus status reflects what the latest cluster-validated policies are, and will be used by the Machine Config Daemon during future node updates.",
+}
+
+func (MachineConfigurationStatus) SwaggerDoc() map[string]string {
+	return map_MachineConfigurationStatus
+}
+
+var map_MachineManager = map[string]string{
+	"":          "MachineManager describes a target machine resource that is registered for boot image updates. It stores identifying information such as the resource type and the API Group of the resource. It also provides granular control via the selection field.",
+	"resource":  "resource is the machine management resource's type. The only current valid value is machinesets. machinesets means that the machine manager will only register resources of the kind MachineSet.",
+	"apiGroup":  "apiGroup is name of the APIGroup that the machine management resource belongs to. The only current valid value is machine.openshift.io. machine.openshift.io means that the machine manager will only register resources that belong to OpenShift machine API group.",
+	"selection": "selection allows granular control of the machine management resources that will be registered for boot image updates.",
+}
+
+func (MachineManager) SwaggerDoc() map[string]string {
+	return map_MachineManager
+}
+
+var map_MachineManagerSelector = map[string]string{
+	"mode":    "mode determines how machine managers will be selected for updates. Valid values are All and Partial. All means that every resource matched by the machine manager will be updated. Partial requires specified selector(s) and allows customisation of which resources matched by the machine manager will be updated.",
+	"partial": "partial provides label selector(s) that can be used to match machine management resources. Only permitted when mode is set to \"Partial\".",
+}
+
+func (MachineManagerSelector) SwaggerDoc() map[string]string {
+	return map_MachineManagerSelector
+}
+
+var map_ManagedBootImages = map[string]string{
+	"machineManagers": "machineManagers can be used to register machine management resources for boot image updates. The Machine Config Operator will watch for changes to this list. Only one entry is permitted per type of machine management resource.",
+}
+
+func (ManagedBootImages) SwaggerDoc() map[string]string {
+	return map_ManagedBootImages
+}
+
+var map_NodeDisruptionPolicyClusterStatus = map[string]string{
+	"":       "NodeDisruptionPolicyClusterStatus is the type for the status object, rendered by the controller as a merge of cluster defaults and user provided policies",
+	"files":  "files is a list of MachineConfig file definitions and actions to take to changes on those paths",
+	"units":  "units is a list MachineConfig unit definitions and actions to take on changes to those services",
+	"sshkey": "sshkey is the overall sshkey MachineConfig definition",
+}
+
+func (NodeDisruptionPolicyClusterStatus) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyClusterStatus
+}
+
+var map_NodeDisruptionPolicyConfig = map[string]string{
+	"":       "NodeDisruptionPolicyConfig is the overall spec definition for files/units/sshkeys",
+	"files":  "files is a list of MachineConfig file definitions and actions to take to changes on those paths This list supports a maximum of 50 entries.",
+	"units":  "units is a list MachineConfig unit definitions and actions to take on changes to those services This list supports a maximum of 50 entries.",
+	"sshkey": "sshkey maps to the ignition.sshkeys field in the MachineConfig object, definition an action for this will apply to all sshkey changes in the cluster",
+}
+
+func (NodeDisruptionPolicyConfig) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyConfig
+}
+
+var map_NodeDisruptionPolicySpecAction = map[string]string{
+	"type":    "type represents the commands that will be carried out if this NodeDisruptionPolicySpecActionType is executed Valid values are Reboot, Drain, Reload, Restart, DaemonReload and None. reload/restart requires a corresponding service target specified in the reload/restart field. Other values require no further configuration",
+	"reload":  "reload specifies the service to reload, only valid if type is reload",
+	"restart": "restart specifies the service to restart, only valid if type is restart",
+}
+
+func (NodeDisruptionPolicySpecAction) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicySpecAction
+}
+
+var map_NodeDisruptionPolicySpecFile = map[string]string{
+	"":        "NodeDisruptionPolicySpecFile is a file entry and corresponding actions to take and is used in the NodeDisruptionPolicyConfig object",
+	"path":    "path is the location of a file being managed through a MachineConfig. The Actions in the policy will apply to changes to the file at this path.",
+	"actions": "actions represents the series of commands to be executed on changes to the file at the corresponding file path. Actions will be applied in the order that they are set in this list. If there are other incoming changes to other MachineConfig entries in the same update that require a reboot, the reboot will supercede these actions. Valid actions are Reboot, Drain, Reload, DaemonReload and None. The Reboot action and the None action cannot be used in conjunction with any of the other actions. This list supports a maximum of 10 entries.",
+}
+
+func (NodeDisruptionPolicySpecFile) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicySpecFile
+}
+
+var map_NodeDisruptionPolicySpecSSHKey = map[string]string{
+	"":        "NodeDisruptionPolicySpecSSHKey is actions to take for any SSHKey change and is used in the NodeDisruptionPolicyConfig object",
+	"actions": "actions represents the series of commands to be executed on changes to the file at the corresponding file path. Actions will be applied in the order that they are set in this list. If there are other incoming changes to other MachineConfig entries in the same update that require a reboot, the reboot will supercede these actions. Valid actions are Reboot, Drain, Reload, DaemonReload and None. The Reboot action and the None action cannot be used in conjunction with any of the other actions. This list supports a maximum of 10 entries.",
+}
+
+func (NodeDisruptionPolicySpecSSHKey) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicySpecSSHKey
+}
+
+var map_NodeDisruptionPolicySpecUnit = map[string]string{
+	"":        "NodeDisruptionPolicySpecUnit is a systemd unit name and corresponding actions to take and is used in the NodeDisruptionPolicyConfig object",
+	"name":    "name represents the service name of a systemd service managed through a MachineConfig Actions specified will be applied for changes to the named service. Service names should be of the format ${NAME}${SERVICETYPE} and can up to 255 characters long. ${NAME} must be atleast 1 character long and can only consist of alphabets, digits, \":\", \"-\", \"_\", \".\", and \"\". ${SERVICETYPE} must be one of \".service\", \".socket\", \".device\", \".mount\", \".automount\", \".swap\", \".target\", \".path\", \".timer\", \".snapshot\", \".slice\" or \".scope\".",
+	"actions": "actions represents the series of commands to be executed on changes to the file at the corresponding file path. Actions will be applied in the order that they are set in this list. If there are other incoming changes to other MachineConfig entries in the same update that require a reboot, the reboot will supercede these actions. Valid actions are Reboot, Drain, Reload, DaemonReload and None. The Reboot action and the None action cannot be used in conjunction with any of the other actions. This list supports a maximum of 10 entries.",
+}
+
+func (NodeDisruptionPolicySpecUnit) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicySpecUnit
+}
+
+var map_NodeDisruptionPolicyStatus = map[string]string{
+	"clusterPolicies": "clusterPolicies is a merge of cluster default and user provided node disruption policies.",
+}
+
+func (NodeDisruptionPolicyStatus) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyStatus
+}
+
+var map_NodeDisruptionPolicyStatusAction = map[string]string{
+	"type":    "type represents the commands that will be carried out if this NodeDisruptionPolicyStatusActionType is executed Valid values are Reboot, Drain, Reload, Restart, DaemonReload, None and Special. reload/restart requires a corresponding service target specified in the reload/restart field. Other values require no further configuration",
+	"reload":  "reload specifies the service to reload, only valid if type is reload",
+	"restart": "restart specifies the service to restart, only valid if type is restart",
+}
+
+func (NodeDisruptionPolicyStatusAction) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyStatusAction
+}
+
+var map_NodeDisruptionPolicyStatusFile = map[string]string{
+	"":        "NodeDisruptionPolicyStatusFile is a file entry and corresponding actions to take and is used in the NodeDisruptionPolicyClusterStatus object",
+	"path":    "path is the location of a file being managed through a MachineConfig. The Actions in the policy will apply to changes to the file at this path.",
+	"actions": "actions represents the series of commands to be executed on changes to the file at the corresponding file path. Actions will be applied in the order that they are set in this list. If there are other incoming changes to other MachineConfig entries in the same update that require a reboot, the reboot will supercede these actions. Valid actions are Reboot, Drain, Reload, DaemonReload and None. The Reboot action and the None action cannot be used in conjunction with any of the other actions. This list supports a maximum of 10 entries.",
+}
+
+func (NodeDisruptionPolicyStatusFile) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyStatusFile
+}
+
+var map_NodeDisruptionPolicyStatusSSHKey = map[string]string{
+	"":        "NodeDisruptionPolicyStatusSSHKey is actions to take for any SSHKey change and is used in the NodeDisruptionPolicyClusterStatus object",
+	"actions": "actions represents the series of commands to be executed on changes to the file at the corresponding file path. Actions will be applied in the order that they are set in this list. If there are other incoming changes to other MachineConfig entries in the same update that require a reboot, the reboot will supercede these actions. Valid actions are Reboot, Drain, Reload, DaemonReload and None. The Reboot action and the None action cannot be used in conjunction with any of the other actions. This list supports a maximum of 10 entries.",
+}
+
+func (NodeDisruptionPolicyStatusSSHKey) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyStatusSSHKey
+}
+
+var map_NodeDisruptionPolicyStatusUnit = map[string]string{
+	"":        "NodeDisruptionPolicyStatusUnit is a systemd unit name and corresponding actions to take and is used in the NodeDisruptionPolicyClusterStatus object",
+	"name":    "name represents the service name of a systemd service managed through a MachineConfig Actions specified will be applied for changes to the named service. Service names should be of the format ${NAME}${SERVICETYPE} and can up to 255 characters long. ${NAME} must be atleast 1 character long and can only consist of alphabets, digits, \":\", \"-\", \"_\", \".\", and \"\". ${SERVICETYPE} must be one of \".service\", \".socket\", \".device\", \".mount\", \".automount\", \".swap\", \".target\", \".path\", \".timer\", \".snapshot\", \".slice\" or \".scope\".",
+	"actions": "actions represents the series of commands to be executed on changes to the file at the corresponding file path. Actions will be applied in the order that they are set in this list. If there are other incoming changes to other MachineConfig entries in the same update that require a reboot, the reboot will supercede these actions. Valid actions are Reboot, Drain, Reload, DaemonReload and None. The Reboot action and the None action cannot be used in conjunction with any of the other actions. This list supports a maximum of 10 entries.",
+}
+
+func (NodeDisruptionPolicyStatusUnit) SwaggerDoc() map[string]string {
+	return map_NodeDisruptionPolicyStatusUnit
+}
+
+var map_PartialSelector = map[string]string{
+	"":                        "PartialSelector provides label selector(s) that can be used to match machine management resources.",
+	"machineResourceSelector": "machineResourceSelector is a label selector that can be used to select machine resources like MachineSets.",
+}
+
+func (PartialSelector) SwaggerDoc() map[string]string {
+	return map_PartialSelector
+}
+
+var map_ReloadService = map[string]string{
+	"":            "ReloadService allows the user to specify the services to be reloaded",
+	"serviceName": "serviceName is the full name (e.g. crio.service) of the service to be reloaded Service names should be of the format ${NAME}${SERVICETYPE} and can up to 255 characters long. ${NAME} must be atleast 1 character long and can only consist of alphabets, digits, \":\", \"-\", \"_\", \".\", and \"\". ${SERVICETYPE} must be one of \".service\", \".socket\", \".device\", \".mount\", \".automount\", \".swap\", \".target\", \".path\", \".timer\", \".snapshot\", \".slice\" or \".scope\".",
+}
+
+func (ReloadService) SwaggerDoc() map[string]string {
+	return map_ReloadService
+}
+
+var map_RestartService = map[string]string{
+	"":            "RestartService allows the user to specify the services to be restarted",
+	"serviceName": "serviceName is the full name (e.g. crio.service) of the service to be restarted Service names should be of the format ${NAME}${SERVICETYPE} and can up to 255 characters long. ${NAME} must be atleast 1 character long and can only consist of alphabets, digits, \":\", \"-\", \"_\", \".\", and \"\". ${SERVICETYPE} must be one of \".service\", \".socket\", \".device\", \".mount\", \".automount\", \".swap\", \".target\", \".path\", \".timer\", \".snapshot\", \".slice\" or \".scope\".",
+}
+
+func (RestartService) SwaggerDoc() map[string]string {
+	return map_RestartService
+}
+
 var map_AdditionalNetworkDefinition = map[string]string{
 	"":                    "AdditionalNetworkDefinition configures an extra network that is available but not created by default. Instead, pods must request them by name. type must be specified, along with exactly one \"Config\" that matches the type.",
 	"type":                "type is the type of network The supported values are NetworkTypeRaw, NetworkTypeSimpleMacvlan",
@@ -1261,7 +1487,6 @@ var map_DefaultNetworkDefinition = map[string]string{
 	"type":                "type is the type of network All NetworkTypes are supported except for NetworkTypeRaw",
 	"openshiftSDNConfig":  "openShiftSDNConfig configures the openshift-sdn plugin",
 	"ovnKubernetesConfig": "ovnKubernetesConfig configures the ovn-kubernetes plugin.",
-	"kuryrConfig":         "KuryrConfig configures the kuryr plugin",
 }
 
 func (DefaultNetworkDefinition) SwaggerDoc() map[string]string {
@@ -1301,6 +1526,8 @@ var map_GatewayConfig = map[string]string{
 	"":               "GatewayConfig holds node gateway-related parsed config file parameters and command-line overrides",
 	"routingViaHost": "RoutingViaHost allows pod egress traffic to exit via the ovn-k8s-mp0 management port into the host before sending it out. If this is not set, traffic will always egress directly from OVN to outside without touching the host stack. Setting this to true means hardware offload will not be supported. Default is false if GatewayConfig is specified.",
 	"ipForwarding":   "IPForwarding controls IP forwarding for all traffic on OVN-Kubernetes managed interfaces (such as br-ex). By default this is set to Restricted, and Kubernetes related traffic is still forwarded appropriately, but other IP traffic will not be routed by the OCP node. If there is a desire to allow the host to forward traffic across OVN-Kubernetes managed interfaces, then set this field to \"Global\". The supported values are \"Restricted\" and \"Global\".",
+	"ipv4":           "ipv4 allows users to configure IP settings for IPv4 connections. When omitted, this means no opinion and the default configuration is used. Check individual members fields within ipv4 for details of default values.",
+	"ipv6":           "ipv6 allows users to configure IP settings for IPv6 connections. When omitted, this means no opinion and the default configuration is used. Check individual members fields within ipv6 for details of default values.",
 }
 
 func (GatewayConfig) SwaggerDoc() map[string]string {
@@ -1334,20 +1561,48 @@ func (IPFIXConfig) SwaggerDoc() map[string]string {
 	return map_IPFIXConfig
 }
 
-var map_KuryrConfig = map[string]string{
-	"":                             "KuryrConfig configures the Kuryr-Kubernetes SDN",
-	"daemonProbesPort":             "The port kuryr-daemon will listen for readiness and liveness requests.",
-	"controllerProbesPort":         "The port kuryr-controller will listen for readiness and liveness requests.",
-	"openStackServiceNetwork":      "openStackServiceNetwork contains the CIDR of network from which to allocate IPs for OpenStack Octavia's Amphora VMs. Please note that with Amphora driver Octavia uses two IPs from that network for each loadbalancer - one given by OpenShift and second for VRRP connections. As the first one is managed by OpenShift's and second by Neutron's IPAMs, those need to come from different pools. Therefore `openStackServiceNetwork` needs to be at least twice the size of `serviceNetwork`, and whole `serviceNetwork` must be overlapping with `openStackServiceNetwork`. cluster-network-operator will then make sure VRRP IPs are taken from the ranges inside `openStackServiceNetwork` that are not overlapping with `serviceNetwork`, effectivly preventing conflicts. If not set cluster-network-operator will use `serviceNetwork` expanded by decrementing the prefix size by 1.",
-	"enablePortPoolsPrepopulation": "enablePortPoolsPrepopulation when true will make Kuryr prepopulate each newly created port pool with a minimum number of ports. Kuryr uses Neutron port pooling to fight the fact that it takes a significant amount of time to create one. It creates a number of ports when the first pod that is configured to use the dedicated network for pods is created in a namespace, and keeps them ready to be attached to pods. Port prepopulation is disabled by default.",
-	"poolMaxPorts":                 "poolMaxPorts sets a maximum number of free ports that are being kept in a port pool. If the number of ports exceeds this setting, free ports will get deleted. Setting 0 will disable this upper bound, effectively preventing pools from shrinking and this is the default value. For more information about port pools see enablePortPoolsPrepopulation setting.",
-	"poolMinPorts":                 "poolMinPorts sets a minimum number of free ports that should be kept in a port pool. If the number of ports is lower than this setting, new ports will get created and added to pool. The default is 1. For more information about port pools see enablePortPoolsPrepopulation setting.",
-	"poolBatchPorts":               "poolBatchPorts sets a number of ports that should be created in a single batch request to extend the port pool. The default is 3. For more information about port pools see enablePortPoolsPrepopulation setting.",
-	"mtu":                          "mtu is the MTU that Kuryr should use when creating pod networks in Neutron. The value has to be lower or equal to the MTU of the nodes network and Neutron has to allow creation of tenant networks with such MTU. If unset Pod networks will be created with the same MTU as the nodes network has. This also affects the services network created by cluster-network-operator.",
+var map_IPsecConfig = map[string]string{
+	"mode": "mode defines the behaviour of the ipsec configuration within the platform. Valid values are `Disabled`, `External` and `Full`. When 'Disabled', ipsec will not be enabled at the node level. When 'External', ipsec is enabled on the node level but requires the user to configure the secure communication parameters. This mode is for external secure communications and the configuration can be done using the k8s-nmstate operator. When 'Full', ipsec is configured on the node level and inter-pod secure communication within the cluster is configured. Note with `Full`, if ipsec is desired for communication with external (to the cluster) entities (such as storage arrays), this is left to the user to configure.",
 }
 
-func (KuryrConfig) SwaggerDoc() map[string]string {
-	return map_KuryrConfig
+func (IPsecConfig) SwaggerDoc() map[string]string {
+	return map_IPsecConfig
+}
+
+var map_IPv4GatewayConfig = map[string]string{
+	"":                         "IPV4GatewayConfig holds the configuration paramaters for IPV4 connections in the GatewayConfig for OVN-Kubernetes",
+	"internalMasqueradeSubnet": "internalMasqueradeSubnet contains the masquerade addresses in IPV4 CIDR format used internally by ovn-kubernetes to enable host to service traffic. Each host in the cluster is configured with these addresses, as well as the shared gateway bridge interface. The values can be changed after installation. The subnet chosen should not overlap with other networks specified for OVN-Kubernetes as well as other networks used on the host. Additionally the subnet must be large enough to accommodate 6 IPs (maximum prefix length /29). When omitted, this means no opinion and the platform is left to choose a reasonable default which is subject to change over time. The current default subnet is 169.254.169.0/29 The value must be in proper IPV4 CIDR format",
+}
+
+func (IPv4GatewayConfig) SwaggerDoc() map[string]string {
+	return map_IPv4GatewayConfig
+}
+
+var map_IPv4OVNKubernetesConfig = map[string]string{
+	"internalTransitSwitchSubnet": "internalTransitSwitchSubnet is a v4 subnet in IPV4 CIDR format used internally by OVN-Kubernetes for the distributed transit switch in the OVN Interconnect architecture that connects the cluster routers on each node together to enable east west traffic. The subnet chosen should not overlap with other networks specified for OVN-Kubernetes as well as other networks used on the host. The value cannot be changed after installation. When ommitted, this means no opinion and the platform is left to choose a reasonable default which is subject to change over time. The current default subnet is 100.88.0.0/16 The subnet must be large enough to accomadate one IP per node in your cluster The value must be in proper IPV4 CIDR format",
+	"internalJoinSubnet":          "internalJoinSubnet is a v4 subnet used internally by ovn-kubernetes in case the default one is being already used by something else. It must not overlap with any other subnet being used by OpenShift or by the node network. The size of the subnet must be larger than the number of nodes. The value cannot be changed after installation. The current default value is 100.64.0.0/16 The subnet must be large enough to accomadate one IP per node in your cluster The value must be in proper IPV4 CIDR format",
+}
+
+func (IPv4OVNKubernetesConfig) SwaggerDoc() map[string]string {
+	return map_IPv4OVNKubernetesConfig
+}
+
+var map_IPv6GatewayConfig = map[string]string{
+	"":                         "IPV6GatewayConfig holds the configuration paramaters for IPV6 connections in the GatewayConfig for OVN-Kubernetes",
+	"internalMasqueradeSubnet": "internalMasqueradeSubnet contains the masquerade addresses in IPV6 CIDR format used internally by ovn-kubernetes to enable host to service traffic. Each host in the cluster is configured with these addresses, as well as the shared gateway bridge interface. The values can be changed after installation. The subnet chosen should not overlap with other networks specified for OVN-Kubernetes as well as other networks used on the host. Additionally the subnet must be large enough to accommodate 6 IPs (maximum prefix length /125). When omitted, this means no opinion and the platform is left to choose a reasonable default which is subject to change over time. The current default subnet is fd69::/125 Note that IPV6 dual addresses are not permitted",
+}
+
+func (IPv6GatewayConfig) SwaggerDoc() map[string]string {
+	return map_IPv6GatewayConfig
+}
+
+var map_IPv6OVNKubernetesConfig = map[string]string{
+	"internalTransitSwitchSubnet": "internalTransitSwitchSubnet is a v4 subnet in IPV4 CIDR format used internally by OVN-Kubernetes for the distributed transit switch in the OVN Interconnect architecture that connects the cluster routers on each node together to enable east west traffic. The subnet chosen should not overlap with other networks specified for OVN-Kubernetes as well as other networks used on the host. The value cannot be changed after installation. When ommitted, this means no opinion and the platform is left to choose a reasonable default which is subject to change over time. The subnet must be large enough to accomadate one IP per node in your cluster The current default subnet is fd97::/64 The value must be in proper IPV6 CIDR format Note that IPV6 dual addresses are not permitted",
+	"internalJoinSubnet":          "internalJoinSubnet is a v6 subnet used internally by ovn-kubernetes in case the default one is being already used by something else. It must not overlap with any other subnet being used by OpenShift or by the node network. The size of the subnet must be larger than the number of nodes. The value cannot be changed after installation. The subnet must be large enough to accomadate one IP per node in your cluster The current default value is fd98::/48 The value must be in proper IPV6 CIDR format Note that IPV6 dual addresses are not permitted",
+}
+
+func (IPv6OVNKubernetesConfig) SwaggerDoc() map[string]string {
+	return map_IPv6OVNKubernetesConfig
 }
 
 var map_MTUMigration = map[string]string{
@@ -1401,6 +1656,7 @@ var map_NetworkMigration = map[string]string{
 	"networkType": "networkType is the target type of network migration. Set this to the target network type to allow changing the default network. If unset, the operation of changing cluster default network plugin will be rejected. The supported values are OpenShiftSDN, OVNKubernetes",
 	"mtu":         "mtu contains the MTU migration configuration. Set this to allow changing the MTU values for the default network. If unset, the operation of changing the MTU for the default network will be rejected.",
 	"features":    "features contains the features migration configuration. Set this to migrate feature configuration when changing the cluster default network provider. if unset, the default operation is to migrate all the configuration of supported features.",
+	"mode":        "mode indicates the mode of network migration. The supported values are \"Live\", \"Offline\" and omitted. A \"Live\" migration operation will not cause service interruption by migrating the CNI of each node one by one. The cluster network will work as normal during the network migration. An \"Offline\" migration operation will cause service interruption. During an \"Offline\" migration, two rounds of node reboots are required. The cluster network will be malfunctioning during the network migration. When omitted, this means no opinion and the platform is left to choose a reasonable default which is subject to change over time. The current default value is \"Offline\".",
 }
 
 func (NetworkMigration) SwaggerDoc() map[string]string {
@@ -1445,6 +1701,8 @@ var map_OVNKubernetesConfig = map[string]string{
 	"v4InternalSubnet":    "v4InternalSubnet is a v4 subnet used internally by ovn-kubernetes in case the default one is being already used by something else. It must not overlap with any other subnet being used by OpenShift or by the node network. The size of the subnet must be larger than the number of nodes. The value cannot be changed after installation. Default is 100.64.0.0/16",
 	"v6InternalSubnet":    "v6InternalSubnet is a v6 subnet used internally by ovn-kubernetes in case the default one is being already used by something else. It must not overlap with any other subnet being used by OpenShift or by the node network. The size of the subnet must be larger than the number of nodes. The value cannot be changed after installation. Default is fd98::/48",
 	"egressIPConfig":      "egressIPConfig holds the configuration for EgressIP options.",
+	"ipv4":                "ipv4 allows users to configure IP settings for IPv4 connections. When ommitted, this means no opinions and the default configuration is used. Check individual fields within ipv4 for details of default values.",
+	"ipv6":                "ipv6 allows users to configure IP settings for IPv6 connections. When ommitted, this means no opinions and the default configuration is used. Check individual fields within ipv4 for details of default values.",
 }
 
 func (OVNKubernetesConfig) SwaggerDoc() map[string]string {
