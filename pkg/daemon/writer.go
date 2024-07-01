@@ -117,6 +117,7 @@ func (w *NodeStateStatusWriter) Run(stop <-chan struct{}, refresh <-chan Message
 func (w *NodeStateStatusWriter) pollNicStatus() error {
 	log.Log.V(2).Info("pollNicStatus()")
 	var iface []sriovnetworkv1.InterfaceExt
+	var rdmaMode string
 	var err error
 
 	if vars.PlatformType == consts.VirtualOpenStack {
@@ -127,7 +128,13 @@ func (w *NodeStateStatusWriter) pollNicStatus() error {
 	if err != nil {
 		return err
 	}
+	rdmaMode, err = w.hostHelper.DiscoverRDMASubsystem()
+	if err != nil {
+		return err
+	}
+
 	w.status.Interfaces = iface
+	w.status.System.RdmaMode = rdmaMode
 
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/vishvananda/netlink"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
@@ -517,6 +518,29 @@ func (k *kernel) InstallRDMA(packageManager string) error {
 	if err != nil && len(stderr) != 0 {
 		log.Log.Error(err, "InstallRDMA(): failed to install RDMA package", "stdout", stdout, "stderr", stderr)
 		return err
+	}
+
+	return nil
+}
+
+func (k *kernel) DiscoverRDMASubsystem() (string, error) {
+	log.Log.Info("DiscoverRDMASubsystem(): retrieving RDMA subsystem mode")
+	subsystem, err := netlink.RdmaSystemGetNetnsMode()
+
+	if err != nil {
+		log.Log.Error(err, "DiscoverRDMASubsystem(): failed to get RDMA subsystem mode")
+		return "", err
+	}
+
+	return subsystem, nil
+}
+
+func (k *kernel) SetRDMASubsystem(mode string) error {
+	log.Log.Info("SetRDMASubsystem(): Updating RDMA subsystem mode")
+	err := netlink.RdmaSystemSetNetnsMode(mode)
+	if err != nil {
+		log.Log.Error(err, "SetRDMASubsystem(): failed to update RDMA subsystem mode")
+		return fmt.Errorf("failed to set RDMA subsystem mode: %v", err)
 	}
 
 	return nil
