@@ -28,6 +28,8 @@ import (
 	errs "github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -396,4 +398,17 @@ func updateDaemonsetNodeSelector(obj *uns.Unstructured, nodeSelector map[string]
 		return fmt.Errorf("failed to convert DaemonSet [%s] to Unstructured: %v", obj.GetName(), err)
 	}
 	return nil
+}
+
+func isPrometheusOperatorInstalled(ctx context.Context, client k8sclient.Reader) bool {
+	prometheusCRD := &apiextv1.CustomResourceDefinition{}
+	err := client.Get(ctx, k8sclient.ObjectKey{Name: "servicemonitors.monitoring.coreos.com"}, prometheusCRD)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false
+		}
+		log.Log.WithName("isPrometheusOperatorInstalled").Error(err, "Error while looking for prometheus operator")
+		return false
+	}
+	return true
 }

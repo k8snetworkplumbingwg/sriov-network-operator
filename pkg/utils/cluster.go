@@ -161,3 +161,28 @@ func AnnotateNode(ctx context.Context, nodeName string, key, value string, c cli
 
 	return AnnotateObject(ctx, node, key, value, c)
 }
+
+func AddLabelToNamespace(ctx context.Context, namespaceName, key, value string, c client.Client) error {
+	ns := &corev1.Namespace{}
+	err := c.Get(ctx, client.ObjectKey{Name: namespaceName}, ns)
+	if err != nil {
+		return fmt.Errorf("failed to get namespace [%s]: %v", namespaceName, err)
+	}
+
+	if ns.Labels == nil {
+		ns.Labels = make(map[string]string)
+	}
+
+	if ns.Labels[key] == value {
+		return nil
+	}
+
+	ns.Labels[key] = value
+
+	err = c.Update(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("failed to update namespace [%s] with label [%s: %s]: %v", namespaceName, key, value, err)
+	}
+
+	return nil
+}

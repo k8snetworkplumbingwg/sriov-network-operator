@@ -12,8 +12,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
@@ -32,6 +35,7 @@ import (
 var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 	var cancel context.CancelFunc
 	var ctx context.Context
+	var reconciler *SriovOperatorConfigReconciler
 
 	BeforeAll(func() {
 		By("Create SriovOperatorConfig controller k8s objs")
@@ -77,12 +81,13 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 		platformHelper.EXPECT().IsOpenshiftCluster().Return(false).AnyTimes()
 		platformHelper.EXPECT().IsHypershift().Return(false).AnyTimes()
 
-		err = (&SriovOperatorConfigReconciler{
+		reconciler = &SriovOperatorConfigReconciler{
 			Client:         k8sManager.GetClient(),
 			Scheme:         k8sManager.GetScheme(),
 			PlatformHelper: platformHelper,
 			FeatureGate:    featuregate.New(),
-		}).SetupWithManager(k8sManager)
+		}
+		err = reconciler.SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
 		ctx, cancel = context.WithCancel(context.Background())
@@ -104,21 +109,21 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 		})
 	})
 
-	Context("When is up", func() {
-		JustBeforeEach(func() {
-			config := &sriovnetworkv1.SriovOperatorConfig{}
-			err := util.WaitForNamespacedObject(config, k8sClient, testNamespace, "default", util.RetryInterval, util.APITimeout)
-			Expect(err).NotTo(HaveOccurred())
-			config.Spec = sriovnetworkv1.SriovOperatorConfigSpec{
-				EnableInjector:        true,
-				EnableOperatorWebhook: true,
-				LogLevel:              2,
-				FeatureGates:          map[string]bool{},
-			}
-			err = k8sClient.Update(ctx, config)
-			Expect(err).NotTo(HaveOccurred())
-		})
+	BeforeEach(func() {
+		config := &sriovnetworkv1.SriovOperatorConfig{}
+		err := util.WaitForNamespacedObject(config, k8sClient, testNamespace, "default", util.RetryInterval, util.APITimeout)
+		Expect(err).NotTo(HaveOccurred())
+		config.Spec = sriovnetworkv1.SriovOperatorConfigSpec{
+			EnableInjector:        true,
+			EnableOperatorWebhook: true,
+			LogLevel:              2,
+			FeatureGates:          map[string]bool{},
+		}
+		err = k8sClient.Update(ctx, config)
+		Expect(err).NotTo(HaveOccurred())
+	})
 
+	Context("When is up", func() {
 		It("should have webhook enable", func() {
 			mutateCfg := &admv1.MutatingWebhookConfiguration{}
 			err := util.WaitForNamespacedObject(mutateCfg, k8sClient, testNamespace, "sriov-operator-webhook-config", util.RetryInterval, util.APITimeout*3)
@@ -333,41 +338,62 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("should deploy the metrics-exporter when the feature gate is enabled", func() {
-			config := &sriovnetworkv1.SriovOperatorConfig{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
-
-			daemonSet := &appsv1.DaemonSet{}
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-metrics-exporter", Namespace: testNamespace}, daemonSet)
-			Expect(err).To(HaveOccurred())
-			Expect(errors.IsNotFound(err)).To(BeTrue())
-
-			By("Turn `metricsExporter` feature gate on")
-			config.Spec.FeatureGates = map[string]bool{constants.MetricsExporterFeatureGate: true}
-			err = k8sClient.Update(ctx, config)
-			Expect(err).NotTo(HaveOccurred())
-
-			DeferCleanup(func() {
-				config.Spec.FeatureGates = map[string]bool{}
-				err = k8sClient.Update(ctx, config)
-				Expect(err).NotTo(HaveOccurred())
+		Context("metricsExporter feature gate", func() {
+			When("is disabled", func() {
+				It("should not deploy the daemonset", func() {
+					daemonSet := &appsv1.DaemonSet{}
+					err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-metrics-exporter", Namespace: testNamespace}, daemonSet)
+					Expect(err).To(HaveOccurred())
+					Expect(errors.IsNotFound(err)).To(BeTrue())
+				})
 			})
 
-			err = util.WaitForNamespacedObject(&appsv1.DaemonSet{}, k8sClient, testNamespace, "sriov-network-metrics-exporter", util.RetryInterval, util.APITimeout)
-			Expect(err).NotTo(HaveOccurred())
+			When("is enabled", func() {
+				BeforeEach(func() {
+					config := &sriovnetworkv1.SriovOperatorConfig{}
+					Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
 
-			err = util.WaitForNamespacedObject(&corev1.Service{}, k8sClient, testNamespace, "sriov-network-metrics-exporter-service", util.RetryInterval, util.APITimeout)
-			Expect(err).ToNot(HaveOccurred())
+					By("Turn `metricsExporter` feature gate on")
+					config.Spec.FeatureGates = map[string]bool{constants.MetricsExporterFeatureGate: true}
+					err := k8sClient.Update(ctx, config)
+					Expect(err).NotTo(HaveOccurred())
+				})
 
-			By("Turn `metricsExporter` feature gate off")
-			config.Spec.FeatureGates = map[string]bool{}
-			err = k8sClient.Update(ctx, config)
+				It("should deploy the sriov-network-metrics-exporter DaemonSet", func() {
+					err := util.WaitForNamespacedObject(&appsv1.DaemonSet{}, k8sClient, testNamespace, "sriov-network-metrics-exporter", util.RetryInterval, util.APITimeout)
+					Expect(err).NotTo(HaveOccurred())
 
-			err = util.WaitForNamespacedObjectDeleted(&appsv1.DaemonSet{}, k8sClient, testNamespace, "sriov-network-metrics-exporter", util.RetryInterval, util.APITimeout)
-			Expect(err).NotTo(HaveOccurred())
+					err = util.WaitForNamespacedObject(&corev1.Service{}, k8sClient, testNamespace, "sriov-network-metrics-exporter-service", util.RetryInterval, util.APITimeout)
+					Expect(err).ToNot(HaveOccurred())
+				})
 
-			err = util.WaitForNamespacedObjectDeleted(&corev1.Service{}, k8sClient, testNamespace, "sriov-network-metrics-exporter-service", util.RetryInterval, util.APITimeout)
-			Expect(err).ToNot(HaveOccurred())
+				It("should deploy extra configuration when the Prometheus operator is installed", func() {
+					assertResourceExists(
+						schema.GroupVersionKind{
+							Group:   "monitoring.coreos.com",
+							Kind:    "ServiceMonitor",
+							Version: "v1",
+						},
+						client.ObjectKey{Namespace: testNamespace, Name: "sriov-network-metrics-exporter"})
+
+					assertResourceExists(
+						schema.GroupVersionKind{
+							Group:   "rbac.authorization.k8s.io",
+							Kind:    "Role",
+							Version: "v1",
+						},
+						client.ObjectKey{Namespace: testNamespace, Name: "prometheus-k8s"})
+
+					assertResourceExists(
+						schema.GroupVersionKind{
+							Group:   "rbac.authorization.k8s.io",
+							Kind:    "RoleBinding",
+							Version: "v1",
+						},
+						client.ObjectKey{Namespace: testNamespace, Name: "prometheus-k8s"})
+
+				})
+			})
 		})
 
 		// This test verifies that the CABundle field in the webhook configuration  added by third party components is not
@@ -429,6 +455,7 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 				g.Expect(injectorCfg.Webhooks[0].ClientConfig.CABundle).To(Equal([]byte("ca-bundle-2\n")))
 			}, "1s").Should(Succeed())
 		})
+
 		It("should reconcile to a converging state when multiple node policies are set", func() {
 			By("Creating a consistent number of node policies")
 			for i := 0; i < 30; i++ {
@@ -477,3 +504,10 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 		})
 	})
 })
+
+func assertResourceExists(gvk schema.GroupVersionKind, key client.ObjectKey) {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(gvk)
+	err := k8sClient.Get(context.Background(), key, u)
+	Expect(err).NotTo(HaveOccurred())
+}

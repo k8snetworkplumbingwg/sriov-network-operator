@@ -26,6 +26,7 @@ import (
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	mcfgv1 "github.com/openshift/machine-config-operator/pkg/apis/machineconfiguration.openshift.io/v1"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -70,6 +71,7 @@ func init() {
 	utilruntime.Must(netattdefv1.AddToScheme(scheme))
 	utilruntime.Must(mcfgv1.AddToScheme(scheme))
 	utilruntime.Must(openshiftconfigv1.AddToScheme(scheme))
+	utilruntime.Must(apiextv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
