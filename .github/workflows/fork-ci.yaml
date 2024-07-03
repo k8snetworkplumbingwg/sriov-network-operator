@@ -1,0 +1,106 @@
+name: Fork Docker CI
+
+on:
+  push:
+    branches:
+    - network-operator-*
+    tags:
+    - network-operator-*
+
+jobs:
+  determine_docker_registry_and_tag:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_INTERNAL: nvcr.io/nvstaging/mellanox
+      REGISTRY_PUBLIC: nvcr.io/nvidia/cloud-native
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        sparse-checkout: .
+    - if: github.ref_type == 'branch'
+      name: Determine docker registry and tag (when git branch)
+      run: |
+        echo DOCKER_REGISTRY=$REGISTRY_INTERNAL >> $GITHUB_ENV
+        echo DOCKER_TAG=$(git rev-parse --short HEAD) >> $GITHUB_ENV  # short git commit hash
+    - if: github.ref_type == 'tag'
+      name: Determine docker registry and tag (when git tag)
+      run: |
+        echo DOCKER_REGISTRY=$(echo ${{ github.ref_name }} | sed 's/network-operator-//' | grep -q '-' && echo $REGISTRY_INTERNAL || echo $REGISTRY_PUBLIC) >> $GITHUB_ENV  # use public registry only when release tag has no '-beta*' or '-rc*' suffix
+        echo DOCKER_TAG=${{ github.ref_name }} >> $GITHUB_ENV
+    - name: Store docker registry and tag for following jobs
+      id: store-docker-registry-and-tag
+      run: |
+        echo DOCKER_REGISTRY=$DOCKER_REGISTRY >> $GITHUB_OUTPUT
+        echo DOCKER_TAG=$DOCKER_TAG >> $GITHUB_OUTPUT
+    outputs:
+      docker_registry: ${{ steps.store-docker-registry-and-tag.outputs.DOCKER_REGISTRY }}
+      docker_tag: ${{ steps.store-docker-registry-and-tag.outputs.DOCKER_TAG }}
+
+  build_and_push_images:
+    needs: determine_docker_registry_and_tag
+    runs-on: ubuntu-latest
+    env:
+      BUILD_PLATFORMS: linux/amd64,linux/arm64,linux/ppc64le
+      DOCKER_REGISTRY: ${{ needs.determine_docker_registry_and_tag.outputs.docker_registry }}
+      DOCKER_TAG: ${{ needs.determine_docker_registry_and_tag.outputs.docker_tag }}
+    strategy:
+      matrix:
+        include:
+        - component: operator
+          image_name: ${{ github.event.repository.name }}
+          dockerfile: Dockerfile
+        - component: config-daemon
+          image_name: ${{ github.event.repository.name }}-config-daemon
+          dockerfile: Dockerfile.sriov-network-config-daemon
+        - component: webhook
+          image_name: ${{ github.event.repository.name }}-webhook
+          dockerfile: Dockerfile.webhook
+    steps:
+    - uses: actions/checkout@v4
+    - uses: docker/setup-qemu-action@v3
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/login-action@v3
+      with:
+        registry: ${{ env.DOCKER_REGISTRY }}
+        username: ${{ secrets.NVCR_USERNAME }}
+        password: ${{ secrets.NVCR_TOKEN }}
+    - uses: docker/build-push-action@v4
+      with:
+        platforms: ${{ env.BUILD_PLATFORMS }}
+        context: .
+        file: ${{ matrix.dockerfile }}
+        tags: ${{ env.DOCKER_REGISTRY }}/${{ matrix.image_name }}:${{ env.DOCKER_TAG }}
+        push: true
+
+  update_network_operator_values:
+    needs:
+    - determine_docker_registry_and_tag
+    - build_and_push_images
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_TAG: ${{ needs.determine_docker_registry_and_tag.outputs.docker_tag }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN_NVIDIA_CI_CD }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GH_TOKEN_NVIDIA_CI_CD }}
+        repository: ${{ github.repository_owner }}/network-operator
+    - name: Create PR to update image tags in network-operator values
+      run: |
+        git config user.name  nvidia-ci-cd
+        git config user.email svc-cloud-orch-gh@nvidia.com
+
+        git checkout -b feature/update-sriov-tags-to-$DOCKER_TAG
+        sed -Ei "s/(version: )network-operator-.+/\\1$DOCKER_TAG/g" hack/release.yaml
+        make release-build
+
+        if ! git diff --color --unified=0 --exit-code; then
+          git commit -sam "task: update SR-IOV images tags to $DOCKER_TAG in chart values"
+          git push -u origin feature/update-sriov-tags-to-$DOCKER_TAG
+          gh pr create \
+            --repo ${{ github.repository_owner }}/network-operator \
+            --base master \
+            --head $(git branch --show-current) \
+            --fill \
+            --body "Created by the *${{ github.job }}* job in [${{ github.repository }} CI](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+        fi
