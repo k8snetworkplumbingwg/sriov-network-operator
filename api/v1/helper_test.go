@@ -1021,11 +1021,11 @@ func TestSriovNetworkPoolConfig_MaxUnavailable(t *testing.T) {
 			expectedErr: false,
 		},
 		{
-			tname:       "zero",
+			tname:       "small cluster",
 			maxUn:       intstrutil.FromString("30%"),
 			maxUnNil:    false,
-			numOfNodes:  1,
-			expectedNum: 0,
+			numOfNodes:  2,
+			expectedNum: 1,
 			expectedErr: false,
 		},
 	}

@@ -921,5 +921,10 @@ func (s *SriovNetworkPoolConfig) MaxUnavailable(numOfNodes int) (int, error) {
 		return 0, fmt.Errorf("negative number is not allowed")
 	}
 
+	if maxunavail == 0 {
+		// Round up MaxUnavailable to 1 node
+		return 1, nil
+	}
+
 	return maxunavail, nil
 }
