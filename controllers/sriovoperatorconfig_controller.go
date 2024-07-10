@@ -361,13 +361,8 @@ func (r *SriovOperatorConfigReconciler) deleteK8sResource(ctx context.Context, i
 }
 
 func (r *SriovOperatorConfigReconciler) syncK8sResource(ctx context.Context, cr *sriovnetworkv1.SriovOperatorConfig, in *uns.Unstructured) error {
-	switch in.GetKind() {
-	case clusterRoleResourceName, clusterRoleBindingResourceName, mutatingWebhookConfigurationCRDName, validatingWebhookConfigurationCRDName, machineConfigCRDName:
-	default:
-		// set owner-reference only for namespaced objects
-		if err := controllerutil.SetControllerReference(cr, in, r.Scheme); err != nil {
-			return err
-		}
+	if err := controllerutil.SetControllerReference(cr, in, r.Scheme); err != nil {
+		return err
 	}
 	if err := apply.ApplyObject(ctx, r.Client, in); err != nil {
 		return fmt.Errorf("failed to apply object %v with err: %v", in, err)
