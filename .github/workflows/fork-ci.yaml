@@ -1,11 +1,11 @@
 name: Fork Docker CI
 
-on:
-  push:
-    branches:
-    - network-operator-*
-    tags:
-    - network-operator-*
+# on:
+#   push:
+#     branches:
+#     - network-operator-*
+#     tags:
+#     - network-operator-*
 
 jobs:
   determine_docker_registry_and_tag:

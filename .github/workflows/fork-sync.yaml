@@ -1,0 +1,67 @@
+# TODO: uncomment triggers for sr-iov fork-ci workflow after fork-sync works
+name: Fork Sync
+
+on:
+  schedule:
+  - cron: '0 0 * * *'  # nightly
+  workflow_dispatch:   # enable manual trigger
+
+jobs:
+  lookup-most-recent-release-branch:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Lookup most recent release branch
+      id: lookup-most-recent-release-branch
+      run: |
+        git fetch --all
+        echo most_recent_release_branch=$(git branch --remotes --sort refname | grep network-operator- | tail -n 1 | cut -d '/' -f 2-) >> $GITHUB_OUTPUT
+    outputs:
+      most_recent_release_branch: ${{ steps.lookup-most-recent-release-branch.outputs.most_recent_release_branch }}
+
+  sync-fork:
+    runs-on: ubuntu-latest
+    needs: lookup-most-recent-release-branch
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+        - master
+        - ${{ needs.lookup-most-recent-release-branch.outputs.most_recent_release_branch }}
+    steps:
+    - uses: actions/checkout@v4
+      if: ${{ matrix.branch != '' }}
+      with:
+        ref: ${{ matrix.branch }}
+        fetch-depth: 100
+        token: ${{ secrets.GH_TOKEN_NVIDIA_CI_CD }}
+        persist-credentials: true
+    - name: Sync
+      if: ${{ matrix.branch != '' }}
+      env:
+        # GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_TOKEN_NVIDIA_CI_CD }}
+        SYNC_BRANCH: sync-upstream/master-to-origin/${{ matrix.branch }}
+      run: |
+        git config user.name  nvidia-ci-cd
+        git config user.email svc-cloud-orch-gh@nvidia.com
+        git remote add upstream https://github.com/k8snetworkplumbingwg/sriov-network-operator.git
+
+        git checkout -b $SYNC_BRANCH
+        git pull --no-ff upstream master
+        echo DEBUG AAAA
+        git push origin $SYNC_BRANCH  # pushed via `pr create --head` flag
+
+        # gh auth refresh --hostname https://github.com  # --with-token $GH_TOKEN # TODO: try `echo $GH_TOKEN | gh auth login --with-token`
+        echo DEBUG BBBB
+        gh pr create \
+          --head Mellanox:$SYNC_BRANCH \
+          --base ${{ matrix.branch }} \
+          --title 'sync: from upstream master to ${{ matrix.branch }}' \
+          --body 'Created by [*${{ github.job }}* workflow job](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) to sync changes from [upstream](${{ github.server_url }}/k8snetworkplumbingwg/${{ github.event.repository.name }}) to [downstream](${{ github.server_url }}/${{ github.repository }}).'
+        echo $?
+        echo DEBUG CCCC
+        # gh pr merge  # TODO: uncomment after satisfied with PR creation result
+        echo DEBUG DDDD
+
+        git push -d origin $SYNC_BRANCH  # cleanup  # TODO: validate if this may be redundant after PR merged
