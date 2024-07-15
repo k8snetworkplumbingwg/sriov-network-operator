@@ -1,0 +1,39 @@
+name: Fork Sync
+
+on:
+  schedule:
+  - cron: '0 0 * * *'  # nightly
+  workflow_dispatch:   # enable manual trigger
+
+jobs:
+  lookup-most-recent-release-branch:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Lookup most recent release branch
+      id: lookup-most-recent-release-branch
+      run: |
+        git fetch --all
+        echo most_recent_release_branch=$(git branch --remotes --sort refname | grep network-operator- | tail -n 1 | cut -d '/' -f 2-) >> $GITHUB_OUTPUT
+    outputs:
+      most_recent_release_branch: ${{ steps.lookup-most-recent-release-branch.outputs.most_recent_release_branch }}
+
+  sync-fork:
+    runs-on: ubuntu-latest
+    needs: lookup-most-recent-release-branch
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+        - master
+        - ${{ needs.lookup-most-recent-release-branch.outputs.most_recent_release_branch }}
+    steps:
+    - uses: actions/checkout@v4
+      if: ${{ matrix.branch != '' }}
+    - name: Sync
+      if: ${{ matrix.branch != '' }}
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN_NVIDIA_CI_CD }}  # classic personal access token permissions: `repo:*,workflow:*`
+      run: |
+        gh repo sync ${{ github.repository }} --source k8snetworkplumbingwg/${{ github.event.repository.name }} --branch ${{ matrix.branch }}
+# TODO: uncomment triggers for sr-iov fork-ci workflow after fork-sync works
