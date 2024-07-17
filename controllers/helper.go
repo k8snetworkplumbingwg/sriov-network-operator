@@ -281,7 +281,7 @@ func setDsNodeAffinity(pl *sriovnetworkv1.SriovNetworkNodePolicyList, ds *appsv1
 }
 
 func nodeSelectorTermsForPolicyList(policies []sriovnetworkv1.SriovNetworkNodePolicy) []corev1.NodeSelectorTerm {
-	terms := []corev1.NodeSelectorTerm{}
+	expressions := []corev1.NodeSelectorRequirement{}
 	for _, p := range policies {
 		// Note(adrianc): default policy is deprecated and ignored.
 		if p.Name == constants.DefaultPolicyName {
@@ -291,7 +291,7 @@ func nodeSelectorTermsForPolicyList(policies []sriovnetworkv1.SriovNetworkNodePo
 		if len(p.Spec.NodeSelector) == 0 {
 			continue
 		}
-		expressions := []corev1.NodeSelectorRequirement{}
+
 		for k, v := range p.Spec.NodeSelector {
 			exp := corev1.NodeSelectorRequirement{
 				Operator: corev1.NodeSelectorOpIn,
@@ -300,15 +300,20 @@ func nodeSelectorTermsForPolicyList(policies []sriovnetworkv1.SriovNetworkNodePo
 			}
 			expressions = append(expressions, exp)
 		}
-		// sorting is needed to keep the daemon spec stable.
-		// the items are popped in a random order from the map
-		sort.Slice(expressions, func(i, j int) bool {
-			return expressions[i].Key < expressions[j].Key
-		})
-		nodeSelector := corev1.NodeSelectorTerm{
+	}
+
+	// sorting is needed to keep the daemon spec stable.
+	// the items are popped in a random order from the map
+	sort.Slice(expressions, func(i, j int) bool {
+		return expressions[i].Key < expressions[j].Key
+	})
+
+	terms := []corev1.NodeSelectorTerm{}
+	if len(expressions) > 0 {
+		term := corev1.NodeSelectorTerm{
 			MatchExpressions: expressions,
 		}
-		terms = append(terms, nodeSelector)
+		terms = append(terms, term)
 	}
 
 	return terms

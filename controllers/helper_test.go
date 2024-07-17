@@ -64,17 +64,13 @@ func TestNodeSelectorMerge(t *testing.T) {
 					MatchExpressions: []corev1.NodeSelectorRequirement{
 						{
 							Operator: corev1.NodeSelectorOpIn,
-							Key:      "foo",
-							Values:   []string{"bar"},
-						},
-					},
-				},
-				{
-					MatchExpressions: []corev1.NodeSelectorRequirement{
-						{
-							Operator: corev1.NodeSelectorOpIn,
 							Key:      "bb",
 							Values:   []string{"cc"},
+						},
+						{
+							Operator: corev1.NodeSelectorOpIn,
+							Key:      "foo",
+							Values:   []string{"bar"},
 						},
 					},
 				},
@@ -106,20 +102,6 @@ func TestNodeSelectorMerge(t *testing.T) {
 					MatchExpressions: []corev1.NodeSelectorRequirement{
 						{
 							Operator: corev1.NodeSelectorOpIn,
-							Key:      "foo",
-							Values:   []string{"bar"},
-						},
-						{
-							Operator: corev1.NodeSelectorOpIn,
-							Key:      "foo1",
-							Values:   []string{"bar1"},
-						},
-					},
-				},
-				{
-					MatchExpressions: []corev1.NodeSelectorRequirement{
-						{
-							Operator: corev1.NodeSelectorOpIn,
 							Key:      "bb",
 							Values:   []string{"cc"},
 						},
@@ -132,6 +114,16 @@ func TestNodeSelectorMerge(t *testing.T) {
 							Operator: corev1.NodeSelectorOpIn,
 							Key:      "bb2",
 							Values:   []string{"cc2"},
+						},
+						{
+							Operator: corev1.NodeSelectorOpIn,
+							Key:      "foo",
+							Values:   []string{"bar"},
+						},
+						{
+							Operator: corev1.NodeSelectorOpIn,
+							Key:      "foo1",
+							Values:   []string{"bar1"},
 						},
 					},
 				},
@@ -254,6 +246,7 @@ var _ = Describe("Helper Validation", Ordered, func() {
 			Expect(in.Spec.Template.Spec.Affinity.NodeAffinity).ToNot(BeNil())
 			Expect(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution).ToNot(BeNil())
 			Expect(len(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)).To(Equal(1))
+			Expect(len(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions)).To(Equal(1))
 		})
 		It("should update affinity with multiple", func() {
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{Items: []sriovnetworkv1.SriovNetworkNodePolicy{
@@ -285,7 +278,8 @@ var _ = Describe("Helper Validation", Ordered, func() {
 			Expect(in.Spec.Template.Spec.Affinity).ToNot(BeNil())
 			Expect(in.Spec.Template.Spec.Affinity.NodeAffinity).ToNot(BeNil())
 			Expect(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution).ToNot(BeNil())
-			Expect(len(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)).To(Equal(2))
+			Expect(len(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)).To(Equal(1))
+			Expect(len(in.Spec.Template.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions)).To(Equal(2))
 		})
 		It("should switch affinity", func() {
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{Items: []sriovnetworkv1.SriovNetworkNodePolicy{
