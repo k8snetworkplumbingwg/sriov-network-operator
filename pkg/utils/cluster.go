@@ -131,7 +131,8 @@ func AnnotateObject(ctx context.Context, obj client.Object, key, value string, c
 	log.Log.V(2).Info("AnnotateObject(): Annotate object",
 		"objectName", obj.GetName(),
 		"objectKind", obj.GetObjectKind(),
-		"annotation", value)
+		"annotationKey", key,
+		"annotationValue", value)
 	newObj := obj.DeepCopyObject().(client.Object)
 	if newObj.GetAnnotations() == nil {
 		newObj.SetAnnotations(map[string]string{})
@@ -160,4 +161,41 @@ func AnnotateNode(ctx context.Context, nodeName string, key, value string, c cli
 	}
 
 	return AnnotateObject(ctx, node, key, value, c)
+}
+
+// LabelObject adds label to a kubernetes object
+func LabelObject(ctx context.Context, obj client.Object, key, value string, c client.Client) error {
+	log.Log.V(2).Info("LabelObject(): Annotate object",
+		"objectName", obj.GetName(),
+		"objectKind", obj.GetObjectKind(),
+		"labelKey", key,
+		"labelValue", value)
+	newObj := obj.DeepCopyObject().(client.Object)
+	if newObj.GetLabels() == nil {
+		newObj.SetLabels(map[string]string{})
+	}
+
+	if newObj.GetLabels()[key] != value {
+		newObj.GetLabels()[key] = value
+		patch := client.MergeFrom(obj)
+		err := c.Patch(ctx,
+			newObj, patch)
+		if err != nil {
+			log.Log.Error(err, "annotateObject(): Failed to patch object")
+			return err
+		}
+	}
+
+	return nil
+}
+
+// LabelNode add label to a node
+func LabelNode(ctx context.Context, nodeName string, key, value string, c client.Client) error {
+	node := &corev1.Node{}
+	err := c.Get(context.TODO(), client.ObjectKey{Name: nodeName}, node)
+	if err != nil {
+		return err
+	}
+
+	return LabelObject(ctx, node, key, value, c)
 }

@@ -107,19 +107,6 @@ var _ = Describe("Config Daemon", func() {
 			},
 		}
 
-		SriovDevicePluginPod := corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "sriov-device-plugin-xxxx",
-				Namespace: vars.Namespace,
-				Labels: map[string]string{
-					"app": "sriov-device-plugin",
-				},
-			},
-			Spec: corev1.PodSpec{
-				NodeName: "test-node",
-			},
-		}
-
 		err = sriovnetworkv1.AddToScheme(scheme.Scheme)
 		Expect(err).ToNot(HaveOccurred())
 		kClient := kclient.NewClientBuilder().WithScheme(scheme.Scheme).WithRuntimeObjects(&corev1.Node{
@@ -130,7 +117,7 @@ var _ = Describe("Config Daemon", func() {
 					Namespace: vars.Namespace,
 				}}).Build()
 
-		kubeClient := fakek8s.NewSimpleClientset(&FakeSupportedNicIDs, &SriovDevicePluginPod)
+		kubeClient := fakek8s.NewSimpleClientset(&FakeSupportedNicIDs)
 		snclient := snclientset.NewSimpleClientset()
 		err = sriovnetworkv1.InitNicIDMapFromConfigMap(kubeClient, vars.Namespace)
 		Expect(err).ToNot(HaveOccurred())
@@ -225,21 +212,14 @@ var _ = Describe("Config Daemon", func() {
 			Eventually(refreshCh, "30s").Should(Receive(&msg))
 			Expect(msg.syncStatus).To(Equal("InProgress"))
 
+			nodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainComplete
+			err = updateSriovNetworkNodeState(sut.sriovClient, nodeState)
+			Expect(err).ToNot(HaveOccurred())
+
+			Eventually(refreshCh, "30s").Should(Receive(&msg))
+			Expect(msg.syncStatus).To(Equal("InProgress"))
 			Eventually(refreshCh, "30s").Should(Receive(&msg))
 			Expect(msg.syncStatus).To(Equal("Succeeded"))
-
-			Eventually(func() (int, error) {
-				podList, err := sut.kubeClient.CoreV1().Pods(vars.Namespace).List(context.Background(), metav1.ListOptions{
-					LabelSelector: "app=sriov-device-plugin",
-					FieldSelector: "spec.nodeName=test-node",
-				})
-
-				if err != nil {
-					return 0, err
-				}
-
-				return len(podList.Items), nil
-			}, "10s").Should(BeZero())
 
 		})
 
@@ -267,7 +247,7 @@ var _ = Describe("Config Daemon", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-node",
 					Generation:  777,
-					Annotations: map[string]string{consts.NodeStateDrainAnnotationCurrent: consts.DrainIdle},
+					Annotations: map[string]string{consts.NodeStateDrainAnnotationCurrent: consts.DrainComplete},
 				},
 			}
 			Expect(
