@@ -67,12 +67,17 @@ const (
 	MachineConfigPoolPausedAnnotationIdle   = "Idle"
 	MachineConfigPoolPausedAnnotationPaused = "Paused"
 
+	SriovDevicePluginLabel         = "sriovnetwork.openshift.io/device-plugin"
+	SriovDevicePluginLabelEnabled  = "Enabled"
+	SriovDevicePluginLabelDisabled = "Disabled"
+
 	NodeDrainAnnotation             = "sriovnetwork.openshift.io/state"
 	NodeStateDrainAnnotation        = "sriovnetwork.openshift.io/desired-state"
 	NodeStateDrainAnnotationCurrent = "sriovnetwork.openshift.io/current-state"
 	DrainIdle                       = "Idle"
 	DrainRequired                   = "Drain_Required"
 	RebootRequired                  = "Reboot_Required"
+	DevicePluginResetRequired       = "Device_Plugin_Reset_Required"
 	Draining                        = "Draining"
 	DrainComplete                   = "DrainComplete"
 

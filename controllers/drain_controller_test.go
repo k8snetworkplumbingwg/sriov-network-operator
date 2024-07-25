@@ -316,6 +316,89 @@ var _ = Describe("Drain Controller", Ordered, func() {
 			expectNodeStateAnnotation(nodeState1, constants.Draining)
 		})
 	})
+
+	Context("With requesting device plugin restart", func() {
+		It("should remove and the device plugin label on the node with nodeState spec is empty", func() {
+			node, nodeState := createNode(ctx, "node5")
+			simulateDaemonSetAnnotation(node, constants.DevicePluginResetRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectNodeLabel(node, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelDisabled)
+			simulateDaemonSetAnnotation(node, constants.DrainIdle)
+			expectNodeStateAnnotation(nodeState, constants.DrainIdle)
+			expectNodeLabel(node, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelDisabled)
+		})
+
+		It("should remove and add the device plugin label on the node", func() {
+			node, nodeState := createNode(ctx, "node6")
+			originalNodeState := nodeState.DeepCopy()
+			nodeState.Spec = sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: sriovnetworkv1.Interfaces{
+				{
+					Name:   "test",
+					NumVfs: 10,
+					VfGroups: []sriovnetworkv1.VfGroup{
+						{
+							PolicyName:   "test",
+							ResourceName: "test",
+							VfRange:      "0-9",
+						},
+					},
+				},
+			}}
+			Expect(k8sClient.Patch(ctx, nodeState, client.MergeFrom(originalNodeState))).ToNot(HaveOccurred())
+
+			simulateDaemonSetAnnotation(node, constants.DevicePluginResetRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectNodeLabel(node, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelDisabled)
+			simulateDaemonSetAnnotation(node, constants.DrainIdle)
+			createDevicePluginPodOnNode(ctx, node.Name)
+			expectNodeStateAnnotation(nodeState, constants.DrainIdle)
+			expectNodeLabel(node, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelEnabled)
+		})
+
+		It("should restart the device plugin on multiple nodes if requested", func() {
+			simpleNodeStateSpec := sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: sriovnetworkv1.Interfaces{
+				{
+					Name:   "test",
+					NumVfs: 10,
+					VfGroups: []sriovnetworkv1.VfGroup{
+						{
+							PolicyName:   "test",
+							ResourceName: "test",
+							VfRange:      "0-9",
+						},
+					},
+				},
+			}}
+
+			node1, nodeState1 := createNode(ctx, "node7")
+			originalNodeState := nodeState1.DeepCopy()
+			nodeState1.Spec = simpleNodeStateSpec
+			Expect(k8sClient.Patch(ctx, nodeState1, client.MergeFrom(originalNodeState))).ToNot(HaveOccurred())
+
+			node2, nodeState2 := createNode(ctx, "node8")
+			originalNodeState = nodeState2.DeepCopy()
+			nodeState2.Spec = simpleNodeStateSpec
+			Expect(k8sClient.Patch(ctx, nodeState2, client.MergeFrom(originalNodeState))).ToNot(HaveOccurred())
+
+			simulateDaemonSetAnnotation(node1, constants.DevicePluginResetRequired)
+			simulateDaemonSetAnnotation(node2, constants.DevicePluginResetRequired)
+
+			expectNodeStateAnnotation(nodeState1, constants.DrainComplete)
+			expectNodeStateAnnotation(nodeState2, constants.DrainComplete)
+			expectNodeLabel(node1, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelDisabled)
+			expectNodeLabel(node2, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelDisabled)
+
+			simulateDaemonSetAnnotation(node1, constants.DrainIdle)
+			simulateDaemonSetAnnotation(node2, constants.DrainIdle)
+			createDevicePluginPodOnNode(ctx, node1.Name)
+			createDevicePluginPodOnNode(ctx, node2.Name)
+
+			expectNodeStateAnnotation(nodeState1, constants.DrainIdle)
+			expectNodeStateAnnotation(nodeState2, constants.DrainIdle)
+			expectNodeLabel(node1, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelEnabled)
+			expectNodeLabel(node2, constants.SriovDevicePluginLabel, constants.SriovDevicePluginLabelEnabled)
+		})
+	})
 })
 
 func expectNodeStateAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, expectedAnnotationValue string) {
@@ -371,6 +454,15 @@ func expectNodeIsSchedulable(node *corev1.Node) {
 			ToNot(HaveOccurred())
 
 		g.Expect(node.Spec.Unschedulable).To(BeFalse())
+	}, "20s", "1s").Should(Succeed())
+}
+
+func expectNodeLabel(node *corev1.Node, key, value string) {
+	EventuallyWithOffset(1, func(g Gomega) {
+		g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Name: node.Name}, node)).
+			ToNot(HaveOccurred())
+
+		g.Expect(node.Labels[key]).To(Equal(value))
 	}, "20s", "1s").Should(Succeed())
 }
 
@@ -445,4 +537,13 @@ func createPodOnNode(ctx context.Context, podName, nodeName string) {
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "test", Command: []string{"test"}}},
 			NodeName: nodeName, TerminationGracePeriodSeconds: pointer.Int64(60)}}
 	Expect(k8sClient.Create(ctx, &pod)).ToNot(HaveOccurred())
+}
+
+func createDevicePluginPodOnNode(ctx context.Context, nodeName string) {
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{GenerateName: "device-plugin-", Namespace: vars.Namespace, Labels: map[string]string{"app": "sriov-device-plugin"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "test", Command: []string{"test"}}},
+			NodeName: nodeName, TerminationGracePeriodSeconds: pointer.Int64(60)}}
+	Expect(k8sClient.Create(ctx, &pod)).ToNot(HaveOccurred())
+	pod.Status.Phase = corev1.PodRunning
+	Expect(k8sClient.Status().Update(ctx, &pod)).ToNot(HaveOccurred())
 }

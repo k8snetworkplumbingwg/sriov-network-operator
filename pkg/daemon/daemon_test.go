@@ -233,21 +233,14 @@ var _ = Describe("Config Daemon", func() {
 			Eventually(refreshCh, "30s").Should(Receive(&msg))
 			Expect(msg.syncStatus).To(Equal("InProgress"))
 
+			nodeState.Annotations[consts.NodeStateDrainAnnotationCurrent] = consts.DrainComplete
+			err = updateSriovNetworkNodeState(sut.sriovClient, nodeState)
+			Expect(err).ToNot(HaveOccurred())
+
+			Eventually(refreshCh, "30s").Should(Receive(&msg))
+			Expect(msg.syncStatus).To(Equal("InProgress"))
 			Eventually(refreshCh, "30s").Should(Receive(&msg))
 			Expect(msg.syncStatus).To(Equal("Succeeded"))
-
-			Eventually(func() (int, error) {
-				podList, err := sut.kubeClient.CoreV1().Pods(vars.Namespace).List(context.Background(), metav1.ListOptions{
-					LabelSelector: "app=sriov-device-plugin",
-					FieldSelector: "spec.nodeName=test-node",
-				})
-
-				if err != nil {
-					return 0, err
-				}
-
-				return len(podList.Items), nil
-			}, "10s").Should(BeZero())
 
 		})
 
@@ -275,7 +268,7 @@ var _ = Describe("Config Daemon", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-node",
 					Generation:  777,
-					Annotations: map[string]string{consts.NodeStateDrainAnnotationCurrent: consts.DrainIdle},
+					Annotations: map[string]string{consts.NodeStateDrainAnnotationCurrent: consts.DrainComplete},
 				},
 			}
 			Expect(
@@ -290,34 +283,6 @@ var _ = Describe("Config Daemon", func() {
 			Expect(msg.syncStatus).To(Equal("Succeeded"))
 
 			Expect(sut.desiredNodeState.GetGeneration()).To(BeNumerically("==", 777))
-		})
-
-		It("restart all the sriov-device-plugin pods present on the node", func() {
-			otherPod1 := SriovDevicePluginPod.DeepCopy()
-			otherPod1.Name = "sriov-device-plugin-xxxa"
-			_, err := sut.kubeClient.CoreV1().Pods(vars.Namespace).Create(context.Background(), otherPod1, metav1.CreateOptions{})
-			Expect(err).ToNot(HaveOccurred())
-
-			otherPod2 := SriovDevicePluginPod.DeepCopy()
-			otherPod2.Name = "sriov-device-plugin-xxxz"
-			_, err = sut.kubeClient.CoreV1().Pods(vars.Namespace).Create(context.Background(), otherPod2, metav1.CreateOptions{})
-			Expect(err).ToNot(HaveOccurred())
-
-			err = sut.restartDevicePluginPod()
-			Expect(err).ToNot(HaveOccurred())
-
-			Eventually(func() (int, error) {
-				podList, err := sut.kubeClient.CoreV1().Pods(vars.Namespace).List(context.Background(), metav1.ListOptions{
-					LabelSelector: "app=sriov-device-plugin",
-					FieldSelector: "spec.nodeName=test-node",
-				})
-
-				if err != nil {
-					return 0, err
-				}
-
-				return len(podList.Items), nil
-			}, "1s").Should(BeZero())
 		})
 	})
 })

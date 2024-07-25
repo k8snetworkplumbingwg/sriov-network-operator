@@ -1615,12 +1615,14 @@ var _ = Describe("[sriov] operator", func() {
 
 				Expect(err).ToNot(HaveOccurred())
 				waitForNetAttachDef("test-mtuvolnetwork", namespaces.Test)
+				By("starting a pod to make the drain slower")
+				createTestPod(node, []string{sriovNetwork.Name})
 
 				// update the interface
 				intf = getInterfaceFromNodeStateByPciAddress(node, intf.PciAddress)
 			})
 
-			It("should reconcile managed VF if status is changed", func() {
+			FIt("should reconcile managed VF if status is changed", func() {
 				originalMtu := intf.Mtu
 				lowerMtu := originalMtu - 500
 
