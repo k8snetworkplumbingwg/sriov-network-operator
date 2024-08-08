@@ -46,6 +46,7 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -272,6 +273,13 @@ func (r *SriovNetworkNodePolicyReconciler) syncAllSriovNetworkNodeStates(ctx con
 		ns.Name = node.Name
 		ns.Namespace = vars.Namespace
 		j, _ := json.Marshal(ns)
+		netPoolConfig, _, err := utils.FindNodePoolConfig(context.Background(), &node, r.Client)
+		if err != nil {
+			log.Log.Error(err, "nodeStateSyncHandler(): failed to get SriovNetworkPoolConfig for the current node")
+		}
+		if netPoolConfig != nil {
+			ns.Spec.System.RdmaMode = netPoolConfig.Spec.RdmaMode
+		}
 		logger.V(2).Info("SriovNetworkNodeState CR", "content", j)
 		if err := r.syncSriovNetworkNodeState(ctx, dc, npl, ns, &node); err != nil {
 			logger.Error(err, "Fail to sync", "SriovNetworkNodeState", ns.Name)
