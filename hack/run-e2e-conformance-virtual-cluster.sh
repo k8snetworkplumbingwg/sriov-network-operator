@@ -369,6 +369,7 @@ source hack/env.sh
 
 export ADMISSION_CONTROLLERS_ENABLED=true
 export ADMISSION_CONTROLLERS_CERTIFICATES_CERT_MANAGER_ENABLED=true
+export OPERATOR_LEADER_ELECTION_ENABLE=true
 export SKIP_VAR_SET=""
 export NAMESPACE="sriov-network-operator"
 export OPERATOR_NAMESPACE="sriov-network-operator"

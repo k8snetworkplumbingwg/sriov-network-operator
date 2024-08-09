@@ -19,10 +19,14 @@ if [ $CLUSTER_TYPE == "openshift" ]; then
   echo ${auth} > registry-login.conf
 
   internal_registry="image-registry.openshift-image-registry.svc:5000"
-  pass=$( jq .\"$internal_registry\".password registry-login.conf )
+  pass=$( jq .\"image-registry.openshift-image-registry.svc:5000\".auth registry-login.conf  )
+  pass=`echo ${pass:1:-1} | base64 -d`
+
+  # dockercfg password is in the form `<token>:password`. We need to trim the `<token>:` prefix
+  pass=${pass#"<token>:"}
 
   registry="default-route-openshift-image-registry.apps.${cluster_name}.${domain_name}"
-  podman login -u serviceaccount -p ${pass:1:-1} $registry --tls-verify=false
+  podman login -u serviceaccount -p ${pass} $registry --tls-verify=false
 
   export SRIOV_NETWORK_OPERATOR_IMAGE="$registry/$NAMESPACE/sriov-network-operator:latest"
   export SRIOV_NETWORK_CONFIG_DAEMON_IMAGE="$registry/$NAMESPACE/sriov-network-config-daemon:latest"
@@ -44,6 +48,7 @@ else
 fi
 
 export ADMISSION_CONTROLLERS_ENABLED=true
+export OPERATOR_LEADER_ELECTION_ENABLE=true
 export SKIP_VAR_SET=""
 export OPERATOR_NAMESPACE=$NAMESPACE
 export OPERATOR_EXEC=kubectl
@@ -67,9 +72,38 @@ if [ $CLUSTER_TYPE == "openshift" ]; then
   export SRIOV_NETWORK_OPERATOR_IMAGE="image-registry.openshift-image-registry.svc:5000/$NAMESPACE/sriov-network-operator:latest"
   export SRIOV_NETWORK_CONFIG_DAEMON_IMAGE="image-registry.openshift-image-registry.svc:5000/$NAMESPACE/sriov-network-config-daemon:latest"
   export SRIOV_NETWORK_WEBHOOK_IMAGE="image-registry.openshift-image-registry.svc:5000/$NAMESPACE/sriov-network-operator-webhook:latest"
-fi
+  echo "## deploying SRIOV Network Operator"
+  hack/deploy-setup.sh $NAMESPACE
+else
+  source hack/env.sh
 
-echo "## deploying SRIOV Network Operator"
-hack/deploy-setup.sh $NAMESPACE
+  export ADMISSION_CONTROLLERS_ENABLED=true
+  export ADMISSION_CONTROLLERS_CERTIFICATES_CERT_MANAGER_ENABLED=true
+  export OPERATOR_LEADER_ELECTION_ENABLE=true
+  export SKIP_VAR_SET=""
+  export NAMESPACE="sriov-network-operator"
+  export OPERATOR_NAMESPACE="sriov-network-operator"
+  export CNI_BIN_PATH=/opt/cni/bin
+  export OPERATOR_EXEC=kubectl
+  export CLUSTER_HAS_EMULATED_PF=TRUE
+
+  HELM_VALUES_OPTS="\
+    --set images.operator=${SRIOV_NETWORK_OPERATOR_IMAGE} \
+    --set images.sriovConfigDaemon=${SRIOV_NETWORK_CONFIG_DAEMON_IMAGE} \
+    --set images.sriovCni=${SRIOV_CNI_IMAGE} \
+    --set images.sriovDevicePlugin=${SRIOV_DEVICE_PLUGIN_IMAGE} \
+    --set images.resourcesInjector=${NETWORK_RESOURCES_INJECTOR_IMAGE} \
+    --set images.webhook=${SRIOV_NETWORK_WEBHOOK_IMAGE} \
+    --set operator.admissionControllers.enabled=${ADMISSION_CONTROLLERS_ENABLED} \
+    --set operator.admissionControllers.certificates.certManager.enabled=${ADMISSION_CONTROLLERS_CERTIFICATES_CERT_MANAGER_ENABLED} \
+    --set sriovOperatorConfig.deploy=true"
+
+  PATH=$PATH:${root}/bin
+  make helm
+  helm  upgrade -n ${NAMESPACE} --create-namespace \
+    $HELM_VALUES_OPTS \
+    --wait sriov-network-operator ./deployment/sriov-network-operator-chart
+
+fi
 
 kubectl -n ${NAMESPACE} delete po --all
