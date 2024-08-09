@@ -22,12 +22,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	errs "github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -152,29 +150,25 @@ func formatJSON(str string) (string, error) {
 	return prettyJSON.String(), nil
 }
 
+// GetDefaultNodeSelector return a nodeSelector with worker and linux os
 func GetDefaultNodeSelector() map[string]string {
 	return map[string]string{"node-role.kubernetes.io/worker": "",
 		"kubernetes.io/os": "linux"}
 }
 
-// hasNoValidPolicy returns true if no SriovNetworkNodePolicy
-// or only the (deprecated) "default" policy is present
-func hasNoValidPolicy(pl []sriovnetworkv1.SriovNetworkNodePolicy) bool {
-	switch len(pl) {
-	case 0:
-		return true
-	case 1:
-		return pl[0].Name == constants.DefaultPolicyName
-	default:
-		return false
-	}
+// GetDefaultNodeSelectorForDevicePlugin return a nodeSelector with worker linux os
+// and the enabled sriov device plugin
+func GetDefaultNodeSelectorForDevicePlugin() map[string]string {
+	return map[string]string{
+		"node-role.kubernetes.io/worker":        "",
+		"kubernetes.io/os":                      "linux",
+		constants.SriovDevicePluginEnabledLabel: constants.SriovDevicePluginEnabledLabelEnabled}
 }
 
 func syncPluginDaemonObjs(ctx context.Context,
 	client k8sclient.Client,
 	scheme *runtime.Scheme,
-	dc *sriovnetworkv1.SriovOperatorConfig,
-	pl *sriovnetworkv1.SriovNetworkNodePolicyList) error {
+	dc *sriovnetworkv1.SriovOperatorConfig) error {
 	logger := log.Log.WithName("syncPluginDaemonObjs")
 	logger.V(1).Info("Start to sync sriov daemons objects")
 
@@ -185,22 +179,12 @@ func syncPluginDaemonObjs(ctx context.Context,
 	data.Data["ReleaseVersion"] = os.Getenv("RELEASEVERSION")
 	data.Data["ResourcePrefix"] = vars.ResourcePrefix
 	data.Data["ImagePullSecrets"] = GetImagePullSecrets()
-	data.Data["NodeSelectorField"] = GetDefaultNodeSelector()
+	data.Data["NodeSelectorField"] = GetDefaultNodeSelectorForDevicePlugin()
 	data.Data["UseCDI"] = dc.Spec.UseCDI
 	objs, err := renderDsForCR(constants.PluginPath, &data)
 	if err != nil {
 		logger.Error(err, "Fail to render SR-IoV manifests")
 		return err
-	}
-
-	if hasNoValidPolicy(pl.Items) {
-		for _, obj := range objs {
-			err := deleteK8sResource(ctx, client, obj)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
 	}
 
 	// Sync DaemonSets
@@ -214,13 +198,15 @@ func syncPluginDaemonObjs(ctx context.Context,
 				return err
 			}
 			ds.Spec.Template.Spec.NodeSelector = dc.Spec.ConfigDaemonNodeSelector
+			// add the special node selector for the device plugin
+			ds.Spec.Template.Spec.NodeSelector[constants.SriovDevicePluginEnabledLabel] = constants.SriovDevicePluginEnabledLabelEnabled
 			err = scheme.Convert(ds, obj, nil)
 			if err != nil {
 				logger.Error(err, "Fail to convert to Unstructured")
 				return err
 			}
 		}
-		err = syncDsObject(ctx, client, scheme, dc, pl, obj)
+		err = syncDsObject(ctx, client, scheme, dc, obj)
 		if err != nil {
 			logger.Error(err, "Couldn't sync SR-IoV daemons objects")
 			return err
@@ -230,14 +216,7 @@ func syncPluginDaemonObjs(ctx context.Context,
 	return nil
 }
 
-func deleteK8sResource(ctx context.Context, client k8sclient.Client, in *uns.Unstructured) error {
-	if err := apply.DeleteObject(ctx, client, in); err != nil {
-		return fmt.Errorf("failed to delete object %v with err: %v", in, err)
-	}
-	return nil
-}
-
-func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.Scheme, dc *sriovnetworkv1.SriovOperatorConfig, pl *sriovnetworkv1.SriovNetworkNodePolicyList, obj *uns.Unstructured) error {
+func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.Scheme, dc *sriovnetworkv1.SriovOperatorConfig, obj *uns.Unstructured) error {
 	logger := log.Log.WithName("syncDsObject")
 	kind := obj.GetKind()
 	logger.V(1).Info("Start to sync Objects", "Kind", kind)
@@ -257,61 +236,13 @@ func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.
 			logger.Error(err, "Fail to convert to DaemonSet")
 			return err
 		}
-		err = syncDaemonSet(ctx, client, scheme, dc, pl, ds)
+		err = syncDaemonSet(ctx, client, scheme, dc, ds)
 		if err != nil {
 			logger.Error(err, "Fail to sync DaemonSet", "Namespace", ds.Namespace, "Name", ds.Name)
 			return err
 		}
 	}
 	return nil
-}
-
-func setDsNodeAffinity(pl *sriovnetworkv1.SriovNetworkNodePolicyList, ds *appsv1.DaemonSet) error {
-	terms := nodeSelectorTermsForPolicyList(pl.Items)
-	if len(terms) > 0 {
-		ds.Spec.Template.Spec.Affinity = &corev1.Affinity{
-			NodeAffinity: &corev1.NodeAffinity{
-				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-					NodeSelectorTerms: terms,
-				},
-			},
-		}
-	}
-	return nil
-}
-
-func nodeSelectorTermsForPolicyList(policies []sriovnetworkv1.SriovNetworkNodePolicy) []corev1.NodeSelectorTerm {
-	terms := []corev1.NodeSelectorTerm{}
-	for _, p := range policies {
-		// Note(adrianc): default policy is deprecated and ignored.
-		if p.Name == constants.DefaultPolicyName {
-			continue
-		}
-
-		if len(p.Spec.NodeSelector) == 0 {
-			continue
-		}
-		expressions := []corev1.NodeSelectorRequirement{}
-		for k, v := range p.Spec.NodeSelector {
-			exp := corev1.NodeSelectorRequirement{
-				Operator: corev1.NodeSelectorOpIn,
-				Key:      k,
-				Values:   []string{v},
-			}
-			expressions = append(expressions, exp)
-		}
-		// sorting is needed to keep the daemon spec stable.
-		// the items are popped in a random order from the map
-		sort.Slice(expressions, func(i, j int) bool {
-			return expressions[i].Key < expressions[j].Key
-		})
-		nodeSelector := corev1.NodeSelectorTerm{
-			MatchExpressions: expressions,
-		}
-		terms = append(terms, nodeSelector)
-	}
-
-	return terms
 }
 
 // renderDsForCR returns a busybox pod with the same name/namespace as the cr
@@ -326,16 +257,11 @@ func renderDsForCR(path string, data *render.RenderData) ([]*uns.Unstructured, e
 	return objs, nil
 }
 
-func syncDaemonSet(ctx context.Context, client k8sclient.Client, scheme *runtime.Scheme, dc *sriovnetworkv1.SriovOperatorConfig, pl *sriovnetworkv1.SriovNetworkNodePolicyList, in *appsv1.DaemonSet) error {
+func syncDaemonSet(ctx context.Context, client k8sclient.Client, scheme *runtime.Scheme, dc *sriovnetworkv1.SriovOperatorConfig, in *appsv1.DaemonSet) error {
 	logger := log.Log.WithName("syncDaemonSet")
 	logger.V(1).Info("Start to sync DaemonSet", "Namespace", in.Namespace, "Name", in.Name)
 	var err error
 
-	if pl != nil {
-		if err = setDsNodeAffinity(pl, in); err != nil {
-			return err
-		}
-	}
 	if err = controllerutil.SetControllerReference(dc, in, scheme); err != nil {
 		return err
 	}
