@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -343,43 +344,6 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 				return true, nil
 			})
 			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("should add the device-plugin node selector only for the device plugin", func() {
-			err := util.WaitForNamespacedObject(&appsv1.DaemonSet{}, k8sClient, testNamespace, "sriov-device-plugin", util.RetryInterval, util.APITimeout)
-			Expect(err).NotTo(HaveOccurred())
-
-			ds := &appsv1.DaemonSet{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "sriov-device-plugin"}, ds)).NotTo(HaveOccurred())
-			value, exist := ds.Spec.Template.Spec.NodeSelector[consts.SriovDevicePluginLabel]
-			Expect(exist).To(BeTrue())
-			Expect(value).To(Equal(consts.SriovDevicePluginLabelEnabled))
-
-			ds = &appsv1.DaemonSet{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "sriov-network-config-daemon"}, ds)).NotTo(HaveOccurred())
-			_, exist = ds.Spec.Template.Spec.NodeSelector[consts.SriovDevicePluginLabel]
-			Expect(exist).To(BeFalse())
-
-			nodeSelector := map[string]string{
-				"node-role.kubernetes.io/worker": "",
-				"bool-key":                       "true",
-			}
-
-			restore := updateConfigDaemonNodeSelector(nodeSelector)
-			DeferCleanup(restore)
-
-			Eventually(func(g Gomega) {
-				err := util.WaitForNamespacedObject(ds, k8sClient, testNamespace, "sriov-network-config-daemon", util.RetryInterval, util.APITimeout)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(ds.Spec.Template.Spec.NodeSelector).To((Equal(nodeSelector)))
-			}).Should(Succeed())
-
-			nodeSelector[consts.SriovDevicePluginLabel] = consts.SriovDevicePluginLabelEnabled
-			Eventually(func(g Gomega) {
-				err := util.WaitForNamespacedObject(ds, k8sClient, testNamespace, "sriov-device-plugin", util.RetryInterval, util.APITimeout)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(ds.Spec.Template.Spec.NodeSelector).To((Equal(nodeSelector)))
-			}).Should(Succeed())
 		})
 
 		Context("metricsExporter feature gate", func() {

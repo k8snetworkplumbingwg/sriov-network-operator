@@ -1622,7 +1622,7 @@ var _ = Describe("[sriov] operator", func() {
 				intf = getInterfaceFromNodeStateByPciAddress(node, intf.PciAddress)
 			})
 
-			FIt("should reconcile managed VF if status is changed", func() {
+			It("should reconcile managed VF if status is changed", func() {
 				originalMtu := intf.Mtu
 				lowerMtu := originalMtu - 500
 
