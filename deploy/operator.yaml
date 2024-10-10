@@ -45,6 +45,17 @@ spec:
           - sriov-network-operator
           args:
           - --leader-elect=$OPERATOR_LEADER_ELECTION_ENABLE
+#          command:
+#            - dlv
+#            - --listen=:2345
+#            - --headless=true
+#            - --api-version=2
+#            - --accept-multiclient
+#            - --log
+#            - exec
+#            - /usr/bin/sriov-network-operator
+#            - --
+#            - --leader-elect=$OPERATOR_LEADER_ELECTION_ENABLE
           resources:
             requests:
               cpu: 100m

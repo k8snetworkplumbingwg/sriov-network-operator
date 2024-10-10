@@ -130,10 +130,22 @@ spec:
       containers:
       - name: sriov-network-config-daemon
         image: {{.Image}}
-        command:
-          - sriov-network-config-daemon
+        imagePullPolicy: Always
+#        command:
+#          - dlv
+#          - --listen=:2345
+#          - --headless=true
+#          - --api-version=2
+#          - --accept-multiclient
+#          - --log
+#          - exec
+#          - /usr/bin/sriov-network-config-daemon
+#          - --
+#          - start
         securityContext:
           privileged: true
+        command:
+          - sriov-network-config-daemon
         args:
           - "start"
         {{- if .UsedSystemdMode}}

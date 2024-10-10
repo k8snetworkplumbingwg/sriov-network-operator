@@ -1615,6 +1615,8 @@ var _ = Describe("[sriov] operator", func() {
 
 				Expect(err).ToNot(HaveOccurred())
 				waitForNetAttachDef("test-mtuvolnetwork", namespaces.Test)
+				By("starting a pod to make the drain slower")
+				createTestPod(node, []string{sriovNetwork.Name})
 
 				// update the interface
 				intf = getInterfaceFromNodeStateByPciAddress(node, intf.PciAddress)
