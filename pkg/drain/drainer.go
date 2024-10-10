@@ -31,6 +31,7 @@ func (w writer) Write(p []byte) (n int, err error) {
 type DrainInterface interface {
 	DrainNode(context.Context, *corev1.Node, bool) (bool, error)
 	CompleteDrainNode(context.Context, *corev1.Node) (bool, error)
+	RunCordonOrUncordon(ctx context.Context, node *corev1.Node, desired bool) error
 }
 
 type Drainer struct {
@@ -98,7 +99,7 @@ func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrai
 		reqLogger.Info("drainNode(): failed to drain node", "error", err)
 		return false, err
 	}
-	reqLogger.Info("drainNode(): drain complete")
+	reqLogger.Info("drainNode(): Drain completed")
 	return true, nil
 }
 
@@ -129,6 +130,22 @@ func (d *Drainer) CompleteDrainNode(ctx context.Context, node *corev1.Node) (boo
 
 	logger.V(2).Info("CompleteDrainNode:()", "drainCompleted", completed)
 	return completed, nil
+}
+
+// RunCordonOrUncordon runs cordon or uncordon on a specific
+func (d *Drainer) RunCordonOrUncordon(ctx context.Context, node *corev1.Node, desired bool) error {
+	logger := log.FromContext(ctx)
+	logger.Info("RunCordonOrUncordon:()")
+
+	// create drain helper we don't care about the drain function so we sent false to the fullDrain parameter
+	drainHelper := createDrainHelper(d.kubeClient, ctx, false)
+
+	// perform the api call
+	err := drain.RunCordonOrUncordon(drainHelper, node, desired)
+	if err != nil {
+		logger.Error(err, "failed to cordon/uncordon node", "node", node.Name, "desired", desired)
+	}
+	return err
 }
 
 // createDrainHelper function to create a drain helper
