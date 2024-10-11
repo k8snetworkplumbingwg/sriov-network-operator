@@ -207,6 +207,14 @@ func (dn *Daemon) Run(stopCh <-chan struct{}, exitCh <-chan error) error {
 	for {
 		select {
 		case <-stopCh:
+			// clean files from host if we are running in systemd mode
+			if vars.UsingSystemdMode {
+				err := systemd.CleanSriovFilesFromHost(vars.ClusterType == consts.ClusterTypeOpenshift)
+				if err != nil {
+					log.Log.Error(err, "failed to remove all the systemd sriov files")
+					return err
+				}
+			}
 			log.Log.V(0).Info("Run(): stop daemon")
 			return nil
 		case err, more := <-exitCh:
