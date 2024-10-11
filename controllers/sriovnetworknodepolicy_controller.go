@@ -133,10 +133,6 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 	if err = r.syncDevicePluginConfigMap(ctx, defaultOpConf, policyList, nodeList); err != nil {
 		return reconcile.Result{}, err
 	}
-	// Render and sync Daemon objects
-	if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultOpConf, policyList); err != nil {
-		return reconcile.Result{}, err
-	}
 
 	// All was successful. Request that this be re-triggered after ResyncPeriod,
 	// so we can reconcile state again.

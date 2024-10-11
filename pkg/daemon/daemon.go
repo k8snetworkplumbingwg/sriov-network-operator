@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -478,6 +477,27 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 		}
 	}
 
+	// if we don't need to drain, and we are on idle we need to request the device plugin reset
+	if !reqDrain && utils.ObjectHasAnnotation(dn.desiredNodeState,
+		consts.NodeStateDrainAnnotationCurrent,
+		consts.DrainIdle) {
+		log.Log.Info("nodeStateSyncHandler(): apply 'Device_Plugin_Reset_Required' annotation for node")
+		err := utils.AnnotateNode(context.Background(), vars.NodeName, consts.NodeDrainAnnotation, consts.DevicePluginResetRequired, dn.client)
+		if err != nil {
+			log.Log.Error(err, "handleDrain(): Failed to annotate node")
+			return err
+		}
+
+		log.Log.Info("handleDrain(): apply 'Device_Plugin_Reset_Required' annotation for nodeState")
+		if err := utils.AnnotateObject(context.Background(), dn.desiredNodeState,
+			consts.NodeStateDrainAnnotation,
+			consts.DevicePluginResetRequired, dn.client); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
 	// apply the vendor plugins after we are done with drain if needed
 	for k, p := range dn.loadedPlugins {
 		// Skip both the general and virtual plugin apply them last
@@ -521,13 +541,6 @@ func (dn *Daemon) nodeStateSyncHandler() error {
 		dn.eventRecorder.SendEvent("RebootNode", "Reboot node has been initiated")
 		dn.rebootNode()
 		return nil
-	}
-
-	// restart device plugin pod
-	log.Log.Info("nodeStateSyncHandler(): restart device plugin pod")
-	if err := dn.restartDevicePluginPod(); err != nil {
-		log.Log.Error(err, "nodeStateSyncHandler(): fail to restart device plugin pod")
-		return err
 	}
 
 	log.Log.Info("nodeStateSyncHandler(): apply 'Idle' annotation for node")
@@ -676,65 +689,6 @@ func (dn *Daemon) handleDrain(reqReboot bool) (bool, error) {
 
 	// the node was annotated we need to wait for the operator to finish the drain
 	return true, nil
-}
-
-func (dn *Daemon) restartDevicePluginPod() error {
-	dn.mu.Lock()
-	defer dn.mu.Unlock()
-	log.Log.V(2).Info("restartDevicePluginPod(): try to restart device plugin pod")
-
-	pods, err := dn.kubeClient.CoreV1().Pods(vars.Namespace).List(context.Background(), metav1.ListOptions{
-		LabelSelector:   "app=sriov-device-plugin",
-		FieldSelector:   "spec.nodeName=" + vars.NodeName,
-		ResourceVersion: "0",
-	})
-	if err != nil {
-		if errors.IsNotFound(err) {
-			log.Log.Info("restartDevicePluginPod(): device plugin pod exited")
-			return nil
-		}
-		log.Log.Error(err, "restartDevicePluginPod(): Failed to list device plugin pod, retrying")
-		return err
-	}
-
-	if len(pods.Items) == 0 {
-		log.Log.Info("restartDevicePluginPod(): device plugin pod exited")
-		return nil
-	}
-
-	for _, pod := range pods.Items {
-		podToDelete := pod.Name
-		log.Log.V(2).Info("restartDevicePluginPod(): Found device plugin pod, deleting it", "pod-name", podToDelete)
-		err = dn.kubeClient.CoreV1().Pods(vars.Namespace).Delete(context.Background(), podToDelete, metav1.DeleteOptions{})
-		if errors.IsNotFound(err) {
-			log.Log.Info("restartDevicePluginPod(): pod to delete not found")
-			continue
-		}
-		if err != nil {
-			log.Log.Error(err, "restartDevicePluginPod(): Failed to delete device plugin pod, retrying")
-			return err
-		}
-
-		if err := wait.PollImmediateUntil(3*time.Second, func() (bool, error) {
-			_, err := dn.kubeClient.CoreV1().Pods(vars.Namespace).Get(context.Background(), podToDelete, metav1.GetOptions{})
-			if errors.IsNotFound(err) {
-				log.Log.Info("restartDevicePluginPod(): device plugin pod exited")
-				return true, nil
-			}
-
-			if err != nil {
-				log.Log.Error(err, "restartDevicePluginPod(): Failed to check for device plugin exit, retrying")
-			} else {
-				log.Log.Info("restartDevicePluginPod(): waiting for device plugin pod to exit", "pod-name", podToDelete)
-			}
-			return false, nil
-		}, dn.stopCh); err != nil {
-			log.Log.Error(err, "restartDevicePluginPod(): failed to wait for checking pod deletion")
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (dn *Daemon) rebootNode() {
