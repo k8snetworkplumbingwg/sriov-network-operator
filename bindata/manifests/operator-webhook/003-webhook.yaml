@@ -11,6 +11,8 @@ metadata:
     # more variables.
     cert-manager.io/inject-ca-from: {{.Namespace}}/{{.OperatorWebhookSecretName}}
     {{- end }}
+  labels:
+    created-by: {{ include "sriov-network-operator.fullname" . }}    
 webhooks:
   - name: operator-webhook.sriovnetwork.openshift.io
     sideEffects: None
@@ -43,6 +45,8 @@ metadata:
     # more variables.
     cert-manager.io/inject-ca-from: {{.Namespace}}/{{.OperatorWebhookSecretName}}
     {{- end }}
+  labels:
+    created-by: {{ include "sriov-network-operator.fullname" . }}    
 webhooks:
   - name: operator-webhook.sriovnetwork.openshift.io
     sideEffects: None

@@ -9,6 +9,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: network-resources-injector
+  labels:
+    created-by: {{ include "sriov-network-operator.fullname" . }} 
 rules:
 - apiGroups:
     - k8s.cni.cncf.io
@@ -31,6 +33,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: network-resources-injector-role-binding
+  labels:
+    created-by: {{ include "sriov-network-operator.fullname" . }}  
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

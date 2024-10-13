@@ -11,6 +11,8 @@ metadata:
     # more variables.
     cert-manager.io/inject-ca-from: {{.Namespace}}/{{.InjectorWebhookSecretName}}
     {{- end }}
+  labels:
+    created-by: {{ include "sriov-network-operator.fullname" . }}    
 webhooks:
   - name: network-resources-injector-config.k8s.io
     sideEffects: None
