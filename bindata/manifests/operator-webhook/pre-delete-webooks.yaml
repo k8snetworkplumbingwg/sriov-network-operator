@@ -1,0 +1,24 @@
+{{ if .Values.operator.admissionControllers.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ include "sriov-network-operator.fullname" . }}-pre-delete-hook"
+  namespace: namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  template:
+    spec:
+      serviceAccountName: {{ include "sriov-network-operator.fullname" . }}
+      containers:
+        - name: cleanup
+          image: {{.SriovNetworkWebhookImage}}
+          command:
+            - webhook
+          args:
+            - delete
+            - -n
+            - namespace: {{ .Release.Namespace }}
+      restartPolicy: Never
+{{ end }}      
