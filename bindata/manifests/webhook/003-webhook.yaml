@@ -12,7 +12,7 @@ metadata:
     cert-manager.io/inject-ca-from: {{.Namespace}}/{{.InjectorWebhookSecretName}}
     {{- end }}
   labels:
-    created-by: {{ include "sriov-network-operator.fullname" . }}    
+    created-by: {{ .OperatorGeneratedResourcesLabelSelector | default "sriov-network-operator" }}   
 webhooks:
   - name: network-resources-injector-config.k8s.io
     sideEffects: None

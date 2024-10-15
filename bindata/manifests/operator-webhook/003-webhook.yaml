@@ -12,7 +12,7 @@ metadata:
     cert-manager.io/inject-ca-from: {{.Namespace}}/{{.OperatorWebhookSecretName}}
     {{- end }}
   labels:
-    created-by: {{ include "sriov-network-operator.fullname" . }}    
+    created-by: {{ .OperatorGeneratedResourcesLabelSelector | default "sriov-network-operator" }}   
 webhooks:
   - name: operator-webhook.sriovnetwork.openshift.io
     sideEffects: None
@@ -46,7 +46,7 @@ metadata:
     cert-manager.io/inject-ca-from: {{.Namespace}}/{{.OperatorWebhookSecretName}}
     {{- end }}
   labels:
-    created-by: {{ include "sriov-network-operator.fullname" . }}    
+    created-by: {{ .OperatorGeneratedResourcesLabelSelector | default "sriov-network-operator" }}   
 webhooks:
   - name: operator-webhook.sriovnetwork.openshift.io
     sideEffects: None
