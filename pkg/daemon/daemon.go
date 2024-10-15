@@ -77,7 +77,7 @@ type Daemon struct {
 
 	refreshCh chan<- Message
 
-	mu *sync.Mutex
+	mu sync.Mutex
 
 	disableDrain bool
 
@@ -120,7 +120,6 @@ func New(
 		eventRecorder:   er,
 		featureGate:     featureGates,
 		disabledPlugins: disabledPlugins,
-		mu:              &sync.Mutex{},
 	}
 }
 
@@ -207,8 +206,14 @@ func (dn *Daemon) Run(stopCh <-chan struct{}, exitCh <-chan error) error {
 	for {
 		select {
 		case <-stopCh:
-			// clean files from host if we are running in systemd mode
-			if vars.UsingSystemdMode {
+			// clean files from host if we are running in systemd mode and the node
+			// is not required to be rebooted
+			dn.mu.Lock()
+			rebootrequired := utils.ObjectHasAnnotation(dn.desiredNodeState,
+				consts.NodeStateDrainAnnotation, consts.RebootRequired)
+			dn.mu.Unlock()
+
+			if vars.UsingSystemdMode && !rebootrequired {
 				err := systemd.CleanSriovFilesFromHost(vars.ClusterType == consts.ClusterTypeOpenshift)
 				if err != nil {
 					log.Log.Error(err, "failed to remove all the systemd sriov files")
@@ -324,6 +329,8 @@ func (dn *Daemon) operatorConfigChangeHandler(old, new interface{}) {
 }
 
 func (dn *Daemon) nodeStateSyncHandler() error {
+	dn.mu.Lock()
+	defer dn.mu.Unlock()
 	var err error
 	// Get the latest NodeState
 	var sriovResult = &systemd.SriovResult{SyncStatus: consts.SyncStatusSucceeded, LastSyncError: ""}
@@ -687,8 +694,6 @@ func (dn *Daemon) handleDrain(reqReboot bool) (bool, error) {
 }
 
 func (dn *Daemon) restartDevicePluginPod() error {
-	dn.mu.Lock()
-	defer dn.mu.Unlock()
 	log.Log.V(2).Info("restartDevicePluginPod(): try to restart device plugin pod")
 
 	pods, err := dn.kubeClient.CoreV1().Pods(vars.Namespace).List(context.Background(), metav1.ListOptions{
