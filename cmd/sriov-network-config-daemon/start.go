@@ -21,7 +21,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -134,7 +136,6 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 
 	// This channel is used to ensure all spawned goroutines exit when we exit.
 	stopCh := make(chan struct{})
-	defer close(stopCh)
 
 	// This channel is used to signal Run() something failed and to jump ship.
 	// It's purely a chan<- in the Daemon struct for goroutines to write to, and
@@ -286,6 +287,7 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	err = kClient.Get(context.Background(), types.NamespacedName{Namespace: vars.Namespace, Name: consts.DefaultConfigName}, defaultConfig)
 	if err != nil {
 		log.Log.Error(err, "Failed to get default SriovOperatorConfig object")
+		close(stopCh)
 		return err
 	}
 	featureGates := featuregate.New()
@@ -294,25 +296,45 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	log.Log.Info("Enabled featureGates", "featureGates", featureGates.String())
 
 	setupLog.V(0).Info("Starting SriovNetworkConfigDaemon")
-	err = daemon.New(
-		kClient,
-		snclient,
-		kubeclient,
-		hostHelpers,
-		platformHelper,
-		exitCh,
-		stopCh,
-		syncCh,
-		refreshCh,
-		eventRecorder,
-		featureGates,
-		startOpts.disabledPlugins,
-	).Run(stopCh, exitCh)
-	if err != nil {
-		setupLog.Error(err, "failed to run daemon")
+
+	// create a signal channel to catch interrupts and gracefully shutdown the daemon
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt)
+	signal.Notify(sigc, syscall.SIGTERM)
+
+	errChan := make(chan error)
+	defer close(errChan)
+	go func() {
+		errChan <- daemon.New(
+			kClient,
+			snclient,
+			kubeclient,
+			hostHelpers,
+			platformHelper,
+			exitCh,
+			stopCh,
+			syncCh,
+			refreshCh,
+			eventRecorder,
+			featureGates,
+			startOpts.disabledPlugins,
+		).Run(stopCh, exitCh)
+	}()
+
+	select {
+	case err := <-errChan:
+		// daemon has exited, close the stop channel and return the error
+		close(stopCh)
+		return err
+	case <-sigc:
+		// signal received, close the stop channel and wait for the daemon to exit
+		close(stopCh)
+		if err := <-errChan; err != nil {
+			return err
+		}
 	}
 	setupLog.V(0).Info("Shutting down SriovNetworkConfigDaemon")
-	return err
+	return nil
 }
 
 // updateDialer instruments a restconfig with a dial. the returned function allows forcefully closing all active connections.
