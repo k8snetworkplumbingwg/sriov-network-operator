@@ -300,6 +300,7 @@ func (r *SriovOperatorConfigReconciler) syncWebhookObjs(ctx context.Context, dc 
 		data.Data["OperatorWebhookCA"] = os.Getenv("ADMISSION_CONTROLLERS_CERTIFICATES_OPERATOR_CA_CRT")
 		data.Data["InjectorWebhookSecretName"] = os.Getenv("ADMISSION_CONTROLLERS_CERTIFICATES_INJECTOR_SECRET_NAME")
 		data.Data["InjectorWebhookCA"] = os.Getenv("ADMISSION_CONTROLLERS_CERTIFICATES_INJECTOR_CA_CRT")
+		data.Data["OperatorGeneratedResourcesLabelSelector"] = os.Getenv("OPERATOR_GENERATED_RESOURCES_LABEL_SELECTOR")
 
 		data.Data["ExternalControlPlane"] = false
 		if r.PlatformHelper.IsOpenshiftCluster() {

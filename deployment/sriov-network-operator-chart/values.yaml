@@ -38,6 +38,7 @@ operator:
       deployRules: false
   admissionControllers:
     enabled: false
+    labelSelector: ""
     certificates:
       secretNames:
         operator: "operator-webhook-cert"

@@ -9,6 +9,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: operator-webhook
+  labels:
+    created-by: {{ .OperatorGeneratedResourcesLabelSelector | default "sriov-network-operator" }}
 rules:
 - apiGroups:
     - ""
@@ -32,6 +34,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: operator-webhook-role-binding
+  labels:
+    created-by: {{ .OperatorGeneratedResourcesLabelSelector | default "sriov-network-operator" }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
