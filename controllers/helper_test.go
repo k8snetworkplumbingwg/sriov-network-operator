@@ -64,8 +64,8 @@ func TestNodeSelectorMerge(t *testing.T) {
 					MatchExpressions: []corev1.NodeSelectorRequirement{
 						{
 							Operator: corev1.NodeSelectorOpIn,
-							Key:      "foo",
-							Values:   []string{"bar"},
+							Key:      "bb",
+							Values:   []string{"cc"},
 						},
 					},
 				},
@@ -73,8 +73,8 @@ func TestNodeSelectorMerge(t *testing.T) {
 					MatchExpressions: []corev1.NodeSelectorRequirement{
 						{
 							Operator: corev1.NodeSelectorOpIn,
-							Key:      "bb",
-							Values:   []string{"cc"},
+							Key:      "foo",
+							Values:   []string{"bar"},
 						},
 					},
 				},

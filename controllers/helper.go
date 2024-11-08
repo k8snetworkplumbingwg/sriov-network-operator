@@ -311,6 +311,27 @@ func nodeSelectorTermsForPolicyList(policies []sriovnetworkv1.SriovNetworkNodePo
 		terms = append(terms, nodeSelector)
 	}
 
+	// sorting is needed to keep the daemon spec stable.
+	// the policies can come in a random order
+	sort.Slice(terms, func(i, j int) bool {
+		expressionsA := terms[i].MatchExpressions
+		expressionsB := terms[j].MatchExpressions
+		if len(expressionsA) != len(expressionsB) {
+			return len(expressionsA) < len(expressionsB)
+		}
+		for k := range expressionsA {
+			expressionA := expressionsA[k]
+			expressionB := expressionsB[k]
+			if expressionA.Key != expressionB.Key {
+				return expressionA.Key < expressionB.Key
+			}
+			if expressionA.Values[0] != expressionB.Values[0] {
+				return expressionA.Values[0] != expressionB.Values[0]
+			}
+		}
+		return true
+	})
+
 	return terms
 }
 
