@@ -326,7 +326,7 @@ func nodeSelectorTermsForPolicyList(policies []sriovnetworkv1.SriovNetworkNodePo
 				return expressionA.Key < expressionB.Key
 			}
 			if expressionA.Values[0] != expressionB.Values[0] {
-				return expressionA.Values[0] != expressionB.Values[0]
+				return expressionA.Values[0] < expressionB.Values[0]
 			}
 		}
 		return true
