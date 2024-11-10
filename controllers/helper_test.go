@@ -148,6 +148,61 @@ func TestNodeSelectorMerge(t *testing.T) {
 			},
 			expected: []corev1.NodeSelectorTerm{},
 		},
+		{
+			tname: "testordersamekey",
+			policies: []sriovnetworkv1.SriovNetworkNodePolicy{
+				{
+					Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+						NodeSelector: map[string]string{
+							"env": "production",
+						},
+					},
+				},
+				{
+					Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+						NodeSelector: map[string]string{
+							"env": "staging",
+						},
+					},
+				},
+				{
+					Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+						NodeSelector: map[string]string{
+							"env": "dev",
+						},
+					},
+				},
+			},
+			expected: []corev1.NodeSelectorTerm{
+				{
+					MatchExpressions: []corev1.NodeSelectorRequirement{
+						{
+							Operator: corev1.NodeSelectorOpIn,
+							Key:      "env",
+							Values:   []string{"dev"},
+						},
+					},
+				},
+				{
+					MatchExpressions: []corev1.NodeSelectorRequirement{
+						{
+							Operator: corev1.NodeSelectorOpIn,
+							Key:      "env",
+							Values:   []string{"production"},
+						},
+					},
+				},
+				{
+					MatchExpressions: []corev1.NodeSelectorRequirement{
+						{
+							Operator: corev1.NodeSelectorOpIn,
+							Key:      "env",
+							Values:   []string{"staging"},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range table {
