@@ -311,7 +311,7 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 	return pfList, nil
 }
 
-func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
+func (s *sriov) configSriovPFDevice(ifaceName string, iface *sriovnetworkv1.Interface) error {
 	log.Log.V(2).Info("configSriovPFDevice(): configure PF sriov device",
 		"device", iface.PciAddress)
 	totalVfs := s.dputilsLib.GetSriovVFcapacity(iface.PciAddress)
@@ -320,7 +320,7 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		log.Log.Error(err, "configSriovPFDevice(): fail to set NumVfs for device", "device", iface.PciAddress)
 		return err
 	}
-	if err := s.configureHWOptionsForSwitchdev(iface); err != nil {
+	if err := s.configureHWOptionsForSwitchdev(ifaceName, iface); err != nil {
 		return err
 	}
 	// remove all UDEV rules for the PF before adding new rules to
@@ -330,7 +330,7 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		log.Log.Error(err, "configSriovPFDevice(): fail to remove udev rules", "device", iface.PciAddress)
 		return err
 	}
-	err := s.addUdevRules(iface)
+	err := s.addUdevRules(ifaceName, iface)
 	if err != nil {
 		log.Log.Error(err, "configSriovPFDevice(): fail to add udev rules", "device", iface.PciAddress)
 		return err
@@ -340,7 +340,7 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		log.Log.Error(err, "configSriovPFDevice(): fail to set NumVfs for device", "device", iface.PciAddress)
 		return err
 	}
-	if err := s.addVfRepresentorUdevRule(iface); err != nil {
+	if err := s.addVfRepresentorUdevRule(ifaceName, iface); err != nil {
 		log.Log.Error(err, "configSriovPFDevice(): fail to add VR representor udev rule", "device", iface.PciAddress)
 		return err
 	}
@@ -355,14 +355,14 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 	return nil
 }
 
-func (s *sriov) configureHWOptionsForSwitchdev(iface *sriovnetworkv1.Interface) error {
+func (s *sriov) configureHWOptionsForSwitchdev(ifaceName string, iface *sriovnetworkv1.Interface) error {
 	log.Log.V(2).Info("configureHWOptionsForSwitchdev(): configure HW options for device",
 		"device", iface.PciAddress)
 	if sriovnetworkv1.GetEswitchModeFromSpec(iface) != sriovnetworkv1.ESwithModeSwitchDev {
 		// we need to configure HW options only for PFs for which switchdev is a target mode
 		return nil
 	}
-	if err := s.networkHelper.EnableHwTcOffload(iface.Name); err != nil {
+	if err := s.networkHelper.EnableHwTcOffload(ifaceName); err != nil {
 		return err
 	}
 	desiredFlowSteeringMode := "smfs"
@@ -428,7 +428,7 @@ func (s *sriov) checkExternallyManagedPF(iface *sriovnetworkv1.Interface) error 
 	return nil
 }
 
-func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
+func (s *sriov) configSriovVFDevices(ifaceName string, iface *sriovnetworkv1.Interface) error {
 	log.Log.V(2).Info("configSriovVFDevices(): configure PF sriov device",
 		"device", iface.PciAddress)
 	if iface.NumVfs > 0 {
@@ -436,9 +436,9 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 		if err != nil {
 			log.Log.Error(err, "configSriovVFDevices(): unable to parse VFs for device", "device", iface.PciAddress)
 		}
-		pfLink, err := s.netlinkLib.LinkByName(iface.Name)
+		pfLink, err := s.netlinkLib.LinkByName(ifaceName)
 		if err != nil {
-			log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface)
+			log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface.PciAddress)
 			return err
 		}
 
@@ -478,7 +478,7 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 				// if nothing is specified in the SriovNodePolicy
 				linkType := iface.LinkType
 				if linkType == "" {
-					linkType = s.GetLinkType(iface.Name)
+					linkType = s.GetLinkType(ifaceName)
 				}
 				if strings.EqualFold(linkType, consts.LinkTypeIB) {
 					if err := s.infinibandHelper.ConfigureVfGUID(addr, iface.PciAddress, vfID, pfLink); err != nil {
@@ -558,8 +558,12 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 func (s *sriov) configSriovDevice(iface *sriovnetworkv1.Interface, skipVFConfiguration bool) error {
 	log.Log.V(2).Info("configSriovDevice(): configure sriov device",
 		"device", iface.PciAddress, "config", iface, "skipVFConfiguration", skipVFConfiguration)
+	ifaceName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
+	if ifaceName == "" {
+		return fmt.Errorf("failed to get network interface name for device")
+	}
 	if !iface.ExternallyManaged {
-		if err := s.configSriovPFDevice(iface); err != nil {
+		if err := s.configSriovPFDevice(ifaceName, iface); err != nil {
 			return err
 		}
 	}
@@ -580,11 +584,11 @@ func (s *sriov) configSriovDevice(iface *sriovnetworkv1.Interface, skipVFConfigu
 			return err
 		}
 	}
-	if err := s.configSriovVFDevices(iface); err != nil {
+	if err := s.configSriovVFDevices(ifaceName, iface); err != nil {
 		return err
 	}
 	// Set PF link up
-	pfLink, err := s.netlinkLib.LinkByName(iface.Name)
+	pfLink, err := s.netlinkLib.LinkByName(ifaceName)
 	if err != nil {
 		return err
 	}
@@ -935,14 +939,14 @@ func (s *sriov) encapTypeToLinkType(encapType string) string {
 // create required udev rules for PF:
 // * rule to disable NetworkManager for VFs - for all modes
 // * rule to keep PF name after switching to switchdev mode - only for switchdev mode
-func (s *sriov) addUdevRules(iface *sriovnetworkv1.Interface) error {
+func (s *sriov) addUdevRules(ifaceName string, iface *sriovnetworkv1.Interface) error {
 	log.Log.V(2).Info("addUdevRules(): add udev rules for device",
 		"device", iface.PciAddress)
 	if err := s.udevHelper.AddDisableNMUdevRule(iface.PciAddress); err != nil {
 		return err
 	}
 	if sriovnetworkv1.GetEswitchModeFromSpec(iface) == sriovnetworkv1.ESwithModeSwitchDev {
-		if err := s.udevHelper.AddPersistPFNameUdevRule(iface.PciAddress, iface.Name); err != nil {
+		if err := s.udevHelper.AddPersistPFNameUdevRule(iface.PciAddress, ifaceName); err != nil {
 			return err
 		}
 	}
@@ -953,19 +957,19 @@ func (s *sriov) addUdevRules(iface *sriovnetworkv1.Interface) error {
 // this rule relies on phys_port_name and phys_switch_id parameter which
 // on old kernels can be read only after switching PF to switchdev mode.
 // if PF doesn't expose phys_port_name and phys_switch_id, then rule creation will be skipped
-func (s *sriov) addVfRepresentorUdevRule(iface *sriovnetworkv1.Interface) error {
+func (s *sriov) addVfRepresentorUdevRule(ifaceName string, iface *sriovnetworkv1.Interface) error {
 	if sriovnetworkv1.GetEswitchModeFromSpec(iface) == sriovnetworkv1.ESwithModeSwitchDev {
-		portName, err := s.networkHelper.GetPhysPortName(iface.Name)
+		portName, err := s.networkHelper.GetPhysPortName(ifaceName)
 		if err != nil {
 			log.Log.Error(err, "addVfRepresentorUdevRule(): WARNING: can't read phys_port_name for device, skip creation of UDEV rule")
 			return nil
 		}
-		switchID, err := s.networkHelper.GetPhysSwitchID(iface.Name)
+		switchID, err := s.networkHelper.GetPhysSwitchID(ifaceName)
 		if err != nil {
 			log.Log.Error(err, "addVfRepresentorUdevRule(): WARNING: can't read phys_switch_id for device, skip creation of UDEV rule")
 			return nil
 		}
-		return s.udevHelper.AddVfRepresentorUdevRule(iface.PciAddress, iface.Name, switchID, portName)
+		return s.udevHelper.AddVfRepresentorUdevRule(iface.PciAddress, ifaceName, switchID, portName)
 	}
 	return nil
 }

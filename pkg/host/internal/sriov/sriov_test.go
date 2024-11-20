@@ -216,6 +216,7 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().RemovePersistPFNameUdevRule("0000:d8:00.0").Return(nil)
 			hostMock.EXPECT().RemoveVfRepresentorUdevRule("0000:d8:00.0").Return(nil)
 			hostMock.EXPECT().AddDisableNMUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2", "0000:d8:00.3"}, nil)
 			pfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil).Times(3)
@@ -285,6 +286,7 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().RemovePersistPFNameUdevRule("0000:d8:00.0").Return(nil)
 			hostMock.EXPECT().RemoveVfRepresentorUdevRule("0000:d8:00.0").Return(nil)
 			hostMock.EXPECT().AddDisableNMUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2"}, nil)
 			pfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil).Times(2)
@@ -338,6 +340,7 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().AddPersistPFNameUdevRule("0000:d8:00.0", "enp216s0f0np0").Return(nil)
 			hostMock.EXPECT().EnableHwTcOffload("enp216s0f0np0").Return(nil)
 			hostMock.EXPECT().GetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode").Return("", syscall.EINVAL)
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2"}, nil).Times(2)
 			pfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil).Times(2)
@@ -407,6 +410,7 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().AddPersistPFNameUdevRule("0000:d8:00.0", "enp216s0f0np0").Return(nil)
 			hostMock.EXPECT().EnableHwTcOffload("enp216s0f0np0").Return(nil)
 			hostMock.EXPECT().GetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode").Return("", syscall.EINVAL)
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2"}, nil).Times(1)
 			pfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil).Times(2)
@@ -461,6 +465,7 @@ var _ = Describe("SRIOV", func() {
 
 		It("externally managed - wrong VF count", func() {
 			dputilsLibMock.EXPECT().GetVFconfigured("0000:d8:00.0").Return(0)
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 
 			Expect(s.ConfigSriovInterfaces(storeManagerMode,
 				[]sriovnetworkv1.Interface{{
@@ -488,6 +493,7 @@ var _ = Describe("SRIOV", func() {
 				nil)
 
 			hostMock.EXPECT().GetNetdevMTU("0000:d8:00.0")
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 			Expect(s.ConfigSriovInterfaces(storeManagerMode,
 				[]sriovnetworkv1.Interface{{
 					Name:              "enp216s0f0np0",
@@ -577,6 +583,7 @@ var _ = Describe("SRIOV", func() {
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2", "0000:d8:00.3"}, nil)
 			hostMock.EXPECT().Unbind("0000:d8:00.2").Return(nil)
 			hostMock.EXPECT().Unbind("0000:d8:00.3").Return(nil)
+			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.0").Return("enp216s0f0np0").Times(1)
 
 			storeManagerMode.EXPECT().SaveLastPfAppliedStatus(gomock.Any()).Return(nil)
 
