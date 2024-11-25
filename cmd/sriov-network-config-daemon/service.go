@@ -85,6 +85,7 @@ func runServiceCmd(cmd *cobra.Command, args []string) error {
 	}
 	// init logger
 	snolog.InitLog()
+	snolog.SetLogLevel(2)
 	setupLog := log.Log.WithName("sriov-config-service").WithValues("phase", phaseArg)
 
 	setupLog.V(0).Info("Starting sriov-config-service", "version", version.Version)
@@ -163,12 +164,24 @@ func phasePre(setupLog logr.Logger, conf *systemd.SriovConfig, hostHelpers helpe
 	hostHelpers.TryEnableTun()
 	hostHelpers.TryEnableVhostNet()
 
-	return callPlugin(setupLog, PhasePre, conf, hostHelpers)
+	// Add retry here as some time the kernel is not fully loaded, and we see issues like
+	// unbindDriver(): failed to unbind driver "error": "open /sys/bus/pci/drivers/igbvf/unbind: permission denied"
+	i := 0
+	for i < 5 {
+		err = callPlugin(setupLog, PhasePre, conf, hostHelpers)
+		if err == nil {
+			break
+		}
+		i++
+		time.Sleep(time.Second)
+	}
+
+	return err
 }
 
 func phasePost(setupLog logr.Logger, conf *systemd.SriovConfig, hostHelpers helper.HostHelpersInterface) error {
 	setupLog.V(0).Info("check result of the Pre phase")
-	prePhaseResult, err := systemd.ReadSriovResult()
+	prePhaseResult, _, err := systemd.ReadSriovResult()
 	if err != nil {
 		return fmt.Errorf("failed to read result of the pre phase: %v", err)
 	}

@@ -29,10 +29,20 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 	var interfaces []*sriovv1.InterfaceExt
 
 	BeforeAll(func() {
-		err := namespaces.Create(namespaces.Test, clients)
+		sriovOperatorConfig := &sriovv1.SriovOperatorConfig{}
+		err := clients.Get(context.Background(), client.ObjectKey{Namespace: operatorNamespace, Name: "default"}, sriovOperatorConfig)
+		Expect(err).ToNot(HaveOccurred())
+		if sriovOperatorConfig.Spec.ConfigurationMode == sriovv1.SystemdConfigurationMode {
+			// TODO: Fix this
+			Skip("rdma mode switch doesn't work on systemd mode")
+		}
+
+		err = namespaces.Create(namespaces.Test, clients)
 		Expect(err).ToNot(HaveOccurred())
 		err = namespaces.Clean(operatorNamespace, namespaces.Test, clients, discovery.Enabled())
 		Expect(err).ToNot(HaveOccurred())
+
+		WaitForSRIOVStable()
 
 		sriovInfos, err := cluster.DiscoverSriov(clients, operatorNamespace)
 		Expect(err).ToNot(HaveOccurred())
@@ -58,7 +68,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 		It("should switch rdma mode", func() {
 			By("create a pool with only that node")
 			networkPool := &sriovv1.SriovNetworkPoolConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: testNode, Namespace: operatorNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("test-%s", testNode), Namespace: operatorNamespace},
 				Spec: sriovv1.SriovNetworkPoolConfigSpec{RdmaMode: consts.RdmaSubsystemModeExclusive,
 					NodeSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}}}}
 
@@ -155,7 +165,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			}
 
 			networkPool := &sriovv1.SriovNetworkPoolConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: testNode, Namespace: operatorNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("test-%s", testNode), Namespace: operatorNamespace},
 				Spec: sriovv1.SriovNetworkPoolConfigSpec{RdmaMode: consts.RdmaSubsystemModeExclusive,
 					NodeSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}}}}
 
@@ -292,7 +302,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			}
 
 			networkPool := &sriovv1.SriovNetworkPoolConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: testNode, Namespace: operatorNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("test-%s", testNode), Namespace: operatorNamespace},
 				Spec: sriovv1.SriovNetworkPoolConfigSpec{RdmaMode: consts.RdmaSubsystemModeShared,
 					NodeSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}}}}
 

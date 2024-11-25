@@ -37,8 +37,8 @@ CGO_ENABLED=${CGO_ENABLED:-0}
 
 if [[ ${WHAT} == "manager" ]]; then
 echo "Building ${WHAT} (${VERSION_OVERRIDE})"
-CGO_ENABLED=${CGO_ENABLED} GOOS=${GOOS} GOARCH=${GOARCH} go build ${GOFLAGS} -ldflags "${GLDFLAGS} -s -w" -o ${BIN_PATH}/${WHAT} main.go
+CGO_ENABLED=${CGO_ENABLED} GOOS=${GOOS} GOARCH=${GOARCH} go build ${GOFLAGS} -gcflags "all=-N -l" -ldflags "${GLDFLAGS}" -o ${BIN_PATH}/${WHAT} main.go
 else
 echo "Building ${REPO}/cmd/${WHAT} (${VERSION_OVERRIDE})"
-CGO_ENABLED=${CGO_ENABLED} GOOS=${GOOS} GOARCH=${GOARCH} go build ${GOFLAGS} -ldflags "${GLDFLAGS} -s -w" -o ${BIN_PATH}/${WHAT} ${REPO}/cmd/${WHAT}
+CGO_ENABLED=${CGO_ENABLED} GOOS=${GOOS} GOARCH=${GOARCH} go build ${GOFLAGS} -gcflags "all=-N -l" -ldflags "${GLDFLAGS}" -o ${BIN_PATH}/${WHAT} ${REPO}/cmd/${WHAT}
 fi

@@ -333,7 +333,16 @@ if [ -z $SKIP_TEST ]; then
   echo "## run sriov e2e conformance tests"
 
   if [[ -v TEST_REPORT_PATH ]]; then
-    export JUNIT_OUTPUT="${root}/${TEST_REPORT_PATH}/conformance-test-report"
+    export JUNIT_OUTPUT="${root}/${TEST_REPORT_PATH}/conformance-test-report-daemon"
+  fi
+
+  SUITE=./test/conformance hack/run-e2e-conformance.sh
+
+  kubectl -n ${NAMESPACE} patch SriovOperatorConfig default --type='merge' -p '{"spec":{"configurationMode":"systemd"}}'
+  sleep 30
+
+  if [[ -v TEST_REPORT_PATH ]]; then
+    export JUNIT_OUTPUT="${root}/${TEST_REPORT_PATH}/conformance-test-report-systemd"
   fi
 
   SUITE=./test/conformance hack/run-e2e-conformance.sh

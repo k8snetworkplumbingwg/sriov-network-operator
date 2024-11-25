@@ -94,9 +94,10 @@ var _ = Describe("[sriov] operator", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				Expect(len(selectedNodes)).To(BeNumerically(">", 0), "There must be at least one worker")
-				candidate := selectedNodes[0]
+				candidate, err := clients.CoreV1Interface.Nodes().Get(context.Background(), selectedNodes[0].Name, metav1.GetOptions{})
+				Expect(err).ToNot(HaveOccurred())
 				candidate.Labels["sriovenabled"] = "true"
-				_, err = clients.CoreV1Interface.Nodes().Update(context.Background(), &candidate, metav1.UpdateOptions{})
+				_, err = clients.CoreV1Interface.Nodes().Update(context.Background(), candidate, metav1.UpdateOptions{})
 				Expect(err).ToNot(HaveOccurred())
 
 				By("Setting the node selector for each daemon")
@@ -1357,7 +1358,7 @@ var _ = Describe("[sriov] operator", func() {
 			})
 		})
 
-		Context("ExternallyManaged Validation", func() {
+		Context("ExternallyManaged Validation", Ordered, ContinueOnFailure, func() {
 			numVfs := 5
 			var node string
 			var nic sriovv1.InterfaceExt
@@ -1365,7 +1366,14 @@ var _ = Describe("[sriov] operator", func() {
 				policy.Spec.ExternallyManaged = true
 			}
 
-			execute.BeforeAll(func() {
+			BeforeAll(func() {
+				sriovOperatorConfig := &sriovv1.SriovOperatorConfig{}
+				err := clients.Get(context.Background(), runtimeclient.ObjectKey{Namespace: operatorNamespace, Name: "default"}, sriovOperatorConfig)
+				Expect(err).ToNot(HaveOccurred())
+				if sriovOperatorConfig.Spec.ConfigurationMode == sriovv1.SystemdConfigurationMode {
+					// TODO: Fix this
+					Skip("ExternallyManaged functional tests doesn't work on systemd mode")
+				}
 				node, nic = sriovInfos.FindOneVfioSriovDevice()
 			})
 

@@ -221,9 +221,9 @@ var _ = Describe("Service", func() {
 		hostHelpers.EXPECT().TryEnableVhostNet().Return()
 		hostHelpers.EXPECT().DiscoverSriovDevices(hostHelpers).Return([]sriovnetworkv1.InterfaceExt{{
 			Name: "enp216s0f0np0",
-		}}, nil)
-		genericPlugin.EXPECT().OnNodeStateChange(newNodeStateContainsDeviceMatcher("enp216s0f0np0")).Return(true, false, nil)
-		genericPlugin.EXPECT().Apply().Return(testError)
+		}}, nil).Times(5)
+		genericPlugin.EXPECT().OnNodeStateChange(newNodeStateContainsDeviceMatcher("enp216s0f0np0")).Return(true, false, nil).Times(5)
+		genericPlugin.EXPECT().Apply().Return(testError).Times(5)
 
 		Expect(runServiceCmd(&cobra.Command{}, []string{})).To(MatchError(ContainSubstring("test")))
 
