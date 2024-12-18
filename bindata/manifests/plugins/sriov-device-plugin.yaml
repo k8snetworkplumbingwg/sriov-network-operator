@@ -42,6 +42,7 @@ spec:
       containers:
       - name: sriov-device-plugin
         image: {{.SRIOVDevicePluginImage}}
+        imagePullPolicy: Always
         args:
         - --log-level=10
         - --resource-prefix={{.ResourcePrefix}}

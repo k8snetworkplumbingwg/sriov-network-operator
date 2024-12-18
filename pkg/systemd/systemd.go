@@ -180,31 +180,31 @@ func WriteSriovResult(result *SriovResult) error {
 	return nil
 }
 
-func ReadSriovResult() (*SriovResult, error) {
+func ReadSriovResult() (*SriovResult, bool, error) {
 	_, err := os.Stat(utils.GetHostExtensionPath(SriovSystemdResultPath))
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Log.V(2).Info("ReadSriovResult(): file does not exist, return empty result")
-			return &SriovResult{}, nil
+			return nil, false, nil
 		} else {
 			log.Log.Error(err, "ReadSriovResult(): failed to check sriov result file", "path", utils.GetHostExtensionPath(SriovSystemdResultPath))
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	rawConfig, err := os.ReadFile(utils.GetHostExtensionPath(SriovSystemdResultPath))
 	if err != nil {
 		log.Log.Error(err, "ReadSriovResult(): failed to read sriov result file", "path", utils.GetHostExtensionPath(SriovSystemdResultPath))
-		return nil, err
+		return nil, false, err
 	}
 
 	result := &SriovResult{}
 	err = yaml.Unmarshal(rawConfig, &result)
 	if err != nil {
 		log.Log.Error(err, "ReadSriovResult(): failed to unmarshal sriov result file", "path", utils.GetHostExtensionPath(SriovSystemdResultPath))
-		return nil, err
+		return nil, false, err
 	}
-	return result, err
+	return result, true, err
 }
 
 func RemoveSriovResult() error {

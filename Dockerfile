@@ -5,6 +5,7 @@ RUN make _build-manager BIN_PATH=build/_output/cmd
 RUN make _build-sriov-network-operator-config-cleanup BIN_PATH=build/_output/cmd
 
 FROM quay.io/centos/centos:stream9
+RUN yum -y install delve procps-ng
 COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/sriov-network-operator/build/_output/cmd/manager /usr/bin/sriov-network-operator
 COPY --from=builder /go/src/github.com/k8snetworkplumbingwg/sriov-network-operator/build/_output/cmd/sriov-network-operator-config-cleanup /usr/bin/sriov-network-operator-config-cleanup
 COPY bindata /bindata
