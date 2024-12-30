@@ -869,18 +869,18 @@ func (mr *MockHostHelpersInterfaceMockRecorder) ReadService(servicePath interfac
 }
 
 // ReadServiceInjectionManifestFile mocks base method.
-func (m *MockHostHelpersInterface) ReadServiceInjectionManifestFile(path string) (*types.Service, error) {
+func (m *MockHostHelpersInterface) ReadServiceInjectionManifestFile(path string, ovsConfig map[string]string) (*types.Service, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ReadServiceInjectionManifestFile", path)
+	ret := m.ctrl.Call(m, "ReadServiceInjectionManifestFile", path, ovsConfig)
 	ret0, _ := ret[0].(*types.Service)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ReadServiceInjectionManifestFile indicates an expected call of ReadServiceInjectionManifestFile.
-func (mr *MockHostHelpersInterfaceMockRecorder) ReadServiceInjectionManifestFile(path interface{}) *gomock.Call {
+func (mr *MockHostHelpersInterfaceMockRecorder) ReadServiceInjectionManifestFile(path, ovsConfig interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadServiceInjectionManifestFile", reflect.TypeOf((*MockHostHelpersInterface)(nil).ReadServiceInjectionManifestFile), path)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadServiceInjectionManifestFile", reflect.TypeOf((*MockHostHelpersInterface)(nil).ReadServiceInjectionManifestFile), path, ovsConfig)
 }
 
 // ReadServiceManifestFile mocks base method.
