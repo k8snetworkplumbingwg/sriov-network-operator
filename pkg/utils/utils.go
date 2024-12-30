@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -147,4 +149,20 @@ func WriteFileWithTimeout(path string, data []byte, perm os.FileMode, timeout ti
 	case <-timer.C:
 		return fmt.Errorf("timeout writing to file %s after %v", path, timeout)
 	}
+}
+
+func RenderOtherOvsConfigOption(ovsConfig map[string]string) (string, string) {
+	otherConfig := new(bytes.Buffer)
+	keys := make([]string, 0, len(ovsConfig))
+	for key := range ovsConfig {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	externalIds := make([]string, 0, len(keys))
+	for _, key := range keys {
+		fmt.Fprintf(otherConfig, "other_config:%s=%q ", key, ovsConfig[key])
+		externalIds = append(externalIds, key)
+	}
+	return strings.Join(externalIds, " "), otherConfig.String()
 }
