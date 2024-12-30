@@ -77,6 +77,7 @@ func RenderDir(manifestDir string, d *RenderData) ([]*unstructured.Unstructured,
 	return out, nil
 }
 
+// RenderTemplate renders provided template to string
 func RenderTemplate(template string, d *RenderData) (*bytes.Buffer, error) {
 	return renderTemplate(template, d)
 }
@@ -117,7 +118,6 @@ func RenderFileTemplate(path string, d *RenderData) ([]*unstructured.Unstructure
 }
 
 func renderTemplate(rawTemplate string, d *RenderData) (*bytes.Buffer, error) {
-
 	tmpl := template.New("template").Option("missingkey=error")
 	if d.Funcs != nil {
 		tmpl.Funcs(d.Funcs)
@@ -140,7 +140,6 @@ func renderTemplate(rawTemplate string, d *RenderData) (*bytes.Buffer, error) {
 }
 
 func renderFileTemplate(path string, d *RenderData) (*bytes.Buffer, error) {
-
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read manifest %s", path)
