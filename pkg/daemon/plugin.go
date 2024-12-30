@@ -52,12 +52,7 @@ func loadPlugins(ns *sriovnetworkv1.SriovNetworkNodeState, helpers helper.HostHe
 		loadedPlugins = loadedVendorPlugins
 
 		if vars.ClusterType != consts.ClusterTypeOpenshift {
-			k8sPlugin, err := K8sPlugin(helpers)
-			if err != nil {
-				log.Log.Error(err, "loadPlugins(): failed to load the k8s plugin")
-				return nil, err
-			}
-
+			k8sPlugin := K8sPlugin(helpers)
 			pluginName := k8sPlugin.Name()
 			if !isPluginDisabled(pluginName, disabledPlugins) {
 				loadedPlugins[pluginName] = k8sPlugin
