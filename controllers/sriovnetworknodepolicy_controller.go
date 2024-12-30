@@ -305,6 +305,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncAllSriovNetworkNodeStates(ctx con
 		}
 		if netPoolConfig != nil {
 			ns.Spec.System.RdmaMode = netPoolConfig.Spec.RdmaMode
+			ns.Spec.System.OvsConfig = netPoolConfig.Spec.OvsHardwareOffloadConfig.OvsConfig
 		}
 		j, _ := json.Marshal(ns)
 		logger.V(2).Info("SriovNetworkNodeState CR", "content", j)

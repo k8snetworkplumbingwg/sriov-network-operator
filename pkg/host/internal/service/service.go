@@ -14,6 +14,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
@@ -131,7 +132,7 @@ OUTER:
 }
 
 // ReadServiceInjectionManifestFile reads service injection file
-func (s *service) ReadServiceInjectionManifestFile(path string) (*types.Service, error) {
+func (s *service) ReadServiceInjectionManifestFile(path, ovsConfig string) (*types.Service, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -142,10 +143,18 @@ func (s *service) ReadServiceInjectionManifestFile(path string) (*types.Service,
 		return nil, err
 	}
 
+	d := render.MakeRenderData()
+	d.Data["OvsConfig"] = ovsConfig
+
+	srv, err := render.RenderTemplate(serviceContent.Dropins[0].Contents, &d)
+	if err != nil {
+		return nil, err
+	}
+
 	return &types.Service{
 		Name:    serviceContent.Name,
 		Path:    systemdDir + serviceContent.Name,
-		Content: serviceContent.Dropins[0].Contents,
+		Content: srv.String(),
 	}, nil
 }
 
