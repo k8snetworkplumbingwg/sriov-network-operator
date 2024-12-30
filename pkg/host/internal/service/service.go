@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
@@ -105,6 +107,34 @@ func (s *service) EnableService(service *types.Service) error {
 	return err
 }
 
+// ReloadService reloads a systemd unit file on the host
+func (s *service) ReloadService(service *types.Service) error {
+	// Change root dir
+	exit, err := s.utilsHelper.Chroot(consts.Chroot)
+	if err != nil {
+		return err
+	}
+	defer exit()
+
+	// Restart the service
+	_, _, err = s.utilsHelper.RunCommand("systemctl", "daemon-reload")
+	return err
+}
+
+// RestartService restarts systemd service with systemctl restart
+func (s *service) RestartService(service *types.Service) error {
+	// Change root dir
+	exit, err := s.utilsHelper.Chroot(consts.Chroot)
+	if err != nil {
+		return err
+	}
+	defer exit()
+
+	// Restart the service
+	_, _, err = s.utilsHelper.RunCommand("systemctl", "restart", service.Name)
+	return err
+}
+
 // CompareServices returns true if serviceA needs update(doesn't contain all fields from service B)
 func (s *service) CompareServices(serviceA, serviceB *types.Service) (bool, error) {
 	optsA, err := unit.Deserialize(strings.NewReader(serviceA.Content))
@@ -130,8 +160,16 @@ OUTER:
 	return false, nil
 }
 
+func (s *service) renderOtherOvsConfigOption(ovsConfig map[string]string) string {
+	b := new(bytes.Buffer)
+	for key, value := range ovsConfig {
+		fmt.Fprintf(b, "other_config:%s=\"%s\" ", key, value)
+	}
+	return b.String()
+}
+
 // ReadServiceInjectionManifestFile reads service injection file
-func (s *service) ReadServiceInjectionManifestFile(path string) (*types.Service, error) {
+func (s *service) ReadServiceInjectionManifestFile(path string, ovsConfig map[string]string) (*types.Service, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -142,10 +180,18 @@ func (s *service) ReadServiceInjectionManifestFile(path string) (*types.Service,
 		return nil, err
 	}
 
+	d := render.MakeRenderData()
+	d.Data["OtherOvsConfig"] = s.renderOtherOvsConfigOption(ovsConfig)
+
+	srv, err := render.RenderTemplate(serviceContent.Dropins[0].Contents, &d)
+	if err != nil {
+		return nil, err
+	}
+
 	return &types.Service{
 		Name:    serviceContent.Name,
 		Path:    systemdDir + serviceContent.Name,
-		Content: serviceContent.Dropins[0].Contents,
+		Content: srv.String(),
 	}, nil
 }
 
