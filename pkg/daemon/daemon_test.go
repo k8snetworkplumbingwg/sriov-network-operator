@@ -139,7 +139,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		// k8s plugin for k8s cluster type
 		if vars.ClusterType == constants.ClusterTypeKubernetes {
 			hostHelper.EXPECT().ReadServiceManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
-			hostHelper.EXPECT().ReadServiceInjectionManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
+			hostHelper.EXPECT().ReadServiceInjectionManifestFile(gomock.Any(), gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
 		}
 
 		platformMock.EXPECT().Init().Return(nil)
@@ -166,6 +166,16 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 
 		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovNetworkNodeState{}, client.InNamespace(testNamespace))).ToNot(HaveOccurred())
 		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovOperatorConfig{}, client.InNamespace(testNamespace))).ToNot(HaveOccurred())
+	})
+
+	Context("Config Daemon generic flow", func() {
+		BeforeEach(func() {
+			// k8s plugin for k8s cluster type
+			if vars.ClusterType == constants.ClusterTypeKubernetes {
+				hostHelper.EXPECT().ReadServiceManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
+				hostHelper.EXPECT().ReadServiceInjectionManifestFile(gomock.Any(), gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
+			}
+		})
 	})
 
 	Context("Config Daemon generic flow", func() {
