@@ -105,6 +105,43 @@ kcli create cluster generic --paramfile ./${cluster_name}-plan.yaml $cluster_nam
 export KUBECONFIG=$HOME/.kcli/clusters/$cluster_name/auth/kubeconfig
 export PATH=$PWD:$PATH
 
+# w/a switch flannel images to use quay repo to avoid dockerhub pull limit
+# [SchSeba] there is a cronjob in place to make a copy of the image between dockerhub and quay account
+ds=`kubectl -n kube-flannel get daemonset kube-flannel-ds -oyaml`
+tag=$(echo $ds | grep -oP "docker.io/flannel/flannel-cni-plugin:\K[^\" ]+")
+tag=$(echo $tag | cut -d' ' -f1)
+
+tag1=$(echo $ds | grep -oP "docker.io/flannel/flannel:\K[^\" ]+")
+tag1=$(echo $tag1 | cut -d' ' -f1)
+
+patch="{
+  \"spec\": {
+    \"template\": {
+      \"spec\": {
+        \"containers\": [
+          {
+            \"name\": \"kube-flannel\",
+            \"image\": \"quay.io/schseba/flannel:$tag1\"
+          }
+        ],
+        \"initContainers\": [
+          {
+            \"name\": \"install-cni-plugin\",
+            \"image\": \"quay.io/schseba/flannel-cni-plugin:$tag\"
+          },
+          {
+            \"name\": \"install-cni\",
+            \"image\": \"quay.io/schseba/flannel:$tag1\"
+          }
+        ]
+      }
+    }
+  }
+}"
+
+kubectl patch daemonset kube-flannel-ds -n kube-flannel --type='strategic' -p "$patch"
+# ----------------------------------------------------------------------------------------
+
 ATTEMPTS=0
 MAX_ATTEMPTS=72
 ready=false
