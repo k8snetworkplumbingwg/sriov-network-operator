@@ -176,6 +176,11 @@ spec:
                 type: array
               system:
                 properties:
+                  ovsConfig:
+                    default: hw-offload=true
+                    description: OVS config. It will be provided for ovs-vswitchd
+                      service as other_config option
+                    type: string
                   rdmaMode:
                     description: RDMA subsystem. Allowed value "shared", "exclusive".
                     enum:
@@ -346,6 +351,11 @@ spec:
                 type: string
               system:
                 properties:
+                  ovsConfig:
+                    default: hw-offload=true
+                    description: OVS config. It will be provided for ovs-vswitchd
+                      service as other_config option
+                    type: string
                   rdmaMode:
                     description: RDMA subsystem. Allowed value "shared", "exclusive".
                     enum:

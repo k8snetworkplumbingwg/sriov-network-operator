@@ -70,7 +70,6 @@ func (snm *serviceNameMatcher) String() string {
 var _ = Describe("K8s plugin", func() {
 	var (
 		k8sPlugin  plugin.VendorPlugin
-		err        error
 		testCtrl   *gomock.Controller
 		hostHelper *mock_helper.MockHostHelpersInterface
 	)
@@ -91,10 +90,9 @@ var _ = Describe("K8s plugin", func() {
 		for _, s := range []string{
 			"bindata/manifests/switchdev-config/ovs-units/ovs-vswitchd.service.yaml",
 		} {
-			registerCall(hostHelper.EXPECT().ReadServiceInjectionManifestFile(s), realHostMgr.ReadServiceInjectionManifestFile)
+			registerCall(hostHelper.EXPECT().ReadServiceInjectionManifestFile(s, ""), realHostMgr.ReadServiceInjectionManifestFile)
 		}
-		k8sPlugin, err = NewK8sPlugin(hostHelper)
-		Expect(err).ToNot(HaveOccurred())
+		k8sPlugin = NewK8sPlugin(hostHelper)
 	})
 
 	AfterEach(func() {
