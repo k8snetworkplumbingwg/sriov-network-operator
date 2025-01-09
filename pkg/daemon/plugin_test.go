@@ -51,8 +51,8 @@ var _ = Describe("config daemon plugin loading tests", func() {
 
 			// k8s plugin is ATM the only plugin which require mocking/faking, as its New method performs additional logic
 			// other than simple plugin struct initialization
-			K8sPlugin = func(_ helper.HostHelpersInterface) (plugin.VendorPlugin, error) {
-				return &fakePlugin.FakePlugin{PluginName: "k8s"}, nil
+			K8sPlugin = func(_ helper.HostHelpersInterface) plugin.VendorPlugin {
+				return &fakePlugin.FakePlugin{PluginName: "k8s"}
 			}
 		})
 
