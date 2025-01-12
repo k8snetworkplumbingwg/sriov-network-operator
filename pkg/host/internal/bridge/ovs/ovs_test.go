@@ -137,12 +137,26 @@ func createInitialDBContent(ctx context.Context, c client.Client, expectedState 
 func validateDBConfig(dbContent *testDBEntries, conf *sriovnetworkv1.OVSConfigExt) {
 	Expect(dbContent.OpenVSwitch).To(HaveLen(1))
 	Expect(dbContent.Bridge).To(HaveLen(1))
-	Expect(dbContent.Interface).To(HaveLen(1))
-	Expect(dbContent.Port).To(HaveLen(1))
+	Expect(dbContent.Interface).To(HaveLen(2))
+	Expect(dbContent.Port).To(HaveLen(2))
 	ovs := dbContent.OpenVSwitch[0]
 	br := dbContent.Bridge[0]
-	port := dbContent.Port[0]
-	iface := dbContent.Interface[0]
+	var internalPort, port *PortEntry
+	var internalIface, iface *InterfaceEntry
+	for _, p := range dbContent.Port {
+		if p.Name == conf.Name {
+			internalPort = p
+		} else {
+			port = p
+		}
+	}
+	for _, ifc := range dbContent.Interface {
+		if ifc.Name == conf.Name {
+			internalIface = ifc
+		} else {
+			iface = ifc
+		}
+	}
 	Expect(ovs.Bridges).To(ContainElement(br.UUID))
 	Expect(br.Name).To(Equal(conf.Name))
 	Expect(br.DatapathType).To(Equal(conf.Bridge.DatapathType))
@@ -156,6 +170,13 @@ func validateDBConfig(dbContent *testDBEntries, conf *sriovnetworkv1.OVSConfigEx
 	Expect(iface.Type).To(Equal(conf.Uplinks[0].Interface.Type))
 	Expect(iface.OtherConfig).To(Equal(conf.Uplinks[0].Interface.OtherConfig))
 	Expect(iface.ExternalIDs).To(Equal(conf.Uplinks[0].Interface.ExternalIDs))
+	Expect(internalPort.Name).To(Equal(conf.Name))
+	Expect(internalPort.Interfaces).To(ContainElement(internalIface.UUID))
+	Expect(internalIface.Name).To(Equal(conf.Name))
+	Expect(internalIface.Options).To(BeNil())
+	Expect(internalIface.Type).To(Equal("internal"))
+	Expect(internalIface.OtherConfig).To(BeNil())
+	Expect(internalIface.ExternalIDs).To(BeNil())
 }
 
 var _ = Describe("OVS", func() {
