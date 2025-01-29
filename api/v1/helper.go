@@ -715,6 +715,8 @@ func (cr *SriovIBNetwork) RenderNetAttDefWithGUID(status SriovNetworkNodeStateSt
 	// render RawCNIConfig manifests
 	data := render.MakeRenderData()
 	data.Data["CniType"] = "ib-sriov"
+	data.Data["pKey"] = cr.Spec.Pkey
+	data.Data["interfaceName"] = cr.Spec.InterfaceName
 	data.Data["SriovNetworkName"] = cr.Name
 	if cr.Spec.NetworkNamespace == "" {
 		data.Data["SriovNetworkNamespace"] = cr.Namespace
