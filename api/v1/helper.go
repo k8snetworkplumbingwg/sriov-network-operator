@@ -49,7 +49,6 @@ var log = logf.Log.WithName("sriovnetwork")
 // NicIDMap contains supported mapping of IDs with each in the format of:
 // Vendor ID, Physical Function Device ID, Virtual Function Device ID
 var NicIDMap = []string{}
-
 var InitialState SriovNetworkNodeState
 
 // NetFilterType Represents the NetFilter tags to be used
@@ -218,6 +217,27 @@ func GetVfDeviceID(deviceID string) string {
 
 func IsSwitchdevModeSpec(spec SriovNetworkNodeStateSpec) bool {
 	return ContainsSwitchdevInterface(spec.Interfaces)
+}
+
+func GetGUIDFromSriovNetworkNodeStateStatus(status SriovNetworkNodeStateStatus, interfaceName string) string {
+	// Loop through all interfaces
+	for _, iface := range status.Interfaces {
+		// Only process InfiniBand interfaces with matching name
+		if strings.EqualFold(iface.LinkType, consts.LinkTypeIB) && iface.Name == interfaceName {
+			// If interface has VFs and at least one VF has a GUID
+			if len(iface.VFs) > 0 {
+				for _, vf := range iface.VFs {
+					// Return first valid GUID found
+					// Skip uninitialized GUIDs
+					if vf.GUID != "" && vf.GUID != consts.UninitializedNodeGUID {
+						return vf.GUID
+					}
+				}
+			}
+			break // Found the interface but no valid GUID
+		}
+	}
+	return ""
 }
 
 // ContainsSwitchdevInterface returns true if provided interface list contains interface
@@ -687,8 +707,8 @@ func (s *SriovNetworkNodeState) GetDriverByPciAddress(addr string) string {
 	return ""
 }
 
-// RenderNetAttDef renders a net-att-def for ib-sriov CNI
-func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
+// RenderNetAttDefWithGUID renders a net-att-def with GUID for ib-sriov CNI
+func (cr *SriovIBNetwork) RenderNetAttDefWithGUID(status SriovNetworkNodeStateStatus) (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
 	logger.Info("Start to render IB SRIOV CNI NetworkAttachmentDefinition")
 
@@ -701,6 +721,76 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+
+	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
+	if cr.Spec.ScanGUIDs {
+		if guid := GetGUIDFromSriovNetworkNodeStateStatus(status, cr.Spec.InterfaceName); guid != "" {
+			data.Data["GUID"] = guid
+		}
+	}
+
+	data.Data["StateConfigured"] = true
+	switch cr.Spec.LinkState {
+	case SriovCniStateEnable:
+		data.Data["SriovCniState"] = SriovCniStateEnable
+	case SriovCniStateDisable:
+		data.Data["SriovCniState"] = SriovCniStateDisable
+	case SriovCniStateAuto:
+		data.Data["SriovCniState"] = SriovCniStateAuto
+	default:
+		data.Data["StateConfigured"] = false
+	}
+
+	if cr.Spec.Capabilities == "" {
+		data.Data["CapabilitiesConfigured"] = false
+	} else {
+		data.Data["CapabilitiesConfigured"] = true
+		data.Data["SriovCniCapabilities"] = cr.Spec.Capabilities
+	}
+
+	if cr.Spec.IPAM != "" {
+		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
+	} else {
+		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
+	}
+
+	// metaplugins for the infiniband cni
+	data.Data["MetaPluginsConfigured"] = false
+	if cr.Spec.MetaPluginsConfig != "" {
+		data.Data["MetaPluginsConfigured"] = true
+		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
+	}
+
+	// logLevel and logFile are currently not supported by the ib-sriov-cni
+	data.Data["LogLevelConfigured"] = false
+	data.Data["LogFileConfigured"] = false
+
+	objs, err := render.RenderDir(filepath.Join(ManifestsPath, "sriov"), &data)
+	if err != nil {
+		return nil, err
+	}
+	for _, obj := range objs {
+		raw, _ := json.Marshal(obj)
+		logger.Info("render NetworkAttachmentDefinition output", "raw", string(raw))
+	}
+	return objs[0], nil
+}
+
+// RenderNetAttDef renders a net-att-def for ib-sriov CNI
+func (cr *SriovIBNetwork) RenderNetAttDef(status SriovNetworkNodeStateStatus) (*uns.Unstructured, error) {
+	logger := log.WithName("RenderNetAttDef")
+	logger.Info("Start to render IB SRIOV CNI NetworkAttachmentDefinition")
+
+	// render RawCNIConfig manifests
+	data := render.MakeRenderData()
+	data.Data["CniType"] = "ib-sriov"
+	data.Data["SriovNetworkName"] = cr.Name
+	if cr.Spec.NetworkNamespace == "" {
+		data.Data["SriovNetworkNamespace"] = cr.Namespace
+	} else {
+		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
+	}
+
 	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 
 	data.Data["StateConfigured"] = true
@@ -735,7 +825,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
-	// logLevel and logFile are currently not supports by the ip-sriov-cni -> hardcode them to false.
+	// logLevel and logFile are currently not supported by the ib-sriov-cni
 	data.Data["LogLevelConfigured"] = false
 	data.Data["LogFileConfigured"] = false
 

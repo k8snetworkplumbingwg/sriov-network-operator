@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"reflect"
+	"time"
 
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -44,6 +45,8 @@ type networkCRInstance interface {
 	client.Object
 	// renders NetAttDef from the network instance
 	RenderNetAttDef() (*uns.Unstructured, error)
+	// RenderNetAttDefWithGUID renders NetAttDef with GUID (if available)
+	RenderNetAttDefWithGUID(status sriovnetworkv1.SriovNetworkNodeStateStatus) (*uns.Unstructured, error)
 	// return name of the target namespace for the network
 	NetworkNamespace() string
 }
@@ -124,7 +127,23 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return reconcile.Result{}, err
 	}
-	raw, err := instance.RenderNetAttDef()
+
+	// Get list of all SriovNetworkNodeStates
+	nodeStateList := &sriovnetworkv1.SriovNetworkNodeStateList{}
+	if err := r.List(ctx, nodeStateList, &client.ListOptions{
+		Namespace: vars.Namespace,
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// If no node states exist yet, requeue
+	if len(nodeStateList.Items) == 0 {
+		return ctrl.Result{RequeueAfter: time.Second * 5}, nil
+	}
+
+	nodeState := nodeStateList.Items[0]
+	raw, err := instance.RenderNetAttDefWithGUID(nodeState.Status)
+
 	if err != nil {
 		return reconcile.Result{}, err
 	}

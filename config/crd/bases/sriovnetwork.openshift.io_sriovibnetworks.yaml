@@ -65,6 +65,12 @@ spec:
               resourceName:
                 description: SRIOV Network device plugin endpoint resource name
                 type: string
+              pkey:
+                description: pKey for the Infiniband network.
+                type: string
+              scanGUIDs:
+                description: Whether to scan for GUIDs.
+                type: boolean
             required:
             - resourceName
             type: object
