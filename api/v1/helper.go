@@ -790,7 +790,6 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
-
 	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 
 	data.Data["StateConfigured"] = true
