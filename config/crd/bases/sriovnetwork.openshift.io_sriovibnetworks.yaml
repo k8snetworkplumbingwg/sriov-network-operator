@@ -71,6 +71,9 @@ spec:
               scanGUIDs:
                 description: Whether to scan for GUIDs.
                 type: boolean
+              InterfaceName:
+                description: Name of the IB interface
+                type: string
             required:
             - resourceName
             type: object
