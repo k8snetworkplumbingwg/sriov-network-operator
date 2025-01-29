@@ -776,6 +776,16 @@ func (cr *SriovIBNetwork) RenderNetAttDefWithGUID(status SriovNetworkNodeStateSt
 	return objs[0], nil
 }
 
+func (cr *SriovNetwork) RenderNetAttDefWithGUID(status SriovNetworkNodeStateStatus) (*uns.Unstructured, error) {
+	// Not implemented
+	return cr.RenderNetAttDef()
+}
+
+func (cr *OVSNetwork) RenderNetAttDefWithGUID(status SriovNetworkNodeStateStatus) (*uns.Unstructured, error) {
+	// Not implemented
+	return cr.RenderNetAttDef()
+}
+
 // RenderNetAttDef renders a net-att-def for ib-sriov CNI
 func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
