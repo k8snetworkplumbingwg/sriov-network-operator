@@ -777,7 +777,7 @@ func (cr *SriovIBNetwork) RenderNetAttDefWithGUID(status SriovNetworkNodeStateSt
 }
 
 // RenderNetAttDef renders a net-att-def for ib-sriov CNI
-func (cr *SriovIBNetwork) RenderNetAttDef(status SriovNetworkNodeStateStatus) (*uns.Unstructured, error) {
+func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
 	logger.Info("Start to render IB SRIOV CNI NetworkAttachmentDefinition")
 
@@ -825,7 +825,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef(status SriovNetworkNodeStateStatus) (*
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
-	// logLevel and logFile are currently not supported by the ib-sriov-cni
+	// logLevel and logFile are currently not supports by the ip-sriov-cni -> hardcode them to false.
 	data.Data["LogLevelConfigured"] = false
 	data.Data["LogFileConfigured"] = false
 
