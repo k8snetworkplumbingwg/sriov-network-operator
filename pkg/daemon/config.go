@@ -14,16 +14,19 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
-type OperatorConfigReconcile struct {
+// OperatorConfigNodeReconcile represents the reconcile struct for the OperatorConfig.
+type OperatorConfigNodeReconcile struct {
 	client             client.Client
 	latestFeatureGates map[string]bool
 }
 
-func NewOperatorConfigReconcile(client client.Client) *OperatorConfigReconcile {
-	return &OperatorConfigReconcile{client: client, latestFeatureGates: make(map[string]bool)}
+// NewOperatorConfigNodeReconcile creates a new instance of OperatorConfigNodeReconcile with the given client.
+func NewOperatorConfigNodeReconcile(client client.Client) *OperatorConfigNodeReconcile {
+	return &OperatorConfigNodeReconcile{client: client, latestFeatureGates: make(map[string]bool)}
 }
 
-func (oc *OperatorConfigReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// Reconcile reconciles the OperatorConfig resource. It updates log level and feature gates as necessary.
+func (oc *OperatorConfigNodeReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	reqLogger := log.FromContext(ctx).WithName("Reconcile")
 	operatorConfig := &sriovnetworkv1.SriovOperatorConfig{}
 	err := oc.client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, operatorConfig)
@@ -32,7 +35,7 @@ func (oc *OperatorConfigReconcile) Reconcile(ctx context.Context, req ctrl.Reque
 			reqLogger.Info("OperatorConfig doesn't exist", "name", req.Name, "namespace", req.Namespace)
 			return ctrl.Result{}, nil
 		}
-		reqLogger.Error(err, "Failed to operatorConfig", "name", req.Name, "namespace", req.Namespace)
+		reqLogger.Error(err, "Failed to get OperatorConfig", "name", req.Name, "namespace", req.Namespace)
 		return ctrl.Result{}, err
 	}
 
@@ -54,7 +57,8 @@ func (oc *OperatorConfigReconcile) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{}, nil
 }
 
-func (oc *OperatorConfigReconcile) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the reconciliation logic for this controller using the given manager.
+func (oc *OperatorConfigNodeReconcile) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovOperatorConfig{}).
 		Complete(oc)

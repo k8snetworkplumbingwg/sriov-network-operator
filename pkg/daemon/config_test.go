@@ -31,7 +31,7 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 
-		configController := daemon.NewOperatorConfigReconcile(k8sClient)
+		configController := daemon.NewOperatorConfigNodeReconcile(k8sClient)
 		err = configController.SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -57,7 +57,7 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	BeforeEach(func() {
+	AfterEach(func() {
 		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovOperatorConfig{}, client.InNamespace(testNamespace))).ToNot(HaveOccurred())
 	})
 

@@ -108,7 +108,7 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// create the drain state annotation if it doesn't exist in the sriovNetworkNodeState object
 	nodeStateDrainAnnotationCurrent, currentNodeStateExist, err := dr.ensureAnnotationExists(ctx, nodeNetworkState, constants.NodeStateDrainAnnotationCurrent)
 	if err != nil {
-		reqLogger.Error(err, "failed to ensure nodeStateDrainAnnotation")
+		reqLogger.Error(err, "failed to ensure nodeStateDrainAnnotationCurrent")
 		return ctrl.Result{}, err
 	}
 	_, desireNodeStateExist, err := dr.ensureAnnotationExists(ctx, nodeNetworkState, constants.NodeStateDrainAnnotation)

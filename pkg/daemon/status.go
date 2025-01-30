@@ -18,7 +18,7 @@ const (
 	Unknown = "Unknown"
 )
 
-func (dn *DaemonReconcile) updateSyncState(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, status, failedMessage string) error {
+func (dn *NodeReconciler) updateSyncState(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, status, failedMessage string) error {
 	funcLog := log.Log.WithName("updateSyncState")
 	currentNodeState := &sriovnetworkv1.SriovNetworkNodeState{}
 	desiredNodeState.Status.SyncStatus = status
@@ -57,20 +57,20 @@ func (dn *DaemonReconcile) updateSyncState(ctx context.Context, desiredNodeState
 	return nil
 }
 
-func (dn *DaemonReconcile) shouldUpdateStatus(current, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+func (dn *NodeReconciler) shouldUpdateStatus(current, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) bool {
 	// check number of interfaces are equal
 	if len(current.Status.Interfaces) != len(desiredNodeState.Status.Interfaces) {
-		return true, nil
+		return true
 	}
 
 	// check for bridges
 	if !reflect.DeepEqual(current.Status.Bridges, desiredNodeState.Status.Bridges) {
-		return true, nil
+		return true
 	}
 
 	// check for system
 	if !reflect.DeepEqual(current.Status.System, desiredNodeState.Status.System) {
-		return true, nil
+		return true
 	}
 
 	// check for interfaces
@@ -81,33 +81,33 @@ func (dn *DaemonReconcile) shouldUpdateStatus(current, desiredNodeState *sriovne
 	for idx := range d {
 		// check if it's a new device
 		if d[idx].PciAddress != c[idx].PciAddress {
-			return true, nil
+			return true
 		}
 		// remove all the vfs
 		d[idx].VFs = nil
 		c[idx].VFs = nil
 
 		if !reflect.DeepEqual(d[idx], c[idx]) {
-			return true, nil
+			return true
 		}
 	}
 
-	return false, nil
+	return false
 }
 
-func (dn *DaemonReconcile) getHostNetworkStatus(nodeState *sriovnetworkv1.SriovNetworkNodeState) error {
-	log.Log.WithName("GetHostNetworkStatus").Info("Getting host network status")
-	var iface []sriovnetworkv1.InterfaceExt
+func (dn *NodeReconciler) updateStatusFromHost(nodeState *sriovnetworkv1.SriovNetworkNodeState) error {
+	log.Log.WithName("updateStatusFromHost").Info("Getting host network status")
+	var ifaces []sriovnetworkv1.InterfaceExt
 	var bridges sriovnetworkv1.Bridges
 	var err error
 
 	if vars.PlatformType == consts.VirtualOpenStack {
-		iface, err = dn.platformHelpers.DiscoverSriovDevicesVirtual()
+		ifaces, err = dn.platformHelpers.DiscoverSriovDevicesVirtual()
 		if err != nil {
 			return err
 		}
 	} else {
-		iface, err = dn.HostHelpers.DiscoverSriovDevices(dn.HostHelpers)
+		ifaces, err = dn.HostHelpers.DiscoverSriovDevices(dn.HostHelpers)
 		if err != nil {
 			return err
 		}
@@ -119,13 +119,13 @@ func (dn *DaemonReconcile) getHostNetworkStatus(nodeState *sriovnetworkv1.SriovN
 		}
 	}
 
-	nodeState.Status.Interfaces = iface
+	nodeState.Status.Interfaces = ifaces
 	nodeState.Status.Bridges = bridges
 	nodeState.Status.System.RdmaMode, err = dn.HostHelpers.DiscoverRDMASubsystem()
 	return err
 }
 
-func (dn *DaemonReconcile) recordStatusChangeEvent(ctx context.Context, oldStatus, newStatus, lastError string) {
+func (dn *NodeReconciler) recordStatusChangeEvent(ctx context.Context, oldStatus, newStatus, lastError string) {
 	if oldStatus != newStatus {
 		if oldStatus == "" {
 			oldStatus = Unknown

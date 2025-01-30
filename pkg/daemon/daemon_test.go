@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"os"
 	"sync"
 	"time"
 
@@ -39,7 +40,7 @@ var (
 	kubeclient    *kubernetes.Clientset
 	eventRecorder *daemon.EventRecorder
 	wg            sync.WaitGroup
-	startDaemon   func(dc *daemon.DaemonReconcile)
+	startDaemon   func(dc *daemon.NodeReconciler)
 
 	t              FullGinkgoTInterface
 	mockCtrl       *gomock.Controller
@@ -56,7 +57,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 	BeforeAll(func() {
 		ctx, cancel = context.WithCancel(context.Background())
 		wg = sync.WaitGroup{}
-		startDaemon = func(dc *daemon.DaemonReconcile) {
+		startDaemon = func(dc *daemon.NodeReconciler) {
 			By("start controller manager")
 			wg.Add(1)
 			go func() {
@@ -88,11 +89,15 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		})
 
 		snolog.SetLogLevel(2)
-		vars.ClusterType = constants.ClusterTypeOpenshift
+		// Check if the environment variable CLUSTER_TYPE is set
+		if clusterType, ok := os.LookupEnv("CLUSTER_TYPE"); ok && clusterType == "openshift" {
+			vars.ClusterType = constants.ClusterTypeOpenshift
+		} else {
+			vars.ClusterType = constants.ClusterTypeKubernetes
+		}
 	})
 
 	BeforeEach(func() {
-		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovNetworkNodeState{}, client.InNamespace(testNamespace))).ToNot(HaveOccurred())
 
 		mockCtrl = gomock.NewController(t)
 		hostHelper = mock_helper.NewMockHostHelpersInterface(mockCtrl)
@@ -113,9 +118,15 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 	})
 
 	AfterEach(func() {
+		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovNetworkNodeState{}, client.InNamespace(testNamespace))).ToNot(HaveOccurred())
+
 		By("Shutdown controller manager")
 		cancel()
 		wg.Wait()
+	})
+
+	AfterAll(func() {
+		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovOperatorConfig{}, client.InNamespace(testNamespace))).ToNot(HaveOccurred())
 	})
 
 	Context("Config Daemon", func() {
@@ -175,7 +186,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 
 			featureGates := featuregate.New()
 			featureGates.Init(map[string]bool{})
-			dc := CreateDaemon(hostHelper, platformHelper, featureGates, []string{})
+			dc := createDaemon(hostHelper, platformHelper, featureGates, []string{})
 			startDaemon(dc)
 
 			_, nodeState := createNode("node1")
@@ -288,11 +299,11 @@ func createNode(nodeName string) (*corev1.Node, *sriovnetworkv1.SriovNetworkNode
 	return &node, &nodeState
 }
 
-func CreateDaemon(
+func createDaemon(
 	hostHelper helper.HostHelpersInterface,
 	platformHelper platforms.Interface,
 	featureGates featuregate.FeatureGate,
-	disablePlugins []string) *daemon.DaemonReconcile {
+	disablePlugins []string) *daemon.NodeReconciler {
 	kClient, err := client.New(
 		cfg,
 		client.Options{
@@ -306,7 +317,7 @@ func CreateDaemon(
 	Expect(err).ToNot(HaveOccurred())
 
 	configController := daemon.New(kClient, snclient, kubeclient, hostHelper, platformHelper, eventRecorder, featureGates, disablePlugins)
-	err = configController.DaemonInitialization()
+	err = configController.Init()
 	Expect(err).ToNot(HaveOccurred())
 	err = configController.SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())

@@ -145,7 +145,7 @@ func configGlobalVariables() error {
 	return nil
 }
 
-func UseKubeletKubeConfig() {
+func useKubeletKubeConfig() {
 	fnLogger := log.Log.WithName("sriov-network-config-daemon")
 
 	kubeconfig, err := clientcmd.LoadFromFile("/host/etc/kubernetes/kubeconfig")
@@ -174,7 +174,6 @@ func UseKubeletKubeConfig() {
 }
 
 func getOperatorConfig(kClient runtimeclient.Client) (*sriovnetworkv1.SriovOperatorConfig, error) {
-	// Init feature gates once to prevent race conditions.
 	defaultConfig := &sriovnetworkv1.SriovOperatorConfig{}
 	err := kClient.Get(context.Background(), types.NamespacedName{Namespace: vars.Namespace, Name: consts.DefaultConfigName}, defaultConfig)
 	if err != nil {
@@ -228,7 +227,7 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	// On openshift we use the kubeconfig from kubelet on the node where the daemon is running
 	// this allow us to improve security as every daemon has access only to its own node
 	if vars.ClusterType == consts.ClusterTypeOpenshift {
-		UseKubeletKubeConfig()
+		useKubeletKubeConfig()
 	}
 
 	kubeconfig := os.Getenv("KUBECONFIG")
@@ -343,19 +342,19 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 		startOpts.disabledPlugins)
 
 	// Init Daemon configuration on the node
-	if err = dm.DaemonInitialization(); err != nil {
+	if err = dm.Init(); err != nil {
 		setupLog.Error(err, "unable to initialize daemon")
 		os.Exit(1)
 	}
 
 	// Setup reconcile loop with manager
 	if err = dm.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create setup daemon manager for SriovNetworkNodeState")
+		setupLog.Error(err, "unable to setup daemon with manager for SriovNetworkNodeState")
 		os.Exit(1)
 	}
 
 	// Setup reconcile loop with manager
-	if err = daemon.NewOperatorConfigReconcile(kClient).SetupWithManager(mgr); err != nil {
+	if err = daemon.NewOperatorConfigNodeReconcile(kClient).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create setup daemon manager for OperatorConfig")
 		os.Exit(1)
 	}
