@@ -108,7 +108,7 @@ type ServiceInterface interface {
 	// ReadServiceManifestFile reads the systemd manifest for a specific service
 	ReadServiceManifestFile(path string) (*Service, error)
 	// ReadServiceInjectionManifestFile reads the injection manifest file for the systemd service
-	ReadServiceInjectionManifestFile(path string) (*Service, error)
+	ReadServiceInjectionManifestFile(path string, ovsConfig map[string]string) (*Service, error)
 	// CompareServices returns true if serviceA needs update(doesn't contain all fields from service B)
 	CompareServices(serviceA, serviceB *Service) (bool, error)
 	// UpdateSystemService updates a system service on the host
