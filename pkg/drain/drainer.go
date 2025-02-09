@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubectl/pkg/drain"
@@ -68,16 +69,15 @@ func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrai
 		return false, nil
 	}
 
-	drainHelper := createDrainHelper(d.kubeClient, ctx, fullNodeDrain)
 	backoff := wait.Backoff{
 		Steps:    5,
-		Duration: 10 * time.Second,
+		Duration: 5 * time.Second,
 		Factor:   2,
 	}
 	var lastErr error
-
 	reqLogger.Info("drainNode(): Start draining")
-	if err = wait.ExponentialBackoff(backoff, func() (bool, error) {
+	if err = wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
+		drainHelper := createDrainHelper(d.kubeClient, ctx, fullNodeDrain)
 		err := drain.RunCordonOrUncordon(drainHelper, node, true)
 		if err != nil {
 			lastErr = err
@@ -85,12 +85,19 @@ func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrai
 			return false, nil
 		}
 		err = drain.RunNodeDrain(drainHelper, node.Name)
-		if err == nil {
-			return true, nil
+		if err != nil {
+			lastErr = err
+			reqLogger.Info("drainNode(): Draining failed, retrying", "error", err)
+			return false, nil
 		}
-		lastErr = err
-		reqLogger.Info("drainNode(): Draining failed, retrying", "error", err)
-		return false, nil
+
+		err = d.removeDaemonSetsFromNode(ctx, node.Name)
+		if err != nil {
+			lastErr = err
+			return false, nil
+		}
+
+		return true, nil
 	}); err != nil {
 		if wait.Interrupted(err) {
 			reqLogger.Info("drainNode(): failed to drain node", "steps", backoff.Steps, "error", lastErr)
@@ -131,6 +138,28 @@ func (d *Drainer) CompleteDrainNode(ctx context.Context, node *corev1.Node) (boo
 	return completed, nil
 }
 
+// removeDaemonSetsFromNode go over all the remain pods and search for DaemonSets that have SR-IOV devices to remove them
+// we can't use the drain from core kubernetes as it doesn't support removing pods that are part of a DaemonSets
+func (d *Drainer) removeDaemonSetsFromNode(ctx context.Context, nodeName string) error {
+	reqLogger := log.FromContext(ctx)
+	reqLogger.Info("drainNode(): remove DaemonSets using sriov devices from node", "nodeName", nodeName)
+
+	podList, err := d.kubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName)})
+	if err != nil {
+		reqLogger.Info("drainNode(): Failed to list pods, retrying", "error", err)
+		return err
+	}
+
+	// remove pods that are owned by a DaemonSet and use SR-IOV devices
+	dsPodsList := getDsPodsToRemove(podList)
+	drainHelper := createDrainHelper(d.kubeClient, ctx, true)
+	err = drainHelper.DeleteOrEvictPods(dsPodsList)
+	if err != nil {
+		reqLogger.Error(err, "failed to delete or evict pods from node", "nodeName", nodeName)
+	}
+	return err
+}
+
 // createDrainHelper function to create a drain helper
 // if fullDrain is false we only remove pods that have the resourcePrefix
 // if not we remove all the pods in the node
@@ -150,25 +179,21 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 			}
 			log.Log.Info(fmt.Sprintf("%s pod from Node %s/%s", verbStr, pod.Namespace, pod.Name))
 		},
-		Ctx:    ctx,
-		Out:    writer{logger.Info},
-		ErrOut: writer{func(msg string, kv ...interface{}) { logger.Error(nil, msg, kv...) }},
+		Ctx: ctx,
+		Out: writer{logger.Info},
+		ErrOut: writer{func(msg string, kv ...interface{}) {
+			logger.Error(nil, msg, kv...)
+		}},
 	}
 
 	// when we just want to drain and not reboot we can only remove the pods using sriov devices
 	if !fullDrain {
 		deleteFunction := func(p corev1.Pod) drain.PodDeleteStatus {
-			for _, c := range p.Spec.Containers {
-				if c.Resources.Requests != nil {
-					for r := range c.Resources.Requests {
-						if strings.HasPrefix(r.String(), vars.ResourcePrefix) {
-							return drain.PodDeleteStatus{
-								Delete:  true,
-								Reason:  "pod contain SR-IOV device",
-								Message: "SR-IOV network operator draining the node",
-							}
-						}
-					}
+			if podHasSRIOVDevice(&p) {
+				return drain.PodDeleteStatus{
+					Delete:  true,
+					Reason:  "pod contains SR-IOV device",
+					Message: "SR-IOV network operator draining the node",
 				}
 			}
 			return drain.PodDeleteStatus{Delete: false}
@@ -178,4 +203,39 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 	}
 
 	return drainer
+}
+
+func podHasSRIOVDevice(p *corev1.Pod) bool {
+	for _, c := range p.Spec.Containers {
+		if c.Resources.Requests != nil {
+			for r := range c.Resources.Requests {
+				if strings.HasPrefix(r.String(), vars.ResourcePrefix) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func podsHasDSOwner(p *corev1.Pod) bool {
+	for _, o := range p.OwnerReferences {
+		if o.Kind == "DaemonSet" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func getDsPodsToRemove(pl *corev1.PodList) []corev1.Pod {
+	podsToRemove := []corev1.Pod{}
+	for _, pod := range pl.Items {
+		if podsHasDSOwner(&pod) && podHasSRIOVDevice(&pod) {
+			podsToRemove = append(podsToRemove, pod)
+		}
+	}
+
+	return podsToRemove
 }

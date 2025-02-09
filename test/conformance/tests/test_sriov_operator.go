@@ -1045,7 +1045,7 @@ var _ = Describe("[sriov] operator", func() {
 	})
 
 	Describe("Custom SriovNetworkNodePolicy", func() {
-		BeforeEach(func() {
+		AfterEach(func() {
 			err := namespaces.Clean(operatorNamespace, namespaces.Test, clients, discovery.Enabled())
 			Expect(err).ToNot(HaveOccurred())
 			WaitForSRIOVStable()
@@ -1722,6 +1722,111 @@ var _ = Describe("[sriov] operator", func() {
 			})
 		})
 
+		Context("Draining Daemons using SR-IOV", func() {
+			var node string
+			resourceName := "drainresource"
+			sriovNetworkName := "test-drainnetwork"
+			var drainPolicy *sriovv1.SriovNetworkNodePolicy
+
+			BeforeEach(func() {
+				isSingleNode, err := cluster.IsSingleNode(clients)
+				Expect(err).ToNot(HaveOccurred())
+				if isSingleNode {
+					// TODO: change this when we add support for draining on single node
+					Skip("This test is not supported on single node as we don't drain on single node")
+				}
+
+				node = sriovInfos.Nodes[0]
+				sriovDeviceList, err := sriovInfos.FindSriovDevices(node)
+				Expect(err).ToNot(HaveOccurred())
+				intf := sriovDeviceList[0]
+				By("Using device " + intf.Name + " on node " + node)
+
+				drainPolicy = &sriovv1.SriovNetworkNodePolicy{
+					ObjectMeta: metav1.ObjectMeta{
+						GenerateName: "test-drainpolicy",
+						Namespace:    operatorNamespace,
+					},
+
+					Spec: sriovv1.SriovNetworkNodePolicySpec{
+						NodeSelector: map[string]string{
+							"kubernetes.io/hostname": node,
+						},
+						Mtu:          1500,
+						NumVfs:       5,
+						ResourceName: resourceName,
+						Priority:     99,
+						NicSelector: sriovv1.SriovNetworkNicSelector{
+							PfNames: []string{intf.Name},
+						},
+						DeviceType: "netdevice",
+					},
+				}
+
+				err = clients.Create(context.Background(), drainPolicy)
+				Expect(err).ToNot(HaveOccurred())
+
+				WaitForSRIOVStable()
+				By("waiting for the resources to be available")
+				Eventually(func() int64 {
+					testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
+					Expect(err).ToNot(HaveOccurred())
+					resNum := testedNode.Status.Allocatable[corev1.ResourceName("openshift.io/"+resourceName)]
+					allocatable, _ := resNum.AsInt64()
+					return allocatable
+				}, 10*time.Minute, time.Second).Should(Equal(int64(5)))
+
+				sriovNetwork := &sriovv1.SriovNetwork{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      sriovNetworkName,
+						Namespace: operatorNamespace,
+					},
+					Spec: sriovv1.SriovNetworkSpec{
+						ResourceName:     resourceName,
+						IPAM:             `{"type":"host-local","subnet":"10.10.10.0/24","rangeStart":"10.10.10.171","rangeEnd":"10.10.10.181"}`,
+						NetworkNamespace: namespaces.Test,
+					}}
+
+				// We need this to be able to run the connectivity checks on Mellanox cards
+				if intf.DeviceID == "1015" {
+					sriovNetwork.Spec.SpoofChk = off
+				}
+
+				err = clients.Create(context.Background(), sriovNetwork)
+
+				Expect(err).ToNot(HaveOccurred())
+				waitForNetAttachDef("test-drainnetwork", namespaces.Test)
+
+				createTestDaemonSet(node, []string{sriovNetworkName})
+			})
+
+			It("should reconcile managed VF if status is changed", func() {
+				By("getting running config-daemon and test pod on the node")
+				daemonTestPod, err := findPodOnNodeWithLabelsAndNamespace(node, namespaces.Test, map[string]string{"app": "test"})
+				Expect(err).ToNot(HaveOccurred())
+				daemonConfigPod, err := findPodOnNodeWithLabelsAndNamespace(node, operatorNamespace, map[string]string{"app": "sriov-network-config-daemon"})
+				Expect(err).ToNot(HaveOccurred())
+
+				By("deleting the sriov policy to start a drain")
+				err = clients.Delete(context.Background(), drainPolicy)
+				Expect(err).ToNot(HaveOccurred())
+				WaitForSRIOVStable()
+
+				tmpDaemon := &appsv1.DaemonSet{}
+				By("Checking the pod owned by a DaemonSet requesting sriov device was deleted ")
+				Eventually(func(g Gomega) bool {
+					err = clients.Client.Get(context.Background(), runtimeclient.ObjectKey{Name: daemonTestPod.Name, Namespace: daemonTestPod.Namespace}, tmpDaemon)
+					return err != nil && k8serrors.IsNotFound(err)
+				}, time.Minute, 5*time.Second).Should(BeTrue())
+
+				By("Checking the pod owned by a DaemonSet not requesting an sriov device was not deleted")
+				Consistently(func(g Gomega) bool {
+					err = clients.Client.Get(context.Background(), runtimeclient.ObjectKey{Name: daemonConfigPod.Name, Namespace: daemonConfigPod.Namespace}, tmpDaemon)
+					return err != nil && k8serrors.IsNotFound(err)
+				}, time.Minute, 10*time.Second).Should(BeTrue())
+			})
+		})
+
 	})
 })
 
@@ -1842,6 +1947,11 @@ func findMainSriovDevice(executorPod *corev1.Pod, sriovDevices []*sriovv1.Interf
 
 func findUnusedSriovDevices(testNode string, sriovDevices []*sriovv1.InterfaceExt) ([]*sriovv1.InterfaceExt, error) {
 	createdPod := createCustomTestPod(testNode, []string{}, true, nil)
+	defer func() {
+		err := clients.Delete(context.Background(), createdPod)
+		Expect(err).ToNot(HaveOccurred())
+	}()
+
 	filteredDevices := []*sriovv1.InterfaceExt{}
 	stdout, _, err := pod.ExecCommand(clients, createdPod, "ip", "route")
 	Expect(err).ToNot(HaveOccurred())
@@ -1989,6 +2099,24 @@ func isDaemonsetScheduledOnNodes(nodeSelector, daemonsetLabelSelector string) bo
 	return true
 }
 
+func findPodOnNodeWithLabelsAndNamespace(nodeName string, namespace string, labels map[string]string) (*corev1.Pod, error) {
+	podList := &corev1.PodList{}
+	err := clients.List(context.Background(), podList, runtimeclient.MatchingLabels(labels), &runtimeclient.ListOptions{Namespace: namespace}, runtimeclient.MatchingFields{"spec.nodeName": nodeName})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(podList.Items) == 0 {
+		return nil, fmt.Errorf("no pod found")
+	}
+
+	if len(podList.Items) > 1 {
+		return nil, fmt.Errorf("multiple pods found")
+	}
+
+	return &podList.Items[0], nil
+}
+
 func createSriovPolicy(sriovDevice string, testNode string, numVfs int, resourceName string) {
 	_, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, sriovDevice, testNode, numVfs, resourceName, "netdevice")
 	Expect(err).ToNot(HaveOccurred())
@@ -2017,7 +2145,6 @@ func createCustomTestPod(node string, networks []string, hostNetwork bool, podCa
 			node,
 		)
 	}
-
 	if len(podCapabilities) != 0 {
 		if podDefinition.Spec.Containers[0].SecurityContext == nil {
 			podDefinition.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{}
@@ -2032,6 +2159,41 @@ func createCustomTestPod(node string, networks []string, hostNetwork bool, podCa
 	Expect(err).ToNot(HaveOccurred())
 
 	return waitForPodRunning(createdPod)
+}
+
+func createTestDaemonSet(node string, networks []string) *appsv1.DaemonSet {
+	podDefinition := pod.RedefineWithNodeSelector(
+		pod.GetDefinition(),
+		node,
+	)
+
+	// remove NET_ADMIN to not have issues in OCP
+	podDefinition.Spec.Containers[0].SecurityContext = nil
+
+	daemonDefinition := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "test-", Namespace: namespaces.Test},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "test",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "test",
+					},
+					Annotations: map[string]string{"k8s.v1.cni.cncf.io/networks": strings.Join(networks, ",")},
+				},
+				Spec: podDefinition.Spec,
+			},
+		},
+	}
+
+	err := clients.Create(context.Background(), daemonDefinition)
+	Expect(err).ToNot(HaveOccurred())
+
+	return waitForDaemonSetReady(daemonDefinition)
 }
 
 func pingPod(ip string, nodeSelector string, sriovNetworkAttachment string) {
@@ -2374,6 +2536,18 @@ func waitForPodRunning(p *corev1.Pod) *corev1.Pod {
 	}, 3*time.Minute, 1*time.Second).Should(Equal(corev1.PodRunning), "Pod [%s/%s] should be running", p.Namespace, p.Name)
 
 	return ret
+}
+
+func waitForDaemonSetReady(d *appsv1.DaemonSet) *appsv1.DaemonSet {
+	Eventually(func(g Gomega) bool {
+		err := clients.Get(context.Background(), runtimeclient.ObjectKey{Name: d.Name, Namespace: d.Namespace}, d)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(d.Status.DesiredNumberScheduled).To(BeNumerically(">", 0))
+		g.Expect(d.Status.CurrentNumberScheduled).To(BeNumerically(">", 0))
+		return d.Status.DesiredNumberScheduled == d.Status.NumberReady
+	}, 3*time.Minute, 1*time.Second).Should(BeTrue(), "DaemonSet [%s/%s] should have running pods", d.Namespace, d.Name)
+
+	return d
 }
 
 // assertNodeStateHasVFMatching asserts that the given node state has at least one VF matching the given fields
