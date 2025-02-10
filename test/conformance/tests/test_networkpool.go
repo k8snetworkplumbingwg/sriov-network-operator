@@ -366,4 +366,144 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			Expect(num).To(BeNumerically("==", 0))
 		})
 	})
+
+	Context("Configure SkipDrainOnReboot", func() {
+		resourceName := "skipresource"
+		sriovNetworkName := "test-skipnetwork"
+		var skipPolicy *sriovv1.SriovNetworkNodePolicy
+		var node string
+		var podDefinition *corev1.Pod
+
+		BeforeAll(func() {
+			isSingleNode, err := cluster.IsSingleNode(clients)
+			Expect(err).ToNot(HaveOccurred())
+			if isSingleNode {
+				// This test is not supported on single node as we use the api to check the node is down
+				// so we can't use a single node for the test
+				Skip("Test not supported on single node")
+			}
+
+			sriovInfos, err := cluster.DiscoverSriov(clients, operatorNamespace)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(len(sriovInfos.Nodes)).ToNot(BeZero())
+
+			node = sriovInfos.Nodes[0]
+			sriovDeviceList, err := sriovInfos.FindSriovDevices(node)
+			Expect(err).ToNot(HaveOccurred())
+			intf := sriovDeviceList[0]
+			By("Using device " + intf.Name + " on node " + node)
+
+			skipPolicy = &sriovv1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "test-skippolicy",
+					Namespace:    operatorNamespace,
+				},
+
+				Spec: sriovv1.SriovNetworkNodePolicySpec{
+					NodeSelector: map[string]string{
+						"kubernetes.io/hostname": node,
+					},
+					Mtu:          1500,
+					NumVfs:       5,
+					ResourceName: resourceName,
+					Priority:     99,
+					NicSelector: sriovv1.SriovNetworkNicSelector{
+						PfNames: []string{intf.Name},
+					},
+					DeviceType: "netdevice",
+				},
+			}
+
+			err = clients.Create(context.Background(), skipPolicy)
+			Expect(err).ToNot(HaveOccurred())
+
+			WaitForSRIOVStable()
+			By("waiting for the resources to be available")
+			Eventually(func() int64 {
+				testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
+				Expect(err).ToNot(HaveOccurred())
+				resNum := testedNode.Status.Allocatable[corev1.ResourceName("openshift.io/"+resourceName)]
+				allocatable, _ := resNum.AsInt64()
+				return allocatable
+			}, 10*time.Minute, time.Second).Should(Equal(int64(5)))
+
+			sriovNetwork := &sriovv1.SriovNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      sriovNetworkName,
+					Namespace: operatorNamespace,
+				},
+				Spec: sriovv1.SriovNetworkSpec{
+					ResourceName:     resourceName,
+					IPAM:             `{"type":"host-local","subnet":"10.10.10.0/24","rangeStart":"10.10.10.171","rangeEnd":"10.10.10.181"}`,
+					NetworkNamespace: namespaces.Test,
+				}}
+
+			err = clients.Create(context.Background(), sriovNetwork)
+
+			Expect(err).ToNot(HaveOccurred())
+			waitForNetAttachDef(sriovNetworkName, namespaces.Test)
+
+			podDefinition = pod.DefineWithNetworks([]string{sriovNetworkName})
+			podDefinition, err = clients.Pods(namespaces.Test).Create(context.Background(), podDefinition, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			waitForPodRunning(podDefinition)
+		})
+
+		It("should not delete the pod for restart", func() {
+			By("creating a pool with rdma to trigger reboot and skipDrainOnReboot")
+			networkPool := &sriovv1.SriovNetworkPoolConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: testNode, Namespace: operatorNamespace},
+				Spec: sriovv1.SriovNetworkPoolConfigSpec{RdmaMode: consts.RdmaSubsystemModeExclusive, SkipDrainOnReboot: true,
+					NodeSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}}}}
+			err := clients.Create(context.Background(), networkPool)
+			Expect(err).ToNot(HaveOccurred())
+
+			By("waiting for the node to be not ready (rebooting)")
+			Eventually(func(g Gomega) bool {
+				nodeObj, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
+				Expect(err).ToNot(HaveOccurred())
+				for _, cond := range nodeObj.Status.Conditions {
+					if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionUnknown {
+						return true
+					}
+				}
+				return false
+			}, 3*time.Minute, time.Second).Should(BeTrue())
+
+			By("checking the pod still exist from api point of view")
+			tmpPod := &corev1.Pod{}
+			err = clients.Get(context.Background(), client.ObjectKey{Name: podDefinition.Name, Namespace: podDefinition.Namespace}, tmpPod)
+			Expect(err).ToNot(HaveOccurred())
+
+			WaitForSRIOVStable()
+
+			By("creating another pod")
+			podDefinition = pod.DefineWithNetworks([]string{sriovNetworkName})
+			podDefinition, err = clients.Pods(namespaces.Test).Create(context.Background(), podDefinition, metav1.CreateOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			waitForPodRunning(podDefinition)
+
+			By("removing the pool config")
+			err = clients.Delete(context.Background(), networkPool)
+			Expect(err).ToNot(HaveOccurred())
+
+			By("waiting for the node to be not ready (rebooting)")
+			Eventually(func(g Gomega) bool {
+				nodeObj, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
+				Expect(err).ToNot(HaveOccurred())
+				for _, cond := range nodeObj.Status.Conditions {
+					if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionUnknown {
+						return true
+					}
+				}
+				return false
+			}, 3*time.Minute, time.Second).Should(Equal(true))
+
+			By("checking the pod doesn't exist anymore")
+			err = clients.Get(context.Background(), client.ObjectKey{Name: podDefinition.Name, Namespace: podDefinition.Namespace}, tmpPod)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+			WaitForSRIOVStable()
+		})
+	})
 })

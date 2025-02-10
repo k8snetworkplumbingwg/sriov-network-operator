@@ -75,6 +75,7 @@ if [ $CLUSTER_TYPE == "openshift" ]; then
   echo "## deploying SRIOV Network Operator"
   hack/deploy-setup.sh $NAMESPACE
 else
+  kubectl apply -f deployment/sriov-network-operator-chart/crds
   export HELM_MODE=upgrade
   hack/deploy-operator-helm.sh
 fi

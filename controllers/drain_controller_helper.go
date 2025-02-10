@@ -74,9 +74,16 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 		return ctrl.Result{}, nil
 	}
 
+	// find the relevant node pool
+	nodePool, nodeList, err := dr.findNodePoolConfig(ctx, node)
+	if err != nil {
+		reqLogger.Error(err, "failed to find the pool for the requested node")
+		return ctrl.Result{}, err
+	}
+
 	// we need to start the drain, but first we need to check that we can drain the node
 	if nodeStateDrainAnnotationCurrent == constants.DrainIdle {
-		result, err := dr.tryDrainNode(ctx, node)
+		result, err := dr.tryDrainNode(ctx, node, nodePool, nodeList)
 		if err != nil {
 			reqLogger.Error(err, "failed to check if we can drain the node")
 			return ctrl.Result{}, err
@@ -88,15 +95,21 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 		}
 	}
 
-	// call the drain function that will also call drain to other platform providers like openshift
-	drained, err := dr.drainer.DrainNode(ctx, node, nodeDrainAnnotation == constants.RebootRequired)
-	if err != nil {
-		reqLogger.Error(err, "error trying to drain the node")
-		dr.recorder.Event(nodeNetworkState,
-			corev1.EventTypeWarning,
-			"DrainController",
-			"failed to drain node")
-		return reconcile.Result{}, err
+	drained := false
+	// in case we need to reboot and the skipDrainOnReboot is true we just marked as drained
+	if nodeDrainAnnotation == constants.RebootRequired && nodePool.Spec.SkipDrainOnReboot {
+		drained = true
+	} else {
+		// call the drain function that will also call drain to other platform providers like openshift
+		drained, err = dr.drainer.DrainNode(ctx, node, nodeDrainAnnotation == constants.RebootRequired)
+		if err != nil {
+			reqLogger.Error(err, "error trying to drain the node")
+			dr.recorder.Event(nodeNetworkState,
+				corev1.EventTypeWarning,
+				"DrainController",
+				"failed to drain node")
+			return reconcile.Result{}, err
+		}
 	}
 
 	// if we didn't manage to complete the drain of the node we retry
@@ -124,7 +137,7 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	return ctrl.Result{}, nil
 }
 
-func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node) (*reconcile.Result, error) {
+func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node, nodePool *sriovnetworkv1.SriovNetworkPoolConfig, nodeList []corev1.Node) (*reconcile.Result, error) {
 	// configure logs
 	reqLogger := log.FromContext(ctx)
 	reqLogger.Info("checkForNodeDrain():")
@@ -132,13 +145,6 @@ func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node) (
 	//critical section we need to check if we can start the draining
 	dr.drainCheckMutex.Lock()
 	defer dr.drainCheckMutex.Unlock()
-
-	// find the relevant node pool
-	nodePool, nodeList, err := dr.findNodePoolConfig(ctx, node)
-	if err != nil {
-		reqLogger.Error(err, "failed to find the pool for the requested node")
-		return nil, err
-	}
 
 	// check how many nodes we can drain in parallel for the specific pool
 	maxUnv, err := nodePool.MaxUnavailable(len(nodeList))
@@ -172,6 +178,7 @@ func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node) (
 	}
 	reqLogger.Info("Max node allowed to be draining at the same time", "MaxParallelNodeConfiguration", maxUnv)
 	reqLogger.Info("Count of draining", "drainingNodes", current)
+	reqLogger.Info("Check Skip Drain on boot config", "SkipDrainOnReboot", nodePool.Spec.SkipDrainOnReboot)
 
 	// if maxUnv is zero this means we drain all the nodes in parallel without a limit
 	if maxUnv == -1 {

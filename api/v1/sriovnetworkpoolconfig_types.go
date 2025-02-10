@@ -22,6 +22,13 @@ type SriovNetworkPoolConfigSpec struct {
 	// even if maxUnavailable is greater than one.
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 
+	// SkipDrainOnReboot defines if the operator should make a full no drain before reboot
+	//
+	// This is useful for single node deployments instead of using the skipDrain from the operatorConfig.
+	// This will allow the operator to drain pods using sriov devices when drain is needed on single node
+	// instead of just removing the VF's from running pods that is the case if skipDrain is used.
+	SkipDrainOnReboot bool `json:"skipDrainOnReboot,omitempty"`
+
 	// +kubebuilder:validation:Enum=shared;exclusive
 	// RDMA subsystem. Allowed value "shared", "exclusive".
 	RdmaMode string `json:"rdmaMode,omitempty"`
