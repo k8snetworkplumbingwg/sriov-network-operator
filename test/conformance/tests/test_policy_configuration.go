@@ -448,6 +448,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					createTestPod(nodeToTest, []string{sriovNetworkName})
 				})
 			})
+
 			Context("PF shutdown", func() {
 				// 29398
 				It("Should be able to create pods successfully if PF is down.Pods are able to communicate with each other on the same node", func() {

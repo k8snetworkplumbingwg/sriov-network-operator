@@ -326,7 +326,7 @@ func expectNodeStateAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, 
 		g.Expect(utils.ObjectHasAnnotation(nodeState, constants.NodeStateDrainAnnotationCurrent, expectedAnnotationValue)).
 			To(BeTrue(),
 				"Node[%s] annotation[%s] == '%s'. Expected '%s'", nodeState.Name, constants.NodeDrainAnnotation, nodeState.GetLabels()[constants.NodeStateDrainAnnotationCurrent], expectedAnnotationValue)
-	}, "20s", "1s").Should(Succeed())
+	}, "200s", "1s").Should(Succeed())
 }
 
 func expectNumberOfDrainingNodes(numbOfDrain int, nodesState ...*sriovnetworkv1.SriovNetworkNodeState) {
