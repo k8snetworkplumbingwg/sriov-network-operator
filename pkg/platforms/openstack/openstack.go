@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	network "net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,11 +27,10 @@ const (
 	varConfigPath      = "/var/config"
 	ospMetaDataBaseDir = "/openstack/2018-08-27"
 	ospMetaDataDir     = varConfigPath + ospMetaDataBaseDir
-	ospMetaDataBaseURL = "http://169.254.169.254" + ospMetaDataBaseDir
 	ospNetworkDataJSON = "network_data.json"
 	ospMetaDataJSON    = "meta_data.json"
-	ospNetworkDataURL  = ospMetaDataBaseURL + "/" + ospNetworkDataJSON
-	ospMetaDataURL     = ospMetaDataBaseURL + "/" + ospMetaDataJSON
+	ospHTTP            = "http://"
+	ospHTTPS           = "https://"
 	// Config drive is defined as an iso9660 or vfat (deprecated) drive
 	// with the "config-2" label.
 	//https://docs.openstack.org/nova/latest/user/config-drive.html
@@ -40,6 +40,10 @@ const (
 var (
 	ospNetworkDataFile = ospMetaDataDir + "/" + ospNetworkDataJSON
 	ospMetaDataFile    = ospMetaDataDir + "/" + ospMetaDataJSON
+	ospBaseURLS        = [2]string{"fe80::a9fe:a9fe", "169.254.169.254"}
+	ospNetworkDataURL  string
+	ospMetaDataURL     string
+	ospMetaDataBaseURL []string
 )
 
 //go:generate ../../../bin/mockgen -destination mock/mock_openstack.go -source openstack.go
@@ -113,17 +117,73 @@ func New(hostManager host.HostManagerInterface) OpenstackInterface {
 	}
 }
 
+func getActiveInterfaceName() (string, error) {
+	interfaces, err := network.Interfaces()
+	if err != nil {
+		return "", err
+	}
+
+	for _, intf := range interfaces {
+		if intf.Flags&network.FlagUp != 0 && intf.Flags&network.FlagLoopback == 0 {
+			return intf.Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no active non-loopback interface found")
+}
+
+func constructMetaDataURLs(baseURL, activeInterface string, isIPv6 bool) []string {
+	var urls []string
+	encodedSign := "%25"
+	if isIPv6 {
+		urls = append(urls, ospHTTPS+"["+baseURL+encodedSign+activeInterface+"]:80")
+		urls = append(urls, ospHTTP+"["+baseURL+encodedSign+activeInterface+"]:80")
+	} else {
+		urls = append(urls, ospHTTPS+baseURL)
+		urls = append(urls, ospHTTP+baseURL)
+	}
+	return urls
+}
+
 // GetOpenstackData gets the metadata and network_data
 func getOpenstackData(mountConfigDrive bool) (metaData *OSPMetaData, networkData *OSPNetworkData, err error) {
 	metaData, networkData, err = getOpenstackDataFromConfigDrive(mountConfigDrive)
 	if err != nil {
 		log.Log.Error(err, "GetOpenStackData(): non-fatal error getting OpenStack data from config drive")
-		metaData, networkData, err = getOpenstackDataFromMetadataService()
-		if err != nil {
-			return metaData, networkData, fmt.Errorf("GetOpenStackData(): error getting OpenStack data: %w", err)
+		// Attempt to reach MetaData over IPv6 then over IPv4 for both HTTPS and HTTP
+		reachedMetaData := false
+		for i, baseURL := range ospBaseURLS {
+			isIPv6 := i == 0
+			if isIPv6 {
+				activeInterface, err := getActiveInterfaceName()
+				if err != nil {
+					log.Log.Error(err, "GetOpenStackData(): non-fatal error retrieving active network interface")
+					continue
+				}
+				ospMetaDataBaseURL = constructMetaDataURLs(baseURL, activeInterface, true)
+			} else {
+				ospMetaDataBaseURL = constructMetaDataURLs(baseURL, "", false)
+			}
+			// Attempt to reach MetaData over HTTPS then over HTTP
+			for _, baseMetaURL := range ospMetaDataBaseURL {
+				ospNetworkDataURL = baseMetaURL + "/" + ospNetworkDataJSON
+				ospMetaDataURL = baseMetaURL + "/" + ospMetaDataJSON
+				metaData, networkData, err = getOpenstackDataFromMetadataService()
+				if err == nil {
+					reachedMetaData = true
+					break
+				}
+			}
+
+			if reachedMetaData {
+				break
+			}
+		}
+
+		if !reachedMetaData {
+			return metaData, networkData, fmt.Errorf("GetOpenStackData(): error reaching metadata service both over IPv6 and IPv4: %v", err)
 		}
 	}
-
 	// We can't rely on the PCI address from the metadata so we will lookup the real PCI address
 	// for the NIC that matches the MAC address.
 	//
