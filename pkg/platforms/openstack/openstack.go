@@ -40,7 +40,7 @@ const (
 var (
 	ospNetworkDataFile = ospMetaDataDir + "/" + ospNetworkDataJSON
 	ospMetaDataFile    = ospMetaDataDir + "/" + ospMetaDataJSON
-	ospBaseURLS        = [2]string{"fe80::a9fe:a9fe", "169.254.169.254"}
+	ospBaseURLS        = [2]string{"169.254.169.254", "fe80::a9fe:a9fe"}
 	ospNetworkDataURL  string
 	ospMetaDataURL     string
 	ospMetaDataBaseURL []string
@@ -124,12 +124,23 @@ func getActiveInterfaceName() (string, error) {
 	}
 
 	for _, intf := range interfaces {
+		// Check if the interface is up and not a loopback
 		if intf.Flags&network.FlagUp != 0 && intf.Flags&network.FlagLoopback == 0 {
-			return intf.Name, nil
+			addrs, err := intf.Addrs()
+			if err != nil {
+				continue
+			}
+
+			// Check if at least one address is an IPv6 address
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*network.IPNet); ok && ipNet.IP.To4() == nil {
+					return intf.Name, nil
+				}
+			}
 		}
 	}
 
-	return "", fmt.Errorf("no active non-loopback interface found")
+	return "", fmt.Errorf("no active non-loopback interface found with an IPv6 address")
 }
 
 func constructMetaDataURLs(baseURL, activeInterface string, isIPv6 bool) []string {
@@ -150,10 +161,10 @@ func getOpenstackData(mountConfigDrive bool) (metaData *OSPMetaData, networkData
 	metaData, networkData, err = getOpenstackDataFromConfigDrive(mountConfigDrive)
 	if err != nil {
 		log.Log.Error(err, "GetOpenStackData(): non-fatal error getting OpenStack data from config drive")
-		// Attempt to reach MetaData over IPv6 then over IPv4 for both HTTPS and HTTP
+		// Attempt to reach MetaData over IPv4 then over IPv6 for both HTTPS and HTTP
 		reachedMetaData := false
 		for i, baseURL := range ospBaseURLS {
-			isIPv6 := i == 0
+			isIPv6 := i == 1
 			if isIPv6 {
 				activeInterface, err := getActiveInterfaceName()
 				if err != nil {
