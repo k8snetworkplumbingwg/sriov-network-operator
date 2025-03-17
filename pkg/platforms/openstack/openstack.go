@@ -146,9 +146,10 @@ func getActiveInterfaceName() (string, error) {
 func constructMetaDataURLs(baseURL, activeInterface string, isIPv6 bool) []string {
 	var urls []string
 	encodedSign := "%25"
+	port := "80"
 	if isIPv6 {
-		urls = append(urls, ospHTTPS+"["+baseURL+encodedSign+activeInterface+"]:80")
-		urls = append(urls, ospHTTP+"["+baseURL+encodedSign+activeInterface+"]:80")
+		urls = append(urls, ospHTTPS+"["+baseURL+encodedSign+activeInterface+"]:"+port)
+		urls = append(urls, ospHTTP+"["+baseURL+encodedSign+activeInterface+"]:"+port)
 	} else {
 		urls = append(urls, ospHTTPS+baseURL)
 		urls = append(urls, ospHTTP+baseURL)
