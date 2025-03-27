@@ -52,6 +52,8 @@ func init() {
 	startCmd.Flags().IntVar(&port, "port", 443,
 		"Secure port that the webhook listens on")
 	startCmd.Flags().BoolVar(&enableHTTP2, "enable-http2", false, "If HTTP/2 should be enabled for the metrics and webhook servers.")
+
+	snolog.InitLog()
 }
 
 // serve handles the http portion of a request prior to handing to an admit
