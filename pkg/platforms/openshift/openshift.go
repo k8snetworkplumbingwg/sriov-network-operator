@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/go-logr/logr"
+	mcv1 "github.com/openshift/api/machineconfiguration/v1"
+	mcoconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	mcv1 "github.com/openshift/api/machineconfiguration/v1"
-	mcoconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
 
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
@@ -285,16 +284,17 @@ func (c *openshiftContext) OpenshiftAfterCompleteDrainNode(ctx context.Context, 
 }
 
 func (c *openshiftContext) GetNodeMachinePoolName(ctx context.Context, node *corev1.Node) (string, error) {
+	logger := ctx.Value("logger").(logr.Logger).WithName("GetNodeMachinePoolName")
 	desiredConfig, ok := node.Annotations[mcoconsts.DesiredMachineConfigAnnotationKey]
 	if !ok {
-		log.Log.Error(nil, "getNodeMachinePool(): Failed to find the the desiredConfig Annotation")
-		return "", fmt.Errorf("getNodeMachinePool(): Failed to find the the desiredConfig Annotation")
+		logger.Error(nil, "Failed to find the the desiredConfig Annotation")
+		return "", fmt.Errorf("failed to find the the desiredConfig Annotation")
 	}
 
 	mc := &mcv1.MachineConfig{}
 	err := c.kubeClient.Get(ctx, client.ObjectKey{Name: desiredConfig}, mc)
 	if err != nil {
-		log.Log.Error(err, "getNodeMachinePool(): Failed to get the desired Machine Config")
+		logger.Error(err, "Failed to get the desired Machine Config")
 		return "", err
 	}
 	for _, owner := range mc.OwnerReferences {
@@ -303,12 +303,13 @@ func (c *openshiftContext) GetNodeMachinePoolName(ctx context.Context, node *cor
 		}
 	}
 
-	log.Log.Error(nil, "getNodeMachinePool(): Failed to find the MCP of the node")
-	return "", fmt.Errorf("getNodeMachinePool(): Failed to find the MCP of the node")
+	logger.Error(nil, "Failed to find the MCP of the node")
+	return "", fmt.Errorf("failed to find the MCP of the node")
 }
 
 func (c *openshiftContext) ChangeMachineConfigPoolPause(ctx context.Context, mcp *mcv1.MachineConfigPool, pause bool) error {
-	log.Log.Info("ChangeMachineConfigPoolPause:()")
+	logger := ctx.Value("logger").(logr.Logger).WithName("ChangeMachineConfigPoolPause")
+	logger.Info("change machine config pool state", "pause", pause)
 
 	patchString := []byte(fmt.Sprintf(`{"spec":{"paused":%t}}`, pause))
 	patch := client.RawPatch(types.MergePatchType, patchString)

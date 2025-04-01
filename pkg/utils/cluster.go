@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/go-logr/logr"
 	configv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -133,11 +134,21 @@ func AnnotateObject(ctx context.Context, obj client.Object, key, value string, c
 	}
 
 	if obj.GetAnnotations()[key] != value {
-		log.Log.V(2).Info("AnnotateObject(): Annotate object",
-			"objectName", obj.GetName(),
-			"objectKind", obj.GetObjectKind(),
-			"annotationKey", key,
-			"annotationValue", value)
+		logger, ok := ctx.Value("logger").(logr.Logger)
+		if !ok {
+			log.Log.V(2).Info("AnnotateObject(): Annotate object",
+				"objectName", obj.GetName(),
+				"objectKind", obj.GetObjectKind(),
+				"annotationKey", key,
+				"annotationValue", value)
+		} else {
+			logger.WithName("AnnotateObject").V(2).Info("AnnotateObject(): Annotate object",
+				"objectName", obj.GetName(),
+				"objectKind", obj.GetObjectKind(),
+				"annotationKey", key,
+				"annotationValue", value)
+		}
+
 		obj.GetAnnotations()[key] = value
 		patch := client.MergeFrom(original)
 		err := c.Patch(ctx,
@@ -153,7 +164,7 @@ func AnnotateObject(ctx context.Context, obj client.Object, key, value string, c
 // AnnotateNode add annotation to a node
 func AnnotateNode(ctx context.Context, nodeName string, key, value string, c client.Client) error {
 	node := &corev1.Node{}
-	err := c.Get(context.TODO(), client.ObjectKey{Name: nodeName}, node)
+	err := c.Get(ctx, client.ObjectKey{Name: nodeName}, node)
 	if err != nil {
 		return err
 	}
