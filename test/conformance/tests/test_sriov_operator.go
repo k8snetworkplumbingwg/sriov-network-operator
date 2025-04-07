@@ -32,6 +32,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/cluster"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/discovery"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/execute"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/k8sreporter"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/namespaces"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/network"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/nodes"
@@ -2109,12 +2110,15 @@ func WaitForSRIOVStable() {
 	time.Sleep((10 + snoTimeoutMultiplier*20) * time.Second)
 
 	fmt.Println("Waiting for the sriov state to stable")
-	Eventually(func() bool {
-		// ignoring the error. This can eventually be executed against a single node cluster,
-		// and if a reconfiguration triggers a reboot then the api calls will return an error
-		res, _ := cluster.SriovStable(operatorNamespace, clients)
-		return res
-	}, waitingTime, 1*time.Second).Should(BeTrue())
+	Eventually(func(g Gomega) {
+		res, err := cluster.SriovStable(operatorNamespace, clients)
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(res).To(BeTrue())
+	}, waitingTime, 1*time.Second).Should(Succeed(), func() string {
+		return "SR-IOV Operator is not stable" +
+			k8sreporter.SriovNetworkNodeStatesSummary(clients, operatorNamespace) +
+			k8sreporter.Events(clients, operatorNamespace)
+	})
 	fmt.Println("Sriov state is stable")
 
 	Eventually(func() bool {
