@@ -193,6 +193,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		// general
 		hostHelper.EXPECT().Chroot(gomock.Any()).Return(func() error { return nil }, nil).AnyTimes()
 		hostHelper.EXPECT().RunCommand("/bin/sh", gomock.Any(), gomock.Any(), gomock.Any()).Return("", "", nil).AnyTimes()
+		hostHelper.EXPECT().RunCommand("/bin/bash", gomock.Any(), gomock.Any(), gomock.Any()).Return("", "", nil).AnyTimes()
 
 		discoverSriovReturn = newSriovDiscoverReturn()
 
