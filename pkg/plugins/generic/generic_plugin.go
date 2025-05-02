@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"syscall"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -271,11 +272,13 @@ func needDriverCheckVdpaType(state *sriovnetworkv1.SriovNetworkNodeState, driver
 // editKernelArg Tries to add the kernel args via ostree or grubby.
 func editKernelArg(helper helper.HostHelpersInterface, mode, karg string) error {
 	log.Log.Info("generic plugin editKernelArg()", "mode", mode, "karg", karg)
+	isChroot := false
 	script := daemonScriptsPath
 	if _, err := os.Stat(consts.Host); errors.Is(err, os.ErrNotExist) {
 		script = systemdScriptsPath
+		isChroot = true
 	}
-	_, _, err := helper.RunCommand("/bin/bash", script, mode, karg)
+	_, _, err := helper.RunCommand("/bin/bash", script, strconv.FormatBool(isChroot), mode, karg)
 	if err != nil {
 		// if grubby is not there log and assume kernel args are set correctly.
 		if utils.IsCommandNotFound(err) {
