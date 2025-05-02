@@ -124,9 +124,10 @@ spec:
               fi
               mkdir -p /host/var/lib/sriov/
               cp /usr/bin/sriov-network-config-daemon /host/var/lib/sriov/sriov-network-config-daemon
-              chcon -t bin_t /host/var/lib/sriov/sriov-network-config-daemon || true # Allow systemd to run the file, use pipe true to not failed if the system doesn't have selinux or apparmor enabled
+              # Allow systemd to run the file, use pipe true to not failed if the system doesn't have selinux or apparmor enabled
+              chcon -t bin_t /host/var/lib/sriov/sriov-network-config-daemon || true
               cp /bindata/scripts/kargs.sh /host/var/lib/sriov/kargs.sh
-              chcon -t bin_t /host/var/lib/sriov/kargs.sh || true # Allow systemd to run the file, use pipe true to not failed if the system doesn't have selinux or apparmor enabled
+              chcon -t bin_t /host/var/lib/sriov/kargs.sh || true
           securityContext:
             privileged: true
           resources:
