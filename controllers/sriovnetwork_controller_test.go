@@ -342,6 +342,45 @@ var _ = Describe("SriovNetwork Controller", Ordered, func() {
 				MustPassRepeatedly(10).
 				Should(Succeed())
 		})
+
+		Context("When the SriovNetwork namespace is not equal to the operator one", func() {
+			BeforeAll(func() {
+				nsBlue := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-blue"}}
+				Expect(k8sClient.Create(context.Background(), nsBlue)).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					By("deleting ns-blue")
+					err := k8sClient.Delete(ctx, nsBlue)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			It("should create the NetAttachDefinition in the same namespace", func() {
+				cr := sriovnetworkv1.SriovNetwork{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sriovnet-blue",
+						Namespace: "ns-blue",
+					},
+				}
+
+				err := k8sClient.Create(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				netAttDef := &netattdefv1.NetworkAttachmentDefinition{}
+				err = util.WaitForNamespacedObject(netAttDef, k8sClient, "ns-blue", cr.GetName(), util.RetryInterval, util.Timeout)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = k8sClient.Delete(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				expectedOwnerReference := metav1.OwnerReference{
+					Kind:       "SriovNetwork",
+					APIVersion: sriovnetworkv1.GroupVersion.String(),
+					UID:        cr.UID,
+					Name:       cr.Name,
+				}
+				Expect(netAttDef.ObjectMeta.OwnerReferences).To(ContainElement(expectedOwnerReference))
+			})
+		})
 	})
 })
 
