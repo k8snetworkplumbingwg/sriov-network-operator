@@ -132,7 +132,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 			// k8s plugin for k8s cluster type
 			if vars.ClusterType == constants.ClusterTypeKubernetes {
 				hostHelper.EXPECT().ReadServiceManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
-				hostHelper.EXPECT().ReadServiceInjectionManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
+				hostHelper.EXPECT().ReadServiceInjectionManifestFile(gomock.Any(), gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
 			}
 		})
 

@@ -3,4 +3,4 @@ dropins:
 - name: 10-hw-offload.conf
   contents: |
     [Service]
-    ExecStartPre=/bin/ovs-vsctl --no-wait set Open_vSwitch . other_config:hw-offload=true
+    ExecStartPre=/bin/ovs-vsctl -t 5 set Open_vSwitch . external_ids:sriov-operator-owned-keys='{{ .ExternalIds }}' && /bin/ovs-vsctl/ovs-vsctl -t 5 get Open_vSwitch . external_ids:sriov-operator-owned-keys | xargs /bin/ovs-vsctl --no-wait remove Open_vSwitch . other_config && /bin/ovs-vsctl --no-wait set Open_vSwitch . {{ .OtherOvsConfig }}
