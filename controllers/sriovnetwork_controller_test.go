@@ -342,6 +342,68 @@ var _ = Describe("SriovNetwork Controller", Ordered, func() {
 				MustPassRepeatedly(10).
 				Should(Succeed())
 		})
+
+		Context("When the SriovNetwork namespace is not equal to the operator one", func() {
+			BeforeAll(func() {
+				nsBlue := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-blue"}}
+				Expect(k8sClient.Create(context.Background(), nsBlue)).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					By("deleting ns-blue")
+					err := k8sClient.Delete(ctx, nsBlue)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			It("should create the NetAttachDefinition in the same namespace", func() {
+				cr := sriovnetworkv1.SriovNetwork{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sriovnet-blue",
+						Namespace: "ns-blue",
+					},
+					Spec: sriovnetworkv1.SriovNetworkSpec{
+						ResourceName: "resource_x",
+					},
+				}
+
+				err := k8sClient.Create(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				netAttDef := &netattdefv1.NetworkAttachmentDefinition{}
+				err = util.WaitForNamespacedObject(netAttDef, k8sClient, "ns-blue", cr.GetName(), util.RetryInterval, util.Timeout)
+				Expect(err).NotTo(HaveOccurred())
+				expectedOwnerReference := metav1.OwnerReference{
+					Kind:       "SriovNetwork",
+					APIVersion: sriovnetworkv1.GroupVersion.String(),
+					UID:        cr.UID,
+					Name:       cr.Name,
+				}
+				Expect(netAttDef.GetAnnotations()["k8s.v1.cni.cncf.io/resourceName"]).To(Equal("openshift.io/resource_x"))
+
+				Expect(netAttDef.ObjectMeta.OwnerReferences).To(ContainElement(expectedOwnerReference))
+
+				// Patch the SriovNetwork
+				original := cr.DeepCopy()
+				cr.Spec.ResourceName = "resource_y"
+				err = k8sClient.Patch(ctx, &cr, dynclient.MergeFrom(original))
+				Expect(err).NotTo(HaveOccurred())
+
+				// Check that the OwnerReference persists
+				netAttDef = &netattdefv1.NetworkAttachmentDefinition{}
+
+				Eventually(func(g Gomega) {
+					netAttDef = &netattdefv1.NetworkAttachmentDefinition{}
+					err = util.WaitForNamespacedObject(netAttDef, k8sClient, "ns-blue", cr.GetName(), util.RetryInterval, util.Timeout)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(netAttDef.GetAnnotations()["k8s.v1.cni.cncf.io/resourceName"]).To(Equal("openshift.io/resource_y"))
+					g.Expect(netAttDef.ObjectMeta.OwnerReferences).To(ContainElement(expectedOwnerReference))
+				}).WithPolling(100 * time.Millisecond).WithTimeout(5 * time.Second).Should(Succeed())
+
+				// Delete the SriovNetwork
+				err = k8sClient.Delete(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+		})
 	})
 })
 
