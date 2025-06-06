@@ -98,6 +98,8 @@ const (
 	MCPPauseAnnotationState = "sriovnetwork.openshift.io/state"
 	MCPPauseAnnotationTime  = "sriovnetwork.openshift.io/time"
 
+	OwnerAnnotation = "sriovnetwork.openshift.io/owner"
+
 	// NodeStateKeepUntilAnnotation contains name of the "keep until time" annotation for SriovNetworkNodeState object.
 	// The "keep until time" specifies the earliest time at which the state object can be removed
 	// if the daemon's pod is not found on the node.
