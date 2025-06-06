@@ -342,6 +342,69 @@ var _ = Describe("SriovNetwork Controller", Ordered, func() {
 				MustPassRepeatedly(10).
 				Should(Succeed())
 		})
+
+		Context("When the SriovNetwork namespace is not equal to the operator one", func() {
+			BeforeAll(func() {
+				nsBlue := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-blue"}}
+				Expect(k8sClient.Create(context.Background(), nsBlue)).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					By("deleting ns-blue")
+					err := k8sClient.Delete(ctx, nsBlue)
+					Expect(err).ToNot(HaveOccurred())
+				})
+			})
+
+			It("should create the NetAttachDefinition in the same namespace", func() {
+				cr := sriovnetworkv1.SriovNetwork{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sriovnet-blue",
+						Namespace: "ns-blue",
+					},
+				}
+
+				err := k8sClient.Create(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				netAttDef := &netattdefv1.NetworkAttachmentDefinition{}
+				err = util.WaitForNamespacedObject(netAttDef, k8sClient, "ns-blue", cr.GetName(), util.RetryInterval, util.Timeout)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = k8sClient.Delete(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				expectedOwnerReference := metav1.OwnerReference{
+					Kind:       "SriovNetwork",
+					APIVersion: sriovnetworkv1.GroupVersion.String(),
+					UID:        cr.UID,
+					Name:       cr.Name,
+				}
+				Expect(netAttDef.ObjectMeta.OwnerReferences).To(ContainElement(expectedOwnerReference))
+			})
+		})
+
+		Context("Migration upgrades", func() {
+			It("should remove finalizer in existing SriovNetworks", func() {
+				cr := sriovnetworkv1.SriovNetwork{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sriovnet-old",
+						Namespace: testNamespace,
+						Finalizers: []string{
+							sriovnetworkv1.NETATTDEFFINALIZERNAME,
+						},
+					},
+				}
+
+				err := k8sClient.Create(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				Eventually(func(g Gomega) {
+					err := k8sClient.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}, &cr)
+					g.Expect(err).ToNot(HaveOccurred())
+					g.Expect(cr.Finalizers).To(BeEmpty())
+				}).WithTimeout(time.Second).Should(Succeed())
+			})
+		})
+
 	})
 })
 
