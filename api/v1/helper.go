@@ -651,6 +651,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+	data.Data["Owner"] = cr.GroupVersionKind().GroupKind().String() + "/" + cr.GetNamespace() + "/" + cr.Name
 	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 
 	data.Data["StateConfigured"] = true
@@ -719,6 +720,7 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+	data.Data["Owner"] = cr.GroupVersionKind().GroupKind().String() + "/" + cr.GetNamespace() + "/" + cr.Name
 	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 	data.Data["SriovCniVlan"] = cr.Spec.Vlan
 
@@ -837,6 +839,7 @@ func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["NetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+	data.Data["Owner"] = cr.GroupVersionKind().GroupKind().String() + "/" + cr.GetNamespace() + "/" + cr.Name
 	data.Data["CniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 
 	if cr.Spec.Capabilities == "" {
