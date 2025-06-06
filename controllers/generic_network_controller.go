@@ -88,17 +88,15 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
-			return reconcile.Result{}, nil
+			return reconcile.Result{}, r.garbageCollect(ctx)
 		}
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
 
-	if instance == nil {
-		// Request object not found, could have been deleted after reconcile request.
-		// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
-		// Return and don't requeue
-		return reconcile.Result{}, nil
+	err = r.cleanOldFinalizers(ctx, instance)
+	if err != nil {
+		return reconcile.Result{}, err
 	}
 
 	if instance.NetworkNamespace() != "" && instance.GetNamespace() != vars.Namespace {
@@ -112,20 +110,6 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return reconcile.Result{}, nil
 	}
 
-	// examine DeletionTimestamp to determine if object is under deletion
-	if instance.GetDeletionTimestamp().IsZero() {
-		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object. This is equivalent
-		// registering our finalizer.
-		err = r.updateFinalizers(ctx, instance)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-	} else {
-		// The object is being deleted
-		err = r.cleanResourcesAndFinalizers(ctx, instance)
-		return reconcile.Result{}, err
-	}
 	raw, err := instance.RenderNetAttDef()
 	if err != nil {
 		return reconcile.Result{}, err
@@ -286,61 +270,69 @@ func (r *genericNetworkReconciler) namespaceHandlerCreate(ctx context.Context, e
 	})
 }
 
-// deleteNetAttDef deletes the generated net-att-def CR
-func (r *genericNetworkReconciler) deleteNetAttDef(ctx context.Context, cr NetworkCRInstance) error {
-	// Fetch the NetworkAttachmentDefinition instance
-	namespace := cr.NetworkNamespace()
-	if namespace == "" {
-		namespace = cr.GetNamespace()
-	}
-	instance := &netattdefv1.NetworkAttachmentDefinition{ObjectMeta: metav1.ObjectMeta{Name: cr.GetName(), Namespace: namespace}}
-	err := r.Delete(ctx, instance)
+// garbageCollect searches all NetworkAttachmentDefinition objects that has a `sriovnetwork.openshift.io/owner`
+// annotation pointing to non existing objects
+func (r *genericNetworkReconciler) garbageCollect(ctx context.Context) error {
+	logger := log.Log.WithName("garbageCollect")
+
+	netAttachDefs := &netattdefv1.NetworkAttachmentDefinitionList{}
+	err := r.Client.List(ctx, netAttachDefs)
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return err
+		return fmt.Errorf("garbageCollect: failed to list NetworkAttachmentDefinition: %w", err)
 	}
+	logger.Info("xxx")
+
+	for _, netAttDef := range netAttachDefs.Items {
+		logger.Info("xxx1", "obj", netAttDef)
+
+		owner, ok := netAttDef.GetAnnotations()[consts.OwnerRefAnnotation]
+		if !ok {
+			continue
+		}
+
+		obj, namespace, name, err := sriovnetworkv1.StringToOwnerRef(owner)
+		if err != nil {
+			logger.Error(err, "bad value for `sriovnetwork.openshift.io/owner`", "owner", owner)
+			continue
+		}
+
+		err = r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj)
+		if err != nil {
+			if !errors.IsNotFound(err) {
+				logger.Error(err, "failed to get owner object", "owner", owner)
+				continue
+			}
+
+			logger.Info("owner object not found. deleting NetworkAttachmentDefinition", "obj", netAttDef)
+
+			err := r.Delete(ctx, &netAttDef)
+			if err != nil {
+				logger.Error(err, "can't delete NetworkAttachmentDefinition", "obj", netAttDef)
+			}
+		}
+	}
+
 	return nil
 }
 
-func (r *genericNetworkReconciler) updateFinalizers(ctx context.Context, instance NetworkCRInstance) error {
-	if instance.GetNamespace() != vars.Namespace {
-		// If the resource is in a namespace different than the operator one, then the NetworkAttachmentDefinition will
-		// be created in the same namespace and its deletion can be handled by OwnerReferences. There is no need for finalizers
+func (r *genericNetworkReconciler) cleanOldFinalizers(ctx context.Context, instance NetworkCRInstance) error {
+	instanceFinalizers := instance.GetFinalizers()
+
+	if !sriovnetworkv1.StringInArray(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers) {
 		return nil
 	}
 
-	instanceFinalizers := instance.GetFinalizers()
-	if !sriovnetworkv1.StringInArray(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers) {
-		instance.SetFinalizers(append(instanceFinalizers, sriovnetworkv1.NETATTDEFFINALIZERNAME))
+	// remove our finalizer from the list and update it.
+	newFinalizers, found := sriovnetworkv1.RemoveString(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers)
+	if found {
+		logger := log.Log.WithName("cleanFinalizers")
+
+		instance.SetFinalizers(newFinalizers)
+		logger.Info("Updating network instance to remove finalizer `netattdef.finalizers.sriovnetwork.openshift.io`", "obj", instance)
 		if err := r.Update(ctx, instance); err != nil {
 			return err
 		}
 	}
 
-	return nil
-}
-
-func (r *genericNetworkReconciler) cleanResourcesAndFinalizers(ctx context.Context, instance NetworkCRInstance) error {
-	instanceFinalizers := instance.GetFinalizers()
-
-	if sriovnetworkv1.StringInArray(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers) {
-		// our finalizer is present, so lets handle any external dependency
-		log.FromContext(ctx).Info("delete NetworkAttachmentDefinition CR", "Namespace", instance.NetworkNamespace(), "Name", instance.GetName())
-		if err := r.deleteNetAttDef(ctx, instance); err != nil {
-			// if fail to delete the external dependency here, return with error
-			// so that it can be retried
-			return err
-		}
-		// remove our finalizer from the list and update it.
-		newFinalizers, found := sriovnetworkv1.RemoveString(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers)
-		if found {
-			instance.SetFinalizers(newFinalizers)
-			if err := r.Update(ctx, instance); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
