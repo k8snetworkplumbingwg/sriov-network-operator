@@ -90,7 +90,7 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Request object not found, could have been deleted after reconcile request.
 		// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 		// Return and don't requeue
-		return reconcile.Result{}, nil
+		return reconcile.Result{}, r.garbageCollect(ctx)
 	}
 
 	if instance.NetworkNamespace() != "" && instance.GetNamespace() != vars.Namespace {
@@ -104,20 +104,6 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return reconcile.Result{}, nil
 	}
 
-	// examine DeletionTimestamp to determine if object is under deletion
-	if instance.GetDeletionTimestamp().IsZero() {
-		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object. This is equivalent
-		// registering our finalizer.
-		err = r.updateFinalizers(ctx, instance)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-	} else {
-		// The object is being deleted
-		err = r.cleanResourcesAndFinalizers(ctx, instance)
-		return reconcile.Result{}, err
-	}
 	raw, err := instance.RenderNetAttDef()
 	if err != nil {
 		return reconcile.Result{}, err
@@ -296,43 +282,44 @@ func (r *genericNetworkReconciler) fetchObject(ctx context.Context, req ctrl.Req
 	return nil, nil
 }
 
-func (r *genericNetworkReconciler) updateFinalizers(ctx context.Context, instance NetworkCRInstance) error {
-	if instance.GetNamespace() != vars.Namespace {
-		// If the resource is in a namespace different than the operator one, then the NetworkAttachmentDefinition will
-		// be created in the same namespace and its deletion can be handled by OwnerReferences. There is no need for finalizers
-		return nil
+// garbageCollect searches all NetworkAttachmentDefinition objects that has a `sriovnetwork.openshift.io/owner`
+// annotation pointing to non existing objects
+func (r *genericNetworkReconciler) garbageCollect(ctx context.Context) error {
+	logger := log.Log.WithName("garbageCollect")
+
+	netAttachDefs := &netattdefv1.NetworkAttachmentDefinitionList{}
+	err := r.Client.List(ctx, netAttachDefs)
+	if err != nil {
+		return fmt.Errorf("garbageCollect: failed to list NetworkAttachmentDefinition: %w", err)
 	}
 
-	instanceFinalizers := instance.GetFinalizers()
-	if !sriovnetworkv1.StringInArray(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers) {
-		instance.SetFinalizers(append(instanceFinalizers, sriovnetworkv1.NETATTDEFFINALIZERNAME))
-		if err := r.Update(ctx, instance); err != nil {
-			return err
+	for _, netAttDef := range netAttachDefs.Items {
+		owner, ok := netAttDef.GetAnnotations()[consts.OwnerAnnotation]
+		if !ok {
+			continue
 		}
-	}
 
-	return nil
-}
-
-func (r *genericNetworkReconciler) cleanResourcesAndFinalizers(ctx context.Context, instance NetworkCRInstance) error {
-	instanceFinalizers := instance.GetFinalizers()
-
-	if sriovnetworkv1.StringInArray(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers) {
-		// our finalizer is present, so lets handle any external dependency
-		log.FromContext(ctx).Info("delete NetworkAttachmentDefinition CR", "Namespace", instance.NetworkNamespace(), "Name", instance.GetName())
-		if err := r.deleteNetAttDef(ctx, instance); err != nil {
-			// if fail to delete the external dependency here, return with error
-			// so that it can be retried
-			return err
+		obj, namespace, name, err := sriovnetworkv1.StringToOwnerRef(owner)
+		if err != nil {
+			logger.Error(err, "bad value for `sriovnetwork.openshift.io/owner`", "owner", owner)
+			continue
 		}
-		// remove our finalizer from the list and update it.
-		newFinalizers, found := sriovnetworkv1.RemoveString(sriovnetworkv1.NETATTDEFFINALIZERNAME, instanceFinalizers)
-		if found {
-			instance.SetFinalizers(newFinalizers)
-			if err := r.Update(ctx, instance); err != nil {
-				return err
+
+		err = r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj)
+		if err != nil {
+			if !errors.IsNotFound(err) {
+				logger.Error(err, "failed to get owner object", "owner", owner)
+				continue
+			}
+
+			logger.Info("owner object not found. deleting NetworkAttachmentDefinition", "obj", netAttDef)
+
+			err := r.Delete(ctx, &netAttDef)
+			if err != nil {
+				logger.Error(err, "can't delete NetworkAttachmentDefinition", "obj", netAttDef)
 			}
 		}
 	}
+
 	return nil
 }
