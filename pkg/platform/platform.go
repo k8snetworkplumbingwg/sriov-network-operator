@@ -6,6 +6,7 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform/aws"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform/baremetal"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform/openstack"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
@@ -59,6 +60,8 @@ func New(platformType consts.PlatformTypes, hostHelpers helper.HostHelpersInterf
 		return baremetal.New(hostHelpers)
 	case consts.VirtualOpenStack:
 		return openstack.New(hostHelpers)
+	case consts.AWS:
+		return aws.New(hostHelpers)
 	default:
 		return nil, fmt.Errorf("unknown platform type %s", platformType)
 	}
