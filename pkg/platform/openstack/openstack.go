@@ -73,7 +73,7 @@ func (o *Openstack) Init() error {
 
 // Name returns the name of the OpenStack platform.
 func (o *Openstack) Name() string {
-	return "OpenStack"
+	return string(consts.VirtualOpenStack)
 }
 
 // GetVendorPlugins returns the virtual plugin as the main plugin for OpenStack.
