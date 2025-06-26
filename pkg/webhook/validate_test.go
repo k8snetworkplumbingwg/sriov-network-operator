@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package webhook
 
 import (
@@ -108,6 +114,151 @@ func newNodeState() *SriovNetworkNodeState {
 	}
 }
 
+func newNodeStateOraclePcaC3() *SriovNetworkNodeState {
+	return &SriovNetworkNodeState{
+		Spec: SriovNetworkNodeStateSpec{
+			Interfaces: []Interface{
+				{
+					Name:       "ens5",
+					NumVfs:     1,
+					PciAddress: "0000:00:05.0",
+					VfGroups: []VfGroup{
+						{
+							DeviceType:   "netdevice",
+							IsRdma:       true,
+							PolicyName:   "policy-np1w1",
+							ResourceName: "nap1w1",
+							VfRange:      "0-0",
+						},
+					},
+				},
+				{
+					Name:       "ens6",
+					NumVfs:     1,
+					PciAddress: "0000:00:06.0",
+					VfGroups: []VfGroup{
+						{
+							DeviceType:   "netdevice",
+							IsRdma:       true,
+							PolicyName:   "policy-np1w1",
+							ResourceName: "nap1w1",
+							VfRange:      "0-0",
+						},
+					},
+				},
+				{
+					Name:       "ens7",
+					NumVfs:     1,
+					PciAddress: "0000:00:07.0",
+					VfGroups: []VfGroup{
+						{
+							DeviceType:   "netdevice",
+							IsRdma:       true,
+							PolicyName:   "policy-np1w1",
+							ResourceName: "nap1w1",
+							VfRange:      "0-0",
+						},
+					},
+				},
+				{
+					Name:       "ens8",
+					NumVfs:     1,
+					PciAddress: "0000:00:08.0",
+					VfGroups: []VfGroup{
+						{
+							DeviceType:   "netdevice",
+							IsRdma:       true,
+							PolicyName:   "policy-np1w1",
+							ResourceName: "nap1w1",
+							VfRange:      "0-0",
+						},
+					},
+				},
+			},
+		},
+		Status: SriovNetworkNodeStateStatus{
+			Interfaces: []InterfaceExt{
+				{
+					VFs: []VirtualFunction{
+						{
+							DeviceID:   "101e",
+							Driver:     "mlx5_core",
+							PciAddress: "0000:00:05.0",
+							Vendor:     "15b3",
+							VfID:       0,
+						},
+					},
+					DeviceID:   "101e",
+					Driver:     "mlx5_core",
+					NetFilter:  "oraclepcac3/MacAddress:00-00-00-00-00-01",
+					NumVfs:     1,
+					PciAddress: "0000:00:05.0",
+					TotalVfs:   1,
+					Vendor:     "15b3",
+					Name:       "ens5",
+				},
+				{
+					VFs: []VirtualFunction{
+						{
+							DeviceID:   "101e",
+							Driver:     "mlx5_core",
+							PciAddress: "0000:00:06.0",
+							Vendor:     "15b3",
+							VfID:       0,
+						},
+					},
+					DeviceID:   "101e",
+					Driver:     "mlx5_core",
+					NetFilter:  "oraclepcac3/MacAddress:00-00-00-00-00-01",
+					NumVfs:     1,
+					PciAddress: "0000:00:06.0",
+					TotalVfs:   1,
+					Vendor:     "15b3",
+					Name:       "ens6",
+				},
+				{
+					VFs: []VirtualFunction{
+						{
+							DeviceID:   "101e",
+							Driver:     "mlx5_core",
+							PciAddress: "0000:00:07.0",
+							Vendor:     "15b3",
+							VfID:       0,
+						},
+					},
+					DeviceID:   "101e",
+					Driver:     "mlx5_core",
+					NetFilter:  "oraclepcac3/MacAddress:00-00-00-00-00-01",
+					NumVfs:     1,
+					PciAddress: "0000:00:07.0",
+					TotalVfs:   1,
+					Vendor:     "15b3",
+					Name:       "ens7",
+				},
+				{
+					VFs: []VirtualFunction{
+						{
+							DeviceID:   "101e",
+							Driver:     "mlx5_core",
+							PciAddress: "0000:00:08.0",
+							Vendor:     "15b3",
+							VfID:       0,
+						},
+					},
+					DeviceID:   "101e",
+					Driver:     "mlx5_core",
+					NetFilter:  "oraclepcac3/MacAddress:00-00-00-00-00-01",
+					NumVfs:     1,
+					PciAddress: "0000:00:08.0",
+					TotalVfs:   1,
+					Vendor:     "15b3",
+					Name:       "ens8",
+				},
+			},
+		},
+	}
+}
+
 func newNodePolicy() *SriovNetworkNodePolicy {
 	return &SriovNetworkNodePolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -132,6 +283,10 @@ func newNodePolicy() *SriovNetworkNodePolicy {
 
 func NewNode() *corev1.Node {
 	return &corev1.Node{Spec: corev1.NodeSpec{ProviderID: "openstack"}}
+}
+
+func NewNodeOraclePcaC3() *corev1.Node {
+	return &corev1.Node{Spec: corev1.NodeSpec{ProviderID: "oci"}}
 }
 
 func newDefaultOperatorConfig() *SriovOperatorConfig {
@@ -308,6 +463,27 @@ func TestValidatePolicyForNodeStateWithValidPolicy(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
+func TestValidatePolicyForNodeStateWithValidPolicyOraclePcaC3(t *testing.T) {
+	state := newNodeStateOraclePcaC3()
+	policy := &SriovNetworkNodePolicy{
+		Spec: SriovNetworkNodePolicySpec{
+			DeviceType: "netdevice",
+			NicSelector: SriovNetworkNicSelector{
+				NetFilter: "oraclepcac3/MacAddress:00-00-00-00-00-01",
+			},
+			NodeSelector: map[string]string{
+				"kubernetes.io/hostname": "worker1",
+			},
+			NumVfs:       63,
+			Priority:     99,
+			ResourceName: "p0",
+		},
+	}
+	g := NewGomegaWithT(t)
+	_, err := validatePolicyForNodeState(policy, state, NewNodeOraclePcaC3())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
 func TestValidatePolicyForNodeStateWithInvalidNumVfsPolicy(t *testing.T) {
 	state := newNodeState()
 	policy := &SriovNetworkNodePolicy{
@@ -332,6 +508,30 @@ func TestValidatePolicyForNodeStateWithInvalidNumVfsPolicy(t *testing.T) {
 	g := NewGomegaWithT(t)
 	_, err := validatePolicyForNodeState(policy, state, NewNode())
 	g.Expect(err).To(MatchError("numVfs(65) in CR p1 exceed the maximum allowed value(64) interface(ens803f0)"))
+}
+
+func TestValidatePolicyForNodeStateWithInvalidNumVfsPolicyOraclePcaC3(t *testing.T) {
+	state := newNodeStateOraclePcaC3()
+	policy := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "p1",
+		},
+		Spec: SriovNetworkNodePolicySpec{
+			DeviceType: "netdevice",
+			NicSelector: SriovNetworkNicSelector{
+				NetFilter: "oraclepcac3/MacAddress:00-00-00-00-00-01",
+			},
+			NodeSelector: map[string]string{
+				"kubernetes.io/hostname": "worker1",
+			},
+			NumVfs:       129,
+			Priority:     99,
+			ResourceName: "p0",
+		},
+	}
+	g := NewGomegaWithT(t)
+	_, err := validatePolicyForNodeState(policy, state, NewNodeOraclePcaC3())
+	g.Expect(err).To(MatchError("numVfs(129) in CR p1 exceed the maximum allowed value(128) interface(ens5)"))
 }
 
 func TestValidatePolicyForNodeStateWithInvalidNumVfsExternallyCreated(t *testing.T) {

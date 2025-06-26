@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package daemon
 
 import (
@@ -34,7 +40,7 @@ func loadPlugins(ns *sriovnetworkv1.SriovNetworkNodeState, helpers helper.HostHe
 	log.Log.Info("loadPlugins(): loading plugins")
 	loadedPlugins := map[string]plugin.VendorPlugin{}
 
-	if vars.PlatformType == consts.VirtualOpenStack {
+	if vars.PlatformType == consts.VirtualOpenStack || vars.PlatformType == consts.OraclePcaC3 {
 		virtualPlugin, err := VirtualPlugin(helpers)
 		if err != nil {
 			log.Log.Error(err, "loadPlugins(): failed to load the virtual plugin")

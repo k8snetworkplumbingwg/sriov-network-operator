@@ -1,0 +1,18 @@
+[
+  {
+  "vnicId" : "ocid1.vnic.unique_ID1",
+  "privateIp" : "10.0.3.6",
+  "vlanTag" : 0,
+  "macAddr" : "00:00:00:00:00:01",
+  "virtualRouterIp" : "10.0.3.1",
+  "subnetCidrBlock" : "10.0.3.0/24"
+  },
+  {
+  "vnicId" : "ocid1.vnic.unique_ID2",
+  "privateIp" : "10.0.4.3",
+  "vlanTag" : 0,
+  "macAddr" : "00:00:00:00:00:02",
+  "virtualRouterIp" : "10.0.4.1",
+  "subnetCidrBlock" : "10.0.4.0/24"
+  }
+]
