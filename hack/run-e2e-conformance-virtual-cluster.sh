@@ -233,7 +233,8 @@ update_host $cluster_name-ctlplane-0
 for ((num=0; num<NUM_OF_WORKERS; num++))
 do
   update_host $cluster_name-worker-$num
-  kcli ssh $cluster_name-worker-$num sudo reboot
+  sleep 5
+  kcli ssh $cluster_name-worker-$num sudo reboot || true
 done
 
 # remove the patch after multus bug is fixed
