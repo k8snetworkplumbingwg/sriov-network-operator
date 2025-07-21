@@ -7,6 +7,13 @@
 //
 
 // Package mock_platforms is a generated GoMock package.
+
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package mock_platforms
 
 import (
@@ -58,6 +65,33 @@ func (mr *MockInterfaceMockRecorder) ChangeMachineConfigPoolPause(arg0, arg1, ar
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ChangeMachineConfigPoolPause", reflect.TypeOf((*MockInterface)(nil).ChangeMachineConfigPoolPause), arg0, arg1, arg2)
 }
 
+
+// CreateOraclePcaC3DevicesInfo mocks base method.
+func (m *MockInterface) CreateOraclePcaC3DevicesInfo() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateOraclePcaC3DevicesInfo")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateOraclePcaC3DevicesInfo indicates an expected call of CreateOraclePcaC3DevicesInfo.
+func (mr *MockInterfaceMockRecorder) CreateOraclePcaC3DevicesInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateOraclePcaC3DevicesInfo", reflect.TypeOf((*MockInterface)(nil).CreateOraclePcaC3DevicesInfo))
+}
+
+// CreateOraclePcaC3DevicesInfoFromNodeStatus mocks base method.
+func (m *MockInterface) CreateOraclePcaC3DevicesInfoFromNodeStatus(arg0 *v1.SriovNetworkNodeState) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "CreateOraclePcaC3DevicesInfoFromNodeStatus", arg0)
+}
+
+// CreateOraclePcaC3DevicesInfoFromNodeStatus indicates an expected call of CreateOraclePcaC3DevicesInfoFromNodeStatus.
+func (mr *MockInterfaceMockRecorder) CreateOraclePcaC3DevicesInfoFromNodeStatus(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateOraclePcaC3DevicesInfoFromNodeStatus", reflect.TypeOf((*MockInterface)(nil).CreateOpenstackDevicesInfoFromNodeStatus), arg0)
+}
+
 // CreateOpenstackDevicesInfo mocks base method.
 func (m *MockInterface) CreateOpenstackDevicesInfo() error {
 	m.ctrl.T.Helper()
@@ -84,6 +118,21 @@ func (mr *MockInterfaceMockRecorder) CreateOpenstackDevicesInfoFromNodeStatus(ar
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateOpenstackDevicesInfoFromNodeStatus", reflect.TypeOf((*MockInterface)(nil).CreateOpenstackDevicesInfoFromNodeStatus), arg0)
 }
 
+// DiscoverSriovDevicesPcaC3Virtual mocks base method.
+func (m *MockInterface) DiscoverSriovDevicesPcaC3Virtual() ([]v1.InterfaceExt, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DiscoverSriovDevicesPcaC3Virtual")
+	ret0, _ := ret[0].([]v1.InterfaceExt)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DiscoverSriovDevicesPcaC3Virtual indicates an expected call of DiscoverSriovDevicesPcaC3Virtual.
+func (mr *MockInterfaceMockRecorder) DiscoverSriovDevicesPcaC3Virtual() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverSriovDevicesPcaC3Virtual", reflect.TypeOf((*MockInterface)(nil).DiscoverSriovDevicesPcaC3Virtual))
+}
+
 // DiscoverSriovDevicesVirtual mocks base method.
 func (m *MockInterface) DiscoverSriovDevicesVirtual() ([]v1.InterfaceExt, error) {
 	m.ctrl.T.Helper()
@@ -97,6 +146,20 @@ func (m *MockInterface) DiscoverSriovDevicesVirtual() ([]v1.InterfaceExt, error)
 func (mr *MockInterfaceMockRecorder) DiscoverSriovDevicesVirtual() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverSriovDevicesVirtual", reflect.TypeOf((*MockInterface)(nil).DiscoverSriovDevicesVirtual))
+}
+
+// IsOraclePcaC3Platform mocks base method.
+func (m *MockInterface) IsOraclePcaC3Platform() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsOraclePcaC3Platform")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsOraclePcaC3Platform indicates an expected call of IsOraclePcaC3Platform.
+func (mr *MockInterfaceMockRecorder) IsOraclePcaC3Platform() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsOraclePcaC3Platform", reflect.TypeOf((*MockInterface)(nil).IsOraclePcaC3Platform))
 }
 
 // GetFlavor mocks base method.

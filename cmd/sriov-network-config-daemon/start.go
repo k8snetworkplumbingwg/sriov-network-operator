@@ -13,6 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package main
 
 import (
@@ -265,6 +272,11 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	for key, pType := range vars.PlatformsMap {
 		if strings.Contains(strings.ToLower(nodeInfo.Spec.ProviderID), strings.ToLower(key)) {
 			vars.PlatformType = pType
+		}
+		if strings.Contains(strings.ToLower(nodeInfo.Spec.ProviderID), strings.ToLower(consts.OraclePcaC3ProviderID)) {
+			if platformHelper.IsOraclePcaC3Platform() {
+				vars.PlatformType = consts.OraclePcaC3
+			}
 		}
 	}
 	setupLog.Info("Running on", "platform", vars.PlatformType.String())

@@ -13,6 +13,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
 package main
 
 import (
@@ -262,6 +268,17 @@ func (s *ServiceConfig) getPlugin(phase string) (plugin.VendorPlugin, error) {
 			s.log.Info("skip post configuration phase for virtual cluster")
 			return nil, nil
 		}
+	case consts.OraclePcaC3:
+		switch phase {
+		case PhasePre:
+			configPlugin, err = newVirtualPluginFunc(s.hostHelper)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create virtual plugin %v", err)
+			}
+		case PhasePost:
+			s.log.Info("skip post configuration phase for virtual cluster")
+			return nil, nil
+		}
 	}
 	return configPlugin, nil
 }
@@ -295,6 +312,19 @@ func (s *ServiceConfig) getNetworkNodeState(phase string) (*sriovv1.SriovNetwork
 			return nil, fmt.Errorf("failed to read OpenStack data: %v", err)
 		}
 		ifaceStatuses, err = platformHelper.DiscoverSriovDevicesVirtual()
+		if err != nil {
+			return nil, fmt.Errorf("failed to discover devices: %v", err)
+		}
+	case consts.OraclePcaC3:
+		platformHelper, err := newPlatformHelperFunc()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create platformHelpers")
+		}
+		err = platformHelper.CreateOraclePcaC3DevicesInfo()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read OraclePcaC3 data: %v", err)
+		}
+		ifaceStatuses, err = platformHelper.DiscoverSriovDevicesPcaC3Virtual()
 		if err != nil {
 			return nil, fmt.Errorf("failed to discover devices: %v", err)
 		}

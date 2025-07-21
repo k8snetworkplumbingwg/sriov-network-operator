@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package daemon
 
 import (
@@ -105,6 +111,11 @@ func (dn *NodeReconciler) updateStatusFromHost(nodeState *sriovnetworkv1.SriovNe
 
 	if vars.PlatformType == consts.VirtualOpenStack {
 		ifaces, err = dn.platformHelpers.DiscoverSriovDevicesVirtual()
+		if err != nil {
+			return err
+		}
+	} else if vars.PlatformType == consts.OraclePcaC3 {
+		ifaces, err = dn.platformHelpers.DiscoverSriovDevicesPcaC3Virtual()
 		if err != nil {
 			return err
 		}

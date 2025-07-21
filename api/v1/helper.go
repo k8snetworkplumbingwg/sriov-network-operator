@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package v1
 
 import (
@@ -61,6 +67,9 @@ const (
 	// OpenstackNetworkID network UUID
 	OpenstackNetworkID NetFilterType = iota
 
+	// OraclePcaC3MacAddress mac UUID
+	OraclePcaC3MacAddress NetFilterType = iota
+
 	SupportedNicIDConfigmap = "supported-nic-ids"
 )
 
@@ -75,6 +84,8 @@ func (e NetFilterType) String() string {
 	switch e {
 	case OpenstackNetworkID:
 		return "openstack/NetworkID"
+	case OraclePcaC3MacAddress:
+		return "oraclepcac3/MacAddress"
 	default:
 		return fmt.Sprintf("%d", int(e))
 	}

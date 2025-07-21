@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package webhook
 
 import (
@@ -482,6 +488,12 @@ func validateNicModel(selector *sriovnetworkv1.SriovNetworkNicSelector, iface *s
 			sriovnetworkv1.IsVfSupportedModel(iface.Vendor, iface.DeviceID) {
 			return nil
 		}
+	}
+
+	if strings.Contains(strings.ToLower(node.Spec.ProviderID), strings.ToLower(consts.OraclePcaC3ProviderID)) &&
+		selector.NetFilter != "" && selector.NetFilter == iface.NetFilter &&
+		sriovnetworkv1.IsVfSupportedModel(iface.Vendor, iface.DeviceID) {
+		return nil
 	}
 
 	return fmt.Errorf("vendor and device ID is not in supported list")

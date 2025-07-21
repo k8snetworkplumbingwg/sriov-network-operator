@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package consts
 
 import (
@@ -182,6 +188,10 @@ const (
 	Baremetal PlatformTypes = iota
 	// VirtualOpenStack platform
 	VirtualOpenStack
+	// OraclePcaC3 platform
+	OraclePcaC3
+
+	OraclePcaC3ProviderID = "oci"
 )
 
 func (e PlatformTypes) String() string {
@@ -190,6 +200,8 @@ func (e PlatformTypes) String() string {
 		return "Baremetal"
 	case VirtualOpenStack:
 		return "Virtual/Openstack"
+	case OraclePcaC3:
+		return "Virtual/OraclePcaC3"
 	default:
 		return fmt.Sprintf("%d", int(e))
 	}

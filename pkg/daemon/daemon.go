@@ -1,3 +1,9 @@
+/*
+Copyright (c) 2025, Oracle and/or its affiliates.
+
+Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
+*/
+
 package daemon
 
 import (
@@ -111,6 +117,23 @@ func (dn *NodeReconciler) Init() error {
 			}
 		} else {
 			dn.platformHelpers.CreateOpenstackDevicesInfoFromNodeStatus(ns)
+		}
+	}
+
+	// init oraclePcaC3 info
+	if vars.PlatformType == consts.OraclePcaC3 {
+		ns, err := dn.HostHelpers.GetCheckPointNodeState()
+		if err != nil {
+			return err
+		}
+
+		if ns == nil {
+			err = dn.platformHelpers.CreateOraclePcaC3DevicesInfo()
+			if err != nil {
+				return err
+			}
+		} else {
+			dn.platformHelpers.CreateOraclePcaC3DevicesInfoFromNodeStatus(ns)
 		}
 	}
 
