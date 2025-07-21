@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -xeo pipefail
 
-OCP_VERSION=${OCP_VERSION:-4.18}
+OCP_VERSION=${OCP_VERSION:-4.18.20}
 OCP_RELEASE_TYPE=${OCP_RELEASE_TYPE:-stable}
 cluster_name=${CLUSTER_NAME:-ocp-virt}
 domain_name=lab
