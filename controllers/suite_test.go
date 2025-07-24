@@ -31,8 +31,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -67,6 +69,9 @@ func setupK8sManagerForTest() (manager.Manager, error) {
 	k8sManager, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme.Scheme,
 		Metrics: server.Options{BindAddress: "0"}, // we don't need metrics server for tests
+		Controller: config.Controller{
+			SkipNameValidation: ptr.To(true),
+		},
 	})
 
 	if err != nil {
@@ -93,6 +98,7 @@ var _ = BeforeSuite(func() {
 
 	logf.SetLogger(zap.New(
 		zap.WriteTo(GinkgoWriter),
+		zap.Level(zapcore.Level(-2)),
 		zap.UseDevMode(true),
 		func(o *zap.Options) {
 			o.TimeEncoder = zapcore.RFC3339NanoTimeEncoder

@@ -19,6 +19,7 @@ import (
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -28,7 +29,7 @@ import (
 
 const (
 	LASTNETWORKNAMESPACE        = "operator.sriovnetwork.openshift.io/last-network-namespace"
-	NETATTDEFFINALIZERNAME      = "netattdef.finalizers.sriovnetwork.openshift.io"
+	NETATTDEFFINALIZERNAME      = "netattdef.finalizers.sriovnetwork.openshift.io" // Deprecated. Keeping this to migrate old cluster through upgrades
 	POOLCONFIGFINALIZERNAME     = "poolconfig.finalizers.sriovnetwork.openshift.io"
 	OPERATORCONFIGFINALIZERNAME = "operatorconfig.finalizers.sriovnetwork.openshift.io"
 	ESwithModeLegacy            = "legacy"
@@ -651,6 +652,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+	data.Data["Owner"] = OwnerRefToString(cr)
 	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 
 	data.Data["StateConfigured"] = true
@@ -719,6 +721,7 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["SriovNetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+	data.Data["Owner"] = OwnerRefToString(cr)
 	data.Data["SriovCniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 	data.Data["SriovCniVlan"] = cr.Spec.Vlan
 
@@ -837,6 +840,7 @@ func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["NetworkNamespace"] = cr.Spec.NetworkNamespace
 	}
+	data.Data["Owner"] = OwnerRefToString(cr)
 	data.Data["CniResourceName"] = os.Getenv("RESOURCE_PREFIX") + "/" + cr.Spec.ResourceName
 
 	if cr.Spec.Capabilities == "" {
@@ -993,4 +997,28 @@ func (s *SriovNetworkNodeState) ResetKeepUntilTime() bool {
 	delete(annotations, consts.NodeStateKeepUntilAnnotation)
 	s.SetAnnotations(annotations)
 	return true
+}
+
+func OwnerRefToString(cr client.Object) string {
+	return cr.GetObjectKind().GroupVersionKind().GroupKind().String() + "/" + cr.GetNamespace() + "/" + cr.GetName()
+}
+
+func StringToOwnerRef(ownerRef string) (client.Object, string, string, error) {
+	chunks := strings.Split(ownerRef, "/")
+	if len(chunks) != 3 {
+		return nil, "", "", fmt.Errorf("invalid ownerRef %s", ownerRef)
+	}
+	groupKind, namespace, name := chunks[0], chunks[1], chunks[2]
+	switch groupKind {
+	case "SriovNetwork.sriovnetwork.openshift.io":
+		return &SriovNetwork{}, namespace, name, nil
+
+	case "SriovIBNetwork.sriovnetwork.openshift.io":
+		return &SriovIBNetwork{}, namespace, name, nil
+
+	case "OVSNetwork.sriovnetwork.openshift.io":
+		return &OVSNetwork{}, namespace, name, nil
+	}
+
+	return nil, "", "", fmt.Errorf("unknown ownerRef groupKind %s", groupKind)
 }
