@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -xeo pipefail
 
-OCP_VERSION=${OCP_VERSION:-4.18}
+OCP_VERSION=${OCP_VERSION:-4.18.20}
+OCP_RELEASE_TYPE=${OCP_RELEASE_TYPE:-stable}
 cluster_name=${CLUSTER_NAME:-ocp-virt}
 domain_name=lab
 
@@ -52,6 +53,7 @@ kcli create network -c 192.168.123.0/24 ocp
 kcli create network -c 192.168.${virtual_router_id}.0/24 --nodhcp -i $cluster_name
 
 cat <<EOF > ./${cluster_name}-plan.yaml
+version: $OCP_RELEASE_TYPE
 tag: $OCP_VERSION
 ctlplane_memory: 32768
 worker_memory: 8192
