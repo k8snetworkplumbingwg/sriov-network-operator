@@ -93,14 +93,14 @@ const (
 )
 
 // Initialize our plugin and set up initial values
-func NewK8sPlugin(helper helper.HostHelpersInterface) (plugins.VendorPlugin, error) {
+func NewK8sPlugin(helper helper.HostHelpersInterface) plugins.VendorPlugin {
 	k8sPluging := &K8sPlugin{
 		PluginName:   PluginName,
 		hostHelper:   helper,
 		updateTarget: &k8sUpdateTarget{},
 	}
 
-	return k8sPluging, k8sPluging.readManifestFiles()
+	return k8sPluging
 }
 
 // Name returns the name of the plugin
@@ -111,6 +111,12 @@ func (p *K8sPlugin) Name() string {
 // OnNodeStateChange Invoked when SriovNetworkNodeState CR is created or updated, return if need dain and/or reboot node
 func (p *K8sPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState) (needDrain bool, needReboot bool, err error) {
 	log.Log.Info("k8s plugin OnNodeStateChange()")
+	err = p.readManifestFiles(new.Spec.System.OvsConfig)
+	if err != nil {
+		log.Log.Error(err, "k8s plugin OnNodeStateChange(): failed to read manifests")
+		return
+	}
+
 	needDrain = false
 	needReboot = false
 
@@ -165,8 +171,8 @@ func (p *K8sPlugin) Apply() error {
 	return p.updateOVSService()
 }
 
-func (p *K8sPlugin) readOpenVSwitchdManifest() error {
-	openVSwitchService, err := p.hostHelper.ReadServiceInjectionManifestFile(ovsUnitFile)
+func (p *K8sPlugin) readOpenVSwitchdManifest(ovsConfig map[string]string) error {
+	openVSwitchService, err := p.hostHelper.ReadServiceInjectionManifestFile(ovsUnitFile, ovsConfig)
 	if err != nil {
 		return err
 	}
@@ -192,8 +198,8 @@ func (p *K8sPlugin) readSriovPostNetworkServiceManifest() error {
 	return nil
 }
 
-func (p *K8sPlugin) readManifestFiles() error {
-	if err := p.readOpenVSwitchdManifest(); err != nil {
+func (p *K8sPlugin) readManifestFiles(ovsConfig map[string]string) error {
+	if err := p.readOpenVSwitchdManifest(ovsConfig); err != nil {
 		return err
 	}
 	if err := p.readSriovServiceManifest(); err != nil {
@@ -258,20 +264,34 @@ func (p *K8sPlugin) ovsServiceStateUpdate() error {
 		return nil
 	}
 	if !p.isSystemDServiceNeedUpdate(p.openVSwitchService) {
-		// service is up to date
+		// service is up-to-date
 		return nil
+	} else {
+		p.updateTarget.openVSwitch.SetNeedUpdate()
 	}
 	if p.isOVSHwOffloadingEnabled() {
 		p.updateTarget.openVSwitch.SetNeedUpdate()
-	} else {
-		p.updateTarget.openVSwitch.SetNeedReboot()
 	}
 	return nil
 }
 
 func (p *K8sPlugin) updateOVSService() error {
 	if p.updateTarget.openVSwitch.NeedUpdate() {
-		return p.hostHelper.UpdateSystemService(p.openVSwitchService)
+		err := p.hostHelper.UpdateSystemService(p.openVSwitchService)
+		if err != nil {
+			log.Log.Error(err, "k8s plugin updateOVSService(): failed to update systemd service")
+			return err
+		}
+		err = p.hostHelper.ReloadService()
+		if err != nil {
+			log.Log.Error(err, "k8s plugin updateOVSService(): failed to reload systemd unit files")
+			return err
+		}
+		err = p.hostHelper.RestartService(p.openVSwitchService)
+		if err != nil {
+			log.Log.Error(err, "k8s plugin updateOVSService(): failed to restart OVS service")
+			return err
+		}
 	}
 	return nil
 }
