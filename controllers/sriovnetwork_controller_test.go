@@ -427,6 +427,30 @@ var _ = Describe("SriovNetwork Controller", Ordered, func() {
 			})
 
 		})
+
+		Context("Migration upgrades", func() {
+			It("should remove finalizer in existing SriovNetworks", func() {
+				cr := sriovnetworkv1.SriovNetwork{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "sriovnet-old",
+						Namespace: testNamespace,
+						Finalizers: []string{
+							sriovnetworkv1.NETATTDEFFINALIZERNAME,
+						},
+					},
+				}
+
+				err := k8sClient.Create(ctx, &cr)
+				Expect(err).NotTo(HaveOccurred())
+
+				Eventually(func(g Gomega) {
+					err := k8sClient.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}, &cr)
+					g.Expect(err).ToNot(HaveOccurred())
+					g.Expect(cr.Finalizers).To(BeEmpty())
+				}).WithTimeout(time.Second).Should(Succeed())
+			})
+		})
+
 	})
 })
 
