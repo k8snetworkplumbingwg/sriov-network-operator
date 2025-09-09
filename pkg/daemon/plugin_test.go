@@ -45,7 +45,7 @@ var _ = Describe("config daemon plugin loading tests", func() {
 			helperMock.EXPECT().IsKernelArgsSet("", consts.KernelArgPciRealloc).Return(false).AnyTimes()
 			helperMock.EXPECT().IsKernelArgsSet("", consts.KernelArgRdmaExclusive).Return(false).AnyTimes()
 			helperMock.EXPECT().IsKernelArgsSet("", consts.KernelArgRdmaShared).Return(false).AnyTimes()
-			helperMock.EXPECT().ReadServiceInjectionManifestFile(gomock.Any()).Return(nil, nil).AnyTimes()
+			helperMock.EXPECT().ReadServiceInjectionManifestFile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 			helperMock.EXPECT().ReadServiceManifestFile(gomock.Any()).Return(nil, nil).AnyTimes()
 		})
 
