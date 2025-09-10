@@ -1,4 +1,8 @@
 FROM golang:1.23 AS builder
+
+ARG GOPROXY
+ENV GOPROXY=$GOPROXY
+
 WORKDIR /go/src/github.com/k8snetworkplumbingwg/sriov-network-operator
 COPY . .
 RUN make _build-manager BIN_PATH=build/_output/cmd
