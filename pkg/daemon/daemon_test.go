@@ -51,7 +51,7 @@ var (
 )
 
 const (
-	waitTime  = 30 * time.Minute
+	waitTime  = 2 * time.Minute
 	retryTime = 5 * time.Second
 )
 
@@ -119,6 +119,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		// general
 		hostHelper.EXPECT().Chroot(gomock.Any()).Return(func() error { return nil }, nil).AnyTimes()
 		hostHelper.EXPECT().RunCommand("/bin/sh", gomock.Any(), gomock.Any(), gomock.Any()).Return("", "", nil).AnyTimes()
+		hostHelper.EXPECT().RunCommand("/bin/bash", gomock.Any(), gomock.Any(), gomock.Any()).Return("", "", nil).AnyTimes()
 
 		discoverSriovReturn.Store(&[]sriovnetworkv1.InterfaceExt{})
 
