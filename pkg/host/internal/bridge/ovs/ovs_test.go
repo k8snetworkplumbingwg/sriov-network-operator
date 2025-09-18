@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/ovn-org/libovsdb/client"
-	"github.com/ovn-org/libovsdb/database/inmemory"
-	"github.com/ovn-org/libovsdb/model"
-	"github.com/ovn-org/libovsdb/ovsdb"
-	"github.com/ovn-org/libovsdb/server"
+	"github.com/ovn-kubernetes/libovsdb/client"
+	"github.com/ovn-kubernetes/libovsdb/database/inmemory"
+	"github.com/ovn-kubernetes/libovsdb/model"
+	"github.com/ovn-kubernetes/libovsdb/ovsdb"
+	"github.com/ovn-kubernetes/libovsdb/server"
 	"go.uber.org/mock/gomock"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -610,7 +610,7 @@ func startServer(protocol, path string) func() {
 
 	dbModel, errs := model.NewDatabaseModel(schema, clientDBModels)
 	Expect(errs).To(BeEmpty())
-	s, err := server.NewOvsdbServer(ovsDB, dbModel)
+	s, err := server.NewOvsdbServer(ovsDB, nil, dbModel)
 	Expect(err).NotTo(HaveOccurred())
 
 	stopped := make(chan struct{})
