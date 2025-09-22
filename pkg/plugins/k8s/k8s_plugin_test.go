@@ -29,16 +29,6 @@ func TestK8sPlugin(t *testing.T) {
 	RunSpecs(t, "Test K8s Plugin")
 }
 
-// changes current working dir before calling the real function
-func registerCall(m *gomock.Call, realF interface{}) *gomock.Call {
-	cur, _ := os.Getwd()
-	return m.Do(func(_ ...interface{}) {
-		os.Chdir("../../..")
-	}).DoAndReturn(realF).Do(func(_ ...interface{}) {
-		os.Chdir(cur)
-	})
-}
-
 func setIsSystemdMode(val bool) {
 	origUsingSystemdMode := vars.UsingSystemdMode
 	DeferCleanup(func() {
@@ -70,7 +60,6 @@ func (snm *serviceNameMatcher) String() string {
 var _ = Describe("K8s plugin", func() {
 	var (
 		k8sPlugin  plugin.VendorPlugin
-		err        error
 		testCtrl   *gomock.Controller
 		hostHelper *mock_helper.MockHostHelpersInterface
 	)
@@ -81,20 +70,29 @@ var _ = Describe("K8s plugin", func() {
 		hostHelper = mock_helper.NewMockHostHelpersInterface(testCtrl)
 		realHostMgr, _ := host.NewHostManager(hostHelper)
 
+		curDir, _ := os.Getwd()
 		// proxy some functions to real host manager to simplify testing and to additionally validate manifests
 		for _, f := range []string{
 			"bindata/manifests/sriov-config-service/kubernetes/sriov-config-service.yaml",
 			"bindata/manifests/sriov-config-service/kubernetes/sriov-config-post-network-service.yaml",
 		} {
-			registerCall(hostHelper.EXPECT().ReadServiceManifestFile(f), realHostMgr.ReadServiceManifestFile)
+			hostHelper.EXPECT().ReadServiceManifestFile(f).Do(func(_ any) {
+				os.Chdir("../../..")
+			}).DoAndReturn(realHostMgr.ReadServiceManifestFile).Do(func(_ any) {
+				os.Chdir(curDir)
+			})
 		}
 		for _, s := range []string{
 			"bindata/manifests/switchdev-config/ovs-units/ovs-vswitchd.service.yaml",
 		} {
-			registerCall(hostHelper.EXPECT().ReadServiceInjectionManifestFile(s), realHostMgr.ReadServiceInjectionManifestFile)
+			var ovsConfig map[string]string
+			hostHelper.EXPECT().ReadServiceInjectionManifestFile(s, ovsConfig).Do(func(_, _ any) {
+				os.Chdir("../../..")
+			}).DoAndReturn(realHostMgr.ReadServiceInjectionManifestFile).Do(func(_, _ any) {
+				os.Chdir(curDir)
+			})
 		}
-		k8sPlugin, err = NewK8sPlugin(hostHelper)
-		Expect(err).ToNot(HaveOccurred())
+		k8sPlugin = NewK8sPlugin(hostHelper)
 	})
 
 	AfterEach(func() {
@@ -194,11 +192,13 @@ var _ = Describe("K8s plugin", func() {
 		).Return(true, nil)
 		hostHelper.EXPECT().Chroot("/host").Return(nil, fmt.Errorf("test"))
 		hostHelper.EXPECT().UpdateSystemService(newServiceNameMatcher("ovs-vswitchd.service")).Return(nil)
+		hostHelper.EXPECT().ReloadService().Return(nil)
+		hostHelper.EXPECT().RestartService(newServiceNameMatcher("ovs-vswitchd.service")).Return(nil)
 		needDrain, needReboot, err := k8sPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{
 			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: []sriovnetworkv1.Interface{{EswitchMode: "switchdev"}}}})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(needReboot).To(BeTrue())
-		Expect(needDrain).To(BeTrue())
+		Expect(needReboot).To(BeFalse())
+		Expect(needDrain).To(BeFalse())
 		Expect(k8sPlugin.Apply()).NotTo(HaveOccurred())
 	})
 	It("ovs service updated - hw offloading already enabled", func() {
@@ -213,6 +213,8 @@ var _ = Describe("K8s plugin", func() {
 		hostHelper.EXPECT().Chroot("/host").Return(func() error { return nil }, nil)
 		hostHelper.EXPECT().RunCommand("ovs-vsctl", "get", "Open_vSwitch", ".", "other_config:hw-offload").Return("\"true\"\n", "", nil)
 		hostHelper.EXPECT().UpdateSystemService(newServiceNameMatcher("ovs-vswitchd.service")).Return(nil)
+		hostHelper.EXPECT().ReloadService().Return(nil)
+		hostHelper.EXPECT().RestartService(newServiceNameMatcher("ovs-vswitchd.service")).Return(nil)
 		needDrain, needReboot, err := k8sPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{
 			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: []sriovnetworkv1.Interface{{EswitchMode: "switchdev"}}}})
 		Expect(err).ToNot(HaveOccurred())
