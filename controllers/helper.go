@@ -138,6 +138,12 @@ func GetImagePullSecrets() []string {
 	}
 }
 
+// UseMaintenanceOperatorDrainer indicates if internal drain controller is disabled
+// and draining will be done by external NVIDIA maintenance operator
+func UseMaintenanceOperatorDrainer() bool {
+	return os.Getenv("USE_MAINTENANCE_OPERATOR_DRAINER") == "true"
+}
+
 func formatJSON(str string) (string, error) {
 	var prettyJSON bytes.Buffer
 	if err := json.Indent(&prettyJSON, []byte(str), "", "    "); err != nil {

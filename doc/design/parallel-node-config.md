@@ -60,6 +60,8 @@ Node annotation, `sriovnetwork.openshift.io/state` and SriovNetworkNodeState ann
 
 *NOTE:* In the future we are going to drop the node annotation and only use the SriovNetworkNodeState
 
+*NOTE:* Internal drain controller can be disabled by exposing the following `USE_MAINTENANCE_OPERATOR_DRAINER` env variable. This means that drain operations will be done externally, utilizing [NVIDIA maintenance OP](https://github.com/Mellanox/maintenance-operator). In addition, `SriovNetworkPoolConfig` will not take any effect during drain procedure, since the maintenance operator will be in charge of parallel node operations.
+
 Draining procedure:
 
 1. config daemon mark the node as `Drain_Required` or `Reboot_Required` by adding that to both the Node annotation, `sriovnetwork.openshift.io/state`

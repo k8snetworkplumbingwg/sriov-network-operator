@@ -464,6 +464,7 @@ nodes in parallel from the pool the operator can drain in parallel. maxUnavailab
 
 > **NOTE**: If a node is not part of any pool it will have a default configuration of maxUnavailable 1
 
+> **NOTE**: Internal drain controller can be disabled by exposing the following `USE_MAINTENANCE_OPERATOR_DRAINER` env variable. This means that drain operations will be done externally, utilizing [NVIDIA maintenance OP](https://github.com/Mellanox/maintenance-operator). In addition, `SriovNetworkPoolConfig` will not take any effect during drain procedure, since the maintenance operator will be in charge of [parallel node operations](https://github.com/Mellanox/maintenance-operator/blob/main/api/v1alpha1/maintenanceoperatorconfig_types.go#L38-L46).
 
 #### RDMA Mode Configuration
 

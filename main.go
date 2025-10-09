@@ -31,6 +31,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/rest"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -207,33 +208,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// we need a client that doesn't use the local cache for the objects
-	drainKClient, err := client.New(restConfig, client.Options{
-		Scheme: scheme,
-		Cache: &client.CacheOptions{
-			DisableFor: []client.Object{
-				&sriovnetworkv1.SriovNetworkNodeState{},
-				&corev1.Node{},
-				&mcfgv1.MachineConfigPool{},
-			},
-		},
-	})
-	if err != nil {
-		setupLog.Error(err, "unable to create drain kubernetes client")
-		os.Exit(1)
-	}
-
-	drainController, err := controllers.NewDrainReconcileController(drainKClient,
-		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("SR-IOV operator"),
-		platformsHelper)
-	if err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DrainReconcile")
-		os.Exit(1)
-	}
-
-	if err = drainController.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to setup controller with manager", "controller", "DrainReconcile")
+	if err := setupDrainController(mgr, restConfig, platformsHelper, scheme); err != nil {
+		setupLog.Error(err, "unable to setup drain controller")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
@@ -293,6 +269,46 @@ func main() {
 
 		os.Exit(1)
 	}
+}
+
+func setupDrainController(mgr ctrl.Manager, restConfig *rest.Config,
+	platformsHelper platforms.Interface, scheme *runtime.Scheme) error {
+	if controllers.UseMaintenanceOperatorDrainer() {
+		setupLog.Info("internal drain controller is disabled, draining will be done externally by the maintenance operator")
+		return nil
+	}
+
+	// we need a client that doesn't use the local cache for the objects
+	drainKClient, err := client.New(restConfig, client.Options{
+		Scheme: scheme,
+		Cache: &client.CacheOptions{
+			DisableFor: []client.Object{
+				&sriovnetworkv1.SriovNetworkNodeState{},
+				&corev1.Node{},
+				&mcfgv1.MachineConfigPool{},
+			},
+		},
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to create drain kubernetes client")
+		return err
+	}
+
+	drainController, err := controllers.NewDrainReconcileController(drainKClient,
+		mgr.GetScheme(),
+		mgr.GetEventRecorderFor("SR-IOV operator"),
+		platformsHelper)
+	if err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DrainReconcile")
+		return err
+	}
+
+	if err = drainController.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to setup controller with manager", "controller", "DrainReconcile")
+		return err
+	}
+
+	return nil
 }
 
 func initNicIDMap() error {
