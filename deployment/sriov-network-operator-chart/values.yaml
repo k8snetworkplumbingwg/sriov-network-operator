@@ -42,6 +42,9 @@ operator:
       serviceAccount: "prometheus-k8s"
       namespace: "monitoring"
       deployRules: false
+  # use external drain controller, for example utilizing NVIDIA maintenance operator
+  externalDrainer:
+    enabled: false
   admissionControllers:
     enabled: false
     networkPolicy:
