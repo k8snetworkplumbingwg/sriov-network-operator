@@ -381,6 +381,20 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 		return ctrl.Result{}, err
 	}
 
+	// remove external drainer nodestate annotation if exists
+	annotations := desiredNodeState.GetAnnotations()
+	if _, ok := annotations[consts.NodeStateExternalDrainerAnnotation]; ok {
+		reqLogger.Info("remove external drainer nodestate annotation", "annotation", consts.NodeStateExternalDrainerAnnotation)
+		original := desiredNodeState.DeepCopy()
+		delete(annotations, consts.NodeStateExternalDrainerAnnotation)
+		desiredNodeState.SetAnnotations(annotations)
+		// Patch only the annotations
+		if err := dn.client.Patch(ctx, desiredNodeState, client.MergeFrom(original)); err != nil {
+			reqLogger.Error(err, "failed to patch nodestate after removing external drainer annotation")
+			return ctrl.Result{}, err
+		}
+	}
+
 	reqLogger.Info("sync succeeded")
 	syncStatus := consts.SyncStatusSucceeded
 	lastSyncError := ""
@@ -515,6 +529,20 @@ func (dn *NodeReconciler) handleDrain(ctx context.Context, desiredNodeState *sri
 	if vars.DisableDrain {
 		funcLog.Info("drain is disabled in sriovOperatorConfig")
 		return false, nil
+	}
+
+	// add external drainer nodestate annotation if flag is enabled
+	// external drainer annotation will be added only when both desired/current node state are in 'Idle' state
+	if vars.UseExternalDrainer {
+		if utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainIdle) &&
+			utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotation, consts.DrainIdle) {
+			err := utils.AnnotateObject(ctx, desiredNodeState,
+				consts.NodeStateExternalDrainerAnnotation, "true", dn.client)
+			if err != nil {
+				funcLog.Error(err, "failed to add node external drainer annotation")
+				return false, err
+			}
+		}
 	}
 
 	// annotate both node and node state with drain or reboot

@@ -119,8 +119,8 @@ func (DrainStateAnnotationPredicate) Update(e event.UpdateEvent) bool {
 		return false
 	}
 
-	oldAnno, hasOldAnno := e.ObjectOld.GetLabels()[constants.NodeStateDrainAnnotationCurrent]
-	newAnno, hasNewAnno := e.ObjectNew.GetLabels()[constants.NodeStateDrainAnnotationCurrent]
+	oldAnno, hasOldAnno := e.ObjectOld.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+	newAnno, hasNewAnno := e.ObjectNew.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
 
 	if !hasOldAnno || !hasNewAnno {
 		return true
