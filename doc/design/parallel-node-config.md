@@ -6,7 +6,7 @@ reviewers:
   - adrianchiris
   - e0ne
 creation-date: 18-07-2023
-last-updated: 18-07-2023
+last-updated: 07-12-2025
 ---
 
 # Parallel SR-IOV configuration
