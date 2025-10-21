@@ -142,12 +142,14 @@ type SriovInterface interface {
 		ifaceStatuses []sriovnetworkv1.InterfaceExt, skipVFConfiguration bool) error
 	// ConfigSriovInterfaces configure virtual functions for virtual environments with the desired configuration
 	ConfigSriovDeviceVirtual(iface *sriovnetworkv1.Interface) error
+	// GetInterfaces return a list of physical interfaces on the node
+	GetInterfaces() ([]sriovnetworkv1.InterfaceExt, error)
 }
 
 type UdevInterface interface {
 	// PrepareNMUdevRule creates the needed udev rules to disable NetworkManager from
 	// our managed SR-IOV virtual functions
-	PrepareNMUdevRule(supportedVfIds []string) error
+	PrepareNMUdevRule() error
 	// PrepareVFRepUdevRule creates a script which helps to configure representor name for the VF
 	PrepareVFRepUdevRule() error
 	// AddDisableNMUdevRule adds udev rule that disables NetworkManager for VFs on the concrete PF:
