@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -88,4 +89,14 @@ func GetChrootExtension() string {
 		return vars.FilesystemRoot
 	}
 	return fmt.Sprintf("chroot %s%s", vars.FilesystemRoot, consts.Host)
+}
+
+func RenderOtherOvsConfigOption(ovsConfig map[string]string) (string, string) {
+	otherConfig := new(bytes.Buffer)
+	externalIds := make([]string, len(ovsConfig))
+	for key, value := range ovsConfig {
+		fmt.Fprintf(otherConfig, "other_config:%s=\"%s\" ", key, value)
+		externalIds = append(externalIds, key)
+	}
+	return strings.Join(externalIds, " "), otherConfig.String()
 }
