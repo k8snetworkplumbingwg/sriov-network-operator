@@ -79,6 +79,10 @@ var (
 
 	// FeatureGates interface to interact with feature gates
 	FeatureGate featuregate.FeatureGate
+
+	// UseExternalDrainer controls if SRIOV operator will use an external drainer
+	// for draining nodes or its internal drain controller (default)
+	UseExternalDrainer bool
 )
 
 func init() {
@@ -101,4 +105,6 @@ func init() {
 	ResourcePrefix = os.Getenv("RESOURCE_PREFIX")
 
 	FeatureGate = featuregate.New()
+
+	UseExternalDrainer = os.Getenv("USE_EXTERNAL_DRAINER") == "true"
 }
