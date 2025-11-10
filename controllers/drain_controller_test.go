@@ -113,9 +113,19 @@ var _ = Describe("Drain Controller", Ordered, func() {
 	})
 
 	Context("when there is only one node", func() {
+		It("should not drain node on drain require while use-external-drainer annotation is set",
+			func(ctx context.Context) {
+				node, nodeState := createNode(ctx, "node1", true)
+
+				simulateDaemonSetAnnotation(node, constants.DrainRequired)
+
+				expectNodeStateAnnotation(nodeState, constants.DrainIdle)
+				expectNodeIsSchedulable(node)
+
+			})
 
 		It("should drain single node on drain require", func(ctx context.Context) {
-			node, nodeState := createNode(ctx, "node1")
+			node, nodeState := createNode(ctx, "node1", false)
 
 			simulateDaemonSetAnnotation(node, constants.DrainRequired)
 
@@ -129,7 +139,7 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should not drain on reboot for single node", func(ctx context.Context) {
-			node, nodeState := createNode(ctx, "node1")
+			node, nodeState := createNode(ctx, "node1", false)
 
 			simulateDaemonSetAnnotation(node, constants.RebootRequired)
 
@@ -142,8 +152,8 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should drain on reboot for multiple node", func(ctx context.Context) {
-			node, nodeState := createNode(ctx, "node1")
-			createNode(ctx, "node2")
+			node, nodeState := createNode(ctx, "node1", false)
+			createNode(ctx, "node2", false)
 
 			simulateDaemonSetAnnotation(node, constants.RebootRequired)
 
@@ -159,9 +169,9 @@ var _ = Describe("Drain Controller", Ordered, func() {
 	Context("when there are multiple nodes", func() {
 
 		It("should drain nodes serially with default pool selector", func(ctx context.Context) {
-			node1, nodeState1 := createNode(ctx, "node1")
-			node2, nodeState2 := createNode(ctx, "node2")
-			node3, nodeState3 := createNode(ctx, "node3")
+			node1, nodeState1 := createNode(ctx, "node1", false)
+			node2, nodeState2 := createNode(ctx, "node2", false)
+			node3, nodeState3 := createNode(ctx, "node3", false)
 
 			// Two nodes require to drain at the same time
 			simulateDaemonSetAnnotation(node1, constants.DrainRequired)
@@ -199,9 +209,9 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should drain nodes in parallel with a custom pool selector", func(ctx context.Context) {
-			node1, nodeState1 := createNode(ctx, "node1")
-			node2, nodeState2 := createNode(ctx, "node2")
-			node3, nodeState3 := createNode(ctx, "node3")
+			node1, nodeState1 := createNode(ctx, "node1", false)
+			node2, nodeState2 := createNode(ctx, "node2", false)
+			node3, nodeState3 := createNode(ctx, "node3", false)
 
 			maxun := intstr.Parse("2")
 			poolConfig := &sriovnetworkv1.SriovNetworkPoolConfig{}
@@ -250,9 +260,9 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should drain nodes in parallel with a custom pool selector and honor MaxUnavailable", func(ctx context.Context) {
-			node1, nodeState1 := createNode(ctx, "node1")
-			node2, nodeState2 := createNode(ctx, "node2")
-			node3, nodeState3 := createNode(ctx, "node3")
+			node1, nodeState1 := createNode(ctx, "node1", false)
+			node2, nodeState2 := createNode(ctx, "node2", false)
+			node3, nodeState3 := createNode(ctx, "node3", false)
 
 			maxun := intstr.Parse("2")
 			poolConfig := &sriovnetworkv1.SriovNetworkPoolConfig{}
@@ -275,9 +285,9 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should drain all nodes in parallel with a custom pool using nil in max unavailable", func(ctx context.Context) {
-			node1, nodeState1 := createNode(ctx, "node1")
-			node2, nodeState2 := createNode(ctx, "node2")
-			node3, nodeState3 := createNode(ctx, "node3")
+			node1, nodeState1 := createNode(ctx, "node1", false)
+			node2, nodeState2 := createNode(ctx, "node2", false)
+			node3, nodeState3 := createNode(ctx, "node3", false)
 
 			poolConfig := &sriovnetworkv1.SriovNetworkPoolConfig{}
 			poolConfig.SetNamespace(testNamespace)
@@ -303,7 +313,7 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should drain in parallel nodes from two different pools, one custom and one default", func() {
-			node1, nodeState1 := createNode(ctx, "node1")
+			node1, nodeState1 := createNode(ctx, "node1", false)
 			node2, nodeState2 := createNodeWithLabel(ctx, "node2", "pool")
 			createPodOnNode(ctx, "test-node-2", "node2")
 
@@ -326,7 +336,7 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		})
 
 		It("should select all the nodes to drain in parallel when the selector is empty", func() {
-			node1, nodeState1 := createNode(ctx, "node3")
+			node1, nodeState1 := createNode(ctx, "node3", false)
 			node2, nodeState2 := createNodeWithLabel(ctx, "node4", "pool")
 			createPodOnNode(ctx, "test-empty-1", "node3")
 			createPodOnNode(ctx, "test-empty-2", "node4")
@@ -408,7 +418,7 @@ func simulateDaemonSetAnnotation(node *corev1.Node, drainAnnotationValue string)
 		ToNot(HaveOccurred())
 }
 
-func createNode(ctx context.Context, nodeName string) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
+func createNode(ctx context.Context, nodeName string, useExternalDrainer bool) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
 	node := corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nodeName,
@@ -426,10 +436,14 @@ func createNode(ctx context.Context, nodeName string) (*corev1.Node, *sriovnetwo
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nodeName,
 			Namespace: vars.Namespace,
-			Labels: map[string]string{
+			Annotations: map[string]string{
 				constants.NodeStateDrainAnnotationCurrent: constants.DrainIdle,
 			},
 		},
+	}
+
+	if useExternalDrainer {
+		nodeState.Annotations[constants.NodeStateExternalDrainerAnnotation] = "true"
 	}
 
 	Expect(k8sClient.Create(ctx, &node)).ToNot(HaveOccurred())
