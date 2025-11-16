@@ -314,6 +314,21 @@ func (mr *MockHostManagerInterfaceMockRecorder) DiscoverSriovDevices(storeManage
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverSriovDevices", reflect.TypeOf((*MockHostManagerInterface)(nil).DiscoverSriovDevices), storeManager)
 }
 
+// DiscoverSriovVirtualDevices mocks base method.
+func (m *MockHostManagerInterface) DiscoverSriovVirtualDevices() ([]v1.InterfaceExt, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DiscoverSriovVirtualDevices")
+	ret0, _ := ret[0].([]v1.InterfaceExt)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DiscoverSriovVirtualDevices indicates an expected call of DiscoverSriovVirtualDevices.
+func (mr *MockHostManagerInterfaceMockRecorder) DiscoverSriovVirtualDevices() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DiscoverSriovVirtualDevices", reflect.TypeOf((*MockHostManagerInterface)(nil).DiscoverSriovVirtualDevices))
+}
+
 // DiscoverVDPAType mocks base method.
 func (m *MockHostManagerInterface) DiscoverVDPAType(pciAddr string) string {
 	m.ctrl.T.Helper()

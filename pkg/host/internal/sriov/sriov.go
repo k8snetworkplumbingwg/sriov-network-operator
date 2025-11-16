@@ -311,6 +311,63 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 	return pfList, nil
 }
 
+func (s *sriov) DiscoverSriovVirtualDevices() ([]sriovnetworkv1.InterfaceExt, error) {
+	log.Log.V(2).Info("DiscoverSriovVirtualDevices()")
+	pfList := []sriovnetworkv1.InterfaceExt{}
+
+	pci, err := s.ghwLib.PCI()
+	if err != nil {
+		return nil, fmt.Errorf("DiscoverSriovVirtualDevices(): error getting PCI info: %v", err)
+	}
+
+	devices := pci.Devices
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("DiscoverSriovVirtualDevices(): could not retrieve PCI devices")
+	}
+
+	for _, device := range devices {
+		devClass, err := strconv.ParseInt(device.Class.ID, 16, 64)
+		if err != nil {
+			log.Log.Error(err, "DiscoverSriovVirtualDevices(): unable to parse device class for device, skipping",
+				"device", device)
+			continue
+		}
+		if devClass != consts.NetClass {
+			// Not network device
+			continue
+		}
+
+		driver, err := s.dputilsLib.GetDriverName(device.Address)
+		if err != nil {
+			log.Log.Error(err, "DiscoverSriovVirtualDevices(): unable to parse device driver for device, skipping",
+				"device", device)
+			continue
+		}
+		iface := sriovnetworkv1.InterfaceExt{
+			PciAddress: device.Address,
+			Driver:     driver,
+			Vendor:     device.Vendor.ID,
+			DeviceID:   device.Product.ID,
+		}
+
+		if mtu := s.networkHelper.GetNetdevMTU(device.Address); mtu > 0 {
+			iface.Mtu = mtu
+		}
+		if name := s.networkHelper.TryToGetVirtualInterfaceName(device.Address); name != "" {
+			iface.Name = name
+			if macAddr := s.networkHelper.GetNetDevMac(name); macAddr != "" {
+				iface.Mac = macAddr
+			}
+			iface.LinkSpeed = s.networkHelper.GetNetDevLinkSpeed(name)
+			iface.LinkType = s.GetLinkType(name)
+		}
+
+		pfList = append(pfList, iface)
+	}
+
+	return pfList, nil
+}
+
 func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 	log.Log.V(2).Info("configSriovPFDevice(): configure PF sriov device",
 		"device", iface.PciAddress)
