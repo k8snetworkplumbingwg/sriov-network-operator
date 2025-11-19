@@ -22,7 +22,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/pod"
 )
 
-var _ = FDescribe("[sriov] aws platform", Ordered, func() {
+var _ = Describe("[sriov] aws platform", Ordered, func() {
 	BeforeAll(func() {
 		if platformType != consts.AWS {
 			Skip("AWS platform is not supported on non-AWS platforms")
