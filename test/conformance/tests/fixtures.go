@@ -56,6 +56,10 @@ var _ = BeforeSuite(func() {
 	case consts.AWS:
 		sriovInfos, err = cluster.DiscoverSriovForAws(clients, operatorNamespace)
 		Expect(err).ToNot(HaveOccurred())
+	case consts.VirtualOpenStack:
+		Fail("VirtualOpenStack platform is not supported on e2e tests")
+	default:
+		Fail("Unknown platform type")
 	}
 })
 

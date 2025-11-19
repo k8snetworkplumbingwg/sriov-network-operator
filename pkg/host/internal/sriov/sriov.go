@@ -28,8 +28,8 @@ import (
 )
 
 type interfaceToConfigure struct {
-	iface       sriovnetworkv1.Interface
-	ifaceStatus sriovnetworkv1.InterfaceExt
+	Iface       sriovnetworkv1.Interface
+	IfaceStatus sriovnetworkv1.InterfaceExt
 }
 
 type sriov struct {
@@ -715,7 +715,7 @@ func (s *sriov) getConfigureAndReset(storeManager store.ManagerInterface, interf
 				}
 				iface := iface
 				ifaceStatus := ifaceStatus
-				toBeConfigured = append(toBeConfigured, interfaceToConfigure{iface: iface, ifaceStatus: ifaceStatus})
+				toBeConfigured = append(toBeConfigured, interfaceToConfigure{Iface: iface, IfaceStatus: ifaceStatus})
 			}
 		}
 
@@ -736,12 +736,12 @@ func (s *sriov) configSriovInterfacesInParallel(storeManager store.ManagerInterf
 		interfacesToConfigure += 1
 		go func(iface *interfaceToConfigure) {
 			var err error
-			if err = s.configSriovDevice(&iface.iface, skipVFConfiguration); err != nil {
-				log.Log.Error(err, "configSriovInterfacesInParallel(): fail to configure sriov interface. resetting interface.", "address", iface.iface.PciAddress)
-				if iface.iface.ExternallyManaged {
+			if err = s.configSriovDevice(&iface.Iface, skipVFConfiguration); err != nil {
+				log.Log.Error(err, "configSriovInterfacesInParallel(): fail to configure sriov interface. resetting interface.", "address", iface.Iface.PciAddress)
+				if iface.Iface.ExternallyManaged {
 					log.Log.V(2).Info("configSriovInterfacesInParallel(): skipping device reset as the nic is marked as externally created")
 				} else {
-					if resetErr := s.ResetSriovDevice(iface.ifaceStatus); resetErr != nil {
+					if resetErr := s.ResetSriovDevice(iface.IfaceStatus); resetErr != nil {
 						log.Log.Error(resetErr, "configSriovInterfacesInParallel(): failed to reset on error SR-IOV interface")
 						err = resetErr
 					}
@@ -750,7 +750,7 @@ func (s *sriov) configSriovInterfacesInParallel(storeManager store.ManagerInterf
 			errChannel <- err
 		}(&interfaces[ifaceIndex])
 		// Save the PF status to the host
-		err := storeManager.SaveLastPfAppliedStatus(&iface.iface)
+		err := storeManager.SaveLastPfAppliedStatus(&iface.Iface)
 		if err != nil {
 			log.Log.Error(err, "configSriovInterfacesInParallel(): failed to save PF applied config to host")
 			return err
@@ -800,12 +800,12 @@ func (s *sriov) resetSriovInterfacesInParallel(storeManager store.ManagerInterfa
 func (s *sriov) configSriovInterfaces(storeManager store.ManagerInterface, interfaces []interfaceToConfigure, skipVFConfiguration bool) error {
 	log.Log.V(2).Info("configSriovInterfaces(): start sriov configuration")
 	for _, iface := range interfaces {
-		if err := s.configSriovDevice(&iface.iface, skipVFConfiguration); err != nil {
-			log.Log.Error(err, "configSriovInterfaces(): fail to configure sriov interface. resetting interface.", "address", iface.iface.PciAddress)
-			if iface.iface.ExternallyManaged {
+		if err := s.configSriovDevice(&iface.Iface, skipVFConfiguration); err != nil {
+			log.Log.Error(err, "configSriovInterfaces(): fail to configure sriov interface. resetting interface.", "address", iface.Iface.PciAddress)
+			if iface.Iface.ExternallyManaged {
 				log.Log.V(2).Info("configSriovInterfaces(): skipping device reset as the nic is marked as externally created")
 			} else {
-				if resetErr := s.ResetSriovDevice(iface.ifaceStatus); resetErr != nil {
+				if resetErr := s.ResetSriovDevice(iface.IfaceStatus); resetErr != nil {
 					log.Log.Error(resetErr, "configSriovInterfaces(): failed to reset on error SR-IOV interface")
 				}
 			}
@@ -813,7 +813,7 @@ func (s *sriov) configSriovInterfaces(storeManager store.ManagerInterface, inter
 		}
 
 		// Save the PF status to the host
-		err := storeManager.SaveLastPfAppliedStatus(&iface.iface)
+		err := storeManager.SaveLastPfAppliedStatus(&iface.Iface)
 		if err != nil {
 			log.Log.Error(err, "configSriovInterfaces(): failed to save PF applied config to host")
 			return err
@@ -900,49 +900,98 @@ func (s *sriov) checkForConfigAndReset(ifaceStatus sriovnetworkv1.InterfaceExt, 
 	return nil
 }
 
-func (s *sriov) ConfigSriovDeviceVirtual(iface *sriovnetworkv1.Interface) error {
-	log.Log.V(2).Info("ConfigSriovDeviceVirtual(): config interface", "address", iface.PciAddress, "config", iface)
-	// Config VFs
-	if iface.NumVfs > 0 {
-		if iface.NumVfs > 1 {
-			log.Log.Error(nil, "ConfigSriovDeviceVirtual(): in a virtual environment, only one VF per interface",
-				"numVfs", iface.NumVfs)
-			return errors.New("NumVfs > 1")
-		}
-		if len(iface.VfGroups) != 1 {
-			log.Log.Error(nil, "ConfigSriovDeviceVirtual(): missing VFGroup")
-			return errors.New("NumVfs != 1")
-		}
-		addr := iface.PciAddress
-		log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "address", addr)
-		driver := ""
-		vfID := 0
-		for _, group := range iface.VfGroups {
-			log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "group", group)
-			if sriovnetworkv1.IndexInRange(vfID, group.VfRange) {
-				log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "indexInRange", vfID)
-				if sriovnetworkv1.StringInArray(group.DeviceType, vars.DpdkDrivers) {
-					log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "driver", group.DeviceType)
-					driver = group.DeviceType
+func (s *sriov) ConfigSriovDevicesVirtual(storeManager store.ManagerInterface, interfaces []sriovnetworkv1.Interface, ifaceStatuses []sriovnetworkv1.InterfaceExt) error {
+	toBeConfigured, toBeResetted, err := s.getConfigureAndReset(storeManager, interfaces, ifaceStatuses)
+	if err != nil {
+		log.Log.Error(err, "ConfigSriovDevicesVirtual(): cannot get a list of interfaces to configure")
+		return fmt.Errorf("cannot get a list of interfaces to configure")
+	}
+	log.Log.V(2).Info("ConfigSriovDevicesVirtual(): configuration to be done", "toBeConfigured", toBeConfigured, "toBeResetted", toBeResetted)
+
+	for _, ifaceToConfigure := range toBeConfigured {
+		if ifaceToConfigure.Iface.NumVfs > 0 {
+			if ifaceToConfigure.Iface.NumVfs > 1 {
+				log.Log.Error(nil, "ConfigSriovDeviceVirtual(): in a virtual environment, only one VF per interface",
+					"numVfs", ifaceToConfigure.Iface.NumVfs)
+				return errors.New("NumVfs > 1")
+			}
+			if len(ifaceToConfigure.Iface.VfGroups) != 1 {
+				log.Log.Error(nil, "ConfigSriovDeviceVirtual(): missing VFGroup")
+				return errors.New("NumVfs != 1")
+			}
+			addr := ifaceToConfigure.Iface.PciAddress
+			log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "address", addr)
+			driver := ""
+			vfID := 0
+			for _, group := range ifaceToConfigure.Iface.VfGroups {
+				log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "group", group)
+				if sriovnetworkv1.IndexInRange(vfID, group.VfRange) {
+					log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "indexInRange", vfID)
+					if sriovnetworkv1.StringInArray(group.DeviceType, vars.DpdkDrivers) {
+						log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "driver", group.DeviceType)
+						driver = group.DeviceType
+					}
+					break
 				}
-				break
 			}
-		}
-		if driver == "" {
-			log.Log.V(2).Info("ConfigSriovDeviceVirtual(): bind default")
-			if err := s.kernelHelper.BindDefaultDriver(addr); err != nil {
-				log.Log.Error(err, "ConfigSriovDeviceVirtual(): fail to bind default driver", "device", addr)
-				return err
+			if driver == "" {
+				log.Log.V(2).Info("ConfigSriovDeviceVirtual(): bind default")
+				if err := s.kernelHelper.BindDefaultDriver(addr); err != nil {
+					log.Log.Error(err, "ConfigSriovDeviceVirtual(): fail to bind default driver", "device", addr)
+					return err
+				}
+			} else {
+				log.Log.V(2).Info("ConfigSriovDeviceVirtual(): bind driver", "driver", driver)
+				if err := s.kernelHelper.BindDpdkDriver(addr, driver); err != nil {
+					log.Log.Error(err, "ConfigSriovDeviceVirtual(): fail to bind driver for device",
+						"driver", driver, "device", addr)
+					return err
+				}
 			}
-		} else {
-			log.Log.V(2).Info("ConfigSriovDeviceVirtual(): bind driver", "driver", driver)
-			if err := s.kernelHelper.BindDpdkDriver(addr, driver); err != nil {
-				log.Log.Error(err, "ConfigSriovDeviceVirtual(): fail to bind driver for device",
-					"driver", driver, "device", addr)
+			// Save the PF status to the host
+			err := storeManager.SaveLastPfAppliedStatus(&ifaceToConfigure.Iface)
+			if err != nil {
+				log.Log.Error(err, "configSriovInterfaces(): failed to save PF applied config to host")
 				return err
 			}
 		}
 	}
+
+	for _, iface := range toBeResetted {
+		// check if the vf were created by the sriov operator
+		pfStatus, exist, err := storeManager.LoadPfsStatus(iface.PciAddress)
+		if err != nil {
+			log.Log.Error(err, "ConfigSriovDeviceVirtual(): failed to load info about PF status for device",
+				"address", iface.PciAddress)
+			return err
+		}
+		if !exist {
+			log.Log.V(2).Info("ConfigSriovDeviceVirtual(): PF name with pci address has VFs configured but they weren't created by the sriov operator. Skipping the device reset",
+				"pf-name", iface.Name,
+				"address", iface.PciAddress)
+			continue
+		}
+		if pfStatus.ExternallyManaged {
+			log.Log.V(2).Info("ConfigSriovDeviceVirtual(): PF name with pci address was externally created skipping the device reset",
+				"pf-name", iface.Name,
+				"address", iface.PciAddress)
+			continue
+		}
+
+		log.Log.V(2).Info("ConfigSriovDeviceVirtual(): bind default")
+		if err := s.kernelHelper.BindDefaultDriver(iface.PciAddress); err != nil {
+			log.Log.Error(err, "ConfigSriovDeviceVirtual(): fail to bind default driver", "device", iface.PciAddress)
+			return err
+		}
+
+		// Remove the PF status from the host
+		err = storeManager.RemovePfAppliedStatus(iface.PciAddress)
+		if err != nil {
+			log.Log.Error(err, "configSriovInterfaces(): failed to remove PF applied config from host")
+			return err
+		}
+	}
+
 	return nil
 }
 

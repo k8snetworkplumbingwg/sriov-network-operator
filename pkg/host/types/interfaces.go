@@ -143,8 +143,9 @@ type SriovInterface interface {
 	// if skipVFConfiguration flag is set, the function will configure PF and create VFs on it, but will skip VFs configuration
 	ConfigSriovInterfaces(storeManager store.ManagerInterface, interfaces []sriovnetworkv1.Interface,
 		ifaceStatuses []sriovnetworkv1.InterfaceExt, skipVFConfiguration bool) error
-	// ConfigSriovInterfaces configure virtual functions for virtual environments with the desired configuration
-	ConfigSriovDeviceVirtual(iface *sriovnetworkv1.Interface) error
+	// ConfigSriovDevicesVirtual configure virtual functions for virtual environments with the desired configuration
+	ConfigSriovDevicesVirtual(storeManager store.ManagerInterface, interfaces []sriovnetworkv1.Interface,
+		ifaceStatuses []sriovnetworkv1.InterfaceExt) error
 }
 
 type UdevInterface interface {
