@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +26,7 @@ import (
 	runtimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	sriovv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/cluster"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/discovery"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/execute"
@@ -36,7 +36,6 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/pod"
 )
 
-var waitingTime = 20 * time.Minute
 var sriovNetworkName = "test-sriovnetwork"
 var snoTimeoutMultiplier time.Duration = 0
 
@@ -52,15 +51,13 @@ const (
 	ipamIpv4                    = `{"type": "host-local","ranges": [[{"subnet": "1.1.1.0/24"}]],"dataDir": "/run/my-orchestrator/container-ipam-state"}`
 )
 
-func init() {
-	waitingEnv := os.Getenv("SRIOV_WAITING_TIME")
-	newTime, err := strconv.Atoi(waitingEnv)
-	if err == nil && newTime != 0 {
-		waitingTime = time.Duration(newTime) * time.Minute
-	}
-}
-
 var _ = Describe("[sriov] operator", Ordered, func() {
+	BeforeAll(func() {
+		if platformType != consts.Baremetal {
+			Skip("Operator is not supported on non-baremetal platforms")
+		}
+	})
+
 	AfterAll(func() {
 		err := namespaces.Clean(operatorNamespace, namespaces.Test, clients, discovery.Enabled())
 		Expect(err).ToNot(HaveOccurred())

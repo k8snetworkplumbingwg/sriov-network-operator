@@ -15,6 +15,7 @@ import (
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 
 	sriovv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/cluster"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/discovery"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/namespaces"
@@ -23,6 +24,12 @@ import (
 )
 
 var _ = Describe("[sriov] operator", Ordered, func() {
+	BeforeEach(func() {
+		if platformType != consts.Baremetal {
+			Skip("Policy configuration is not supported on non-baremetal platforms")
+		}
+	})
+
 	Describe("Custom SriovNetworkNodePolicy", func() {
 		BeforeEach(func() {
 			err := namespaces.Clean(operatorNamespace, namespaces.Test, clients, discovery.Enabled())

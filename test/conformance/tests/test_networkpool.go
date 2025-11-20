@@ -30,6 +30,10 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 	var resourceName = "testrdma"
 
 	BeforeAll(func() {
+		if platformType != consts.Baremetal {
+			Skip("NetworkPool is not supported on non-baremetal platforms")
+		}
+
 		WaitForSRIOVStable()
 
 		err := namespaces.Create(namespaces.Test, clients)
