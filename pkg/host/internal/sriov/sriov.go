@@ -260,6 +260,12 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 			continue
 		}
 
+		altNames, err := s.netlinkLib.GetAltNames(pfNetName)
+		if err != nil {
+			log.Log.Error(err, "DiscoverSriovDevices(): unable to get alternative names for device, skipping", "device", device)
+			continue
+		}
+
 		link, err := s.netlinkLib.LinkByName(pfNetName)
 		if err != nil {
 			log.Log.Error(err, "DiscoverSriovDevices(): unable to get Link for device, skipping", "device", device.Address)
@@ -277,6 +283,7 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 			LinkType:       s.encapTypeToLinkType(link.Attrs().EncapType),
 			LinkSpeed:      s.networkHelper.GetNetDevLinkSpeed(pfNetName),
 			LinkAdminState: s.networkHelper.GetNetDevLinkAdminState(pfNetName),
+			AltNames:       altNames,
 		}
 
 		pfStatus, exist, err := storeManager.LoadPfsStatus(iface.PciAddress)
