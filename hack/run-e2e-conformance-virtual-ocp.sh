@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -xeo pipefail
 
-OCP_VERSION=${OCP_VERSION:-4.18}
+OCP_VERSION=${OCP_VERSION:-4.20.3}
 OCP_RELEASE_TYPE=${OCP_RELEASE_TYPE:-stable}
 cluster_name=${CLUSTER_NAME:-ocp-virt}
 domain_name=lab
@@ -9,7 +9,6 @@ domain_name=lab
 api_ip=${API_IP:-192.168.123.253}
 virtual_router_id=${VIRTUAL_ROUTER_ID:-253}
 registry="default-route-openshift-image-registry.apps.${cluster_name}.${domain_name}"
-HOME="/root"
 
 NUM_OF_WORKERS=${NUM_OF_WORKERS:-3}
 total_number_of_nodes=$((1 + NUM_OF_WORKERS))
@@ -43,6 +42,7 @@ kcli delete network $cluster_name -y
 function cleanup {
   kcli delete cluster $cluster_name -y
   kcli delete network $cluster_name -y
+  sudo rm -f /etc/containers/registries.conf.d/003-${cluster_name}.conf
 }
 
 if [ -z $SKIP_DELETE ]; then
@@ -67,7 +67,7 @@ ctlplanes: 1
 workers: $NUM_OF_WORKERS
 machine: q35
 network_type: OVNKubernetes
-pull_secret: /root/openshift_pull.json
+pull_secret: $HOME/openshift_pull.json
 vmrules:
   - $cluster_name-worker-.*:
       nets:
@@ -136,7 +136,7 @@ controller_ip=`kubectl get node -o wide | grep ctlp | awk '{print $6}'`
 
 if [ `cat /etc/hosts | grep ${api_ip} | grep "default-route-openshift-image-registry.apps.${cluster_name}.${domain_name}" | wc -l` == 0 ]; then
   echo "adding registry to hosts"
-  sed -i "s/${api_ip}/${api_ip} default-route-openshift-image-registry.apps.${cluster_name}.${domain_name}/g" /etc/hosts
+  sudo sed -i "s/${api_ip}/${api_ip} default-route-openshift-image-registry.apps.${cluster_name}.${domain_name}/g" /etc/hosts
 fi
 
 
