@@ -106,6 +106,8 @@ sriovOperatorConfig:
   disableDrain: false
   # sriov-network-config-daemon configuration mode. either "daemon" or "systemd"
   configurationMode: daemon
+  # list of sriov-network-config-daemon plugins to disable (e.g., ["mellanox"])
+  disablePlugins: []
   # feature gates to enable/disable
   featureGates: {}
 

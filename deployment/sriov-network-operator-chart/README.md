@@ -133,6 +133,7 @@ This section contains general parameters that apply to both the operator and dae
 | `sriovOperatorConfig.logLevel` | int | `2` | log level for both operator and sriov-network-config-daemon |
 | `sriovOperatorConfig.disableDrain` | bool | `false` | disable node draining when configuring SR-IOV, set to true in case of a single node cluster or any other justifiable reason |
 | `sriovOperatorConfig.configurationMode` | string | `daemon` | sriov-network-config-daemon configuration mode. either `daemon` or `systemd` |
+| `sriovOperatorConfig.disablePlugins` | list | `[]` | list of sriov-network-config-daemon plugins to disable (e.g., `["mellanox"]`) |
 | `sriovOperatorConfig.featureGates` | map[string]bool | `{}` | feature gates to enable/disable |
 
 **Note** 
