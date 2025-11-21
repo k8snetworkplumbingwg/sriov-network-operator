@@ -126,6 +126,15 @@ spec:
                 - legacy
                 - switchdev
                 type: string
+              eSwitchParams:
+                description: |-
+                  contains bridge configuration eSwitch,
+                  valid only for eSwitchMode==switchdev
+                properties:
+                  multiport:
+                    description: enabled multiport eswitch mode
+                    type: boolean
+                type: object
               excludeTopology:
                 description: Exclude device's NUMA node when advertising this resource
                   by SRIOV network device plugin. Default to false.

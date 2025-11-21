@@ -33,14 +33,15 @@ type SriovNetworkNodeStateSpec struct {
 type Interfaces []Interface
 
 type Interface struct {
-	PciAddress        string    `json:"pciAddress"`
-	NumVfs            int       `json:"numVfs,omitempty"`
-	Mtu               int       `json:"mtu,omitempty"`
-	Name              string    `json:"name,omitempty"`
-	LinkType          string    `json:"linkType,omitempty"`
-	EswitchMode       string    `json:"eSwitchMode,omitempty"`
-	VfGroups          []VfGroup `json:"vfGroups,omitempty"`
-	ExternallyManaged bool      `json:"externallyManaged,omitempty"`
+	PciAddress        string        `json:"pciAddress"`
+	NumVfs            int           `json:"numVfs,omitempty"`
+	Mtu               int           `json:"mtu,omitempty"`
+	Name              string        `json:"name,omitempty"`
+	LinkType          string        `json:"linkType,omitempty"`
+	EswitchMode       string        `json:"eSwitchMode,omitempty"`
+	VfGroups          []VfGroup     `json:"vfGroups,omitempty"`
+	ExternallyManaged bool          `json:"externallyManaged,omitempty"`
+	ESwitchParams     ESwitchParams `json:"eSwitchParams,omitempty"`
 }
 
 type VfGroup struct {

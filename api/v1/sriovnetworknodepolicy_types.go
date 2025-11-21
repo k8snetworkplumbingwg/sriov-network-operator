@@ -65,6 +65,9 @@ type SriovNetworkNodePolicySpec struct {
 	// contains bridge configuration for matching PFs,
 	// valid only for eSwitchMode==switchdev
 	Bridge Bridge `json:"bridge,omitempty"`
+	// contains bridge configuration eSwitch,
+	// valid only for eSwitchMode==switchdev
+	ESwitchParams ESwitchParams `json:"eSwitchParams,omitempty"`
 }
 
 type SriovNetworkNicSelector struct {
@@ -89,6 +92,11 @@ type Bridge struct {
 // IsEmpty return empty if the struct doesn't contain configuration
 func (b *Bridge) IsEmpty() bool {
 	return b.OVS == nil
+}
+
+type ESwitchParams struct {
+	// enabled multiport eswitch mode
+	Multiport bool `json:"multiport,omitempty"`
 }
 
 // OVSConfig optional configuration for OVS bridge and uplink Interface
