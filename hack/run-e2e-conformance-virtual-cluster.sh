@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -xeo pipefail
 
-cluster_version=${CLUSTER_VERSION:-1.32.0}
+cluster_version=${CLUSTER_VERSION:-1.34.2}
 cluster_name=${CLUSTER_NAME:-virtual}
 domain_name=$cluster_name.lab
 
 api_ip=${API_IP:-192.168.124.250}
 virtual_router_id=${VIRTUAL_ROUTER_ID:-250}
-HOME="/root"
 
 here="$(dirname "$(readlink --canonicalize "${BASH_SOURCE[0]}")")"
 root="$(readlink --canonicalize "$here/..")"
@@ -50,6 +49,7 @@ kcli delete network $cluster_name -y
 function cleanup {
   kcli delete cluster $cluster_name -y
   kcli delete network $cluster_name -y
+  sudo rm -f /etc/containers/registries.conf.d/003-${cluster_name}.conf
 }
 
 if [ -z $SKIP_DELETE ]; then
@@ -154,9 +154,10 @@ insecure = true
 \"golang\" = \"docker.io/library/golang\"
 "
 
-cat << EOF > /etc/containers/registries.conf.d/003-${cluster_name}.conf
+sudo bash -c "cat << EOF > /etc/containers/registries.conf.d/003-${cluster_name}.conf
 $insecure_registry
 EOF
+"
 
 function update_host() {
     node_name=$1
