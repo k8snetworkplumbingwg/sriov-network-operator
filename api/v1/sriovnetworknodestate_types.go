@@ -71,6 +71,7 @@ type InterfaceExt struct {
 	ExternallyManaged bool              `json:"externallyManaged,omitempty"`
 	TotalVfs          int               `json:"totalvfs,omitempty"`
 	VFs               []VirtualFunction `json:"Vfs,omitempty"`
+	ESwitchParams     ESwitchParams     `json:"eSwitchParams,omitempty"`
 }
 type InterfaceExts []InterfaceExt
 
