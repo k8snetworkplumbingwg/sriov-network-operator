@@ -201,6 +201,7 @@ const (
 	CPUVendorIntel CPUVendor = iota
 	CPUVendorAMD
 	CPUVendorARM
+	CPUVendorS390X
 )
 
 type CPUInfoProviderInterface interface {
