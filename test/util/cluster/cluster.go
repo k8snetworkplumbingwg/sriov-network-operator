@@ -395,7 +395,7 @@ func GetNodeSecureBootState(clients *testclient.ClientSet, nodeName, namespace s
 	return strings.Contains(stdout, "[integrity]") || strings.Contains(stdout, "[confidentiality]"), nil
 }
 
-// createPodOnNodeWithHostPath creates a pod on the given node with the host path mounted
+// createPodOnNode creates a pod on the given node with privileged capabilities host network and host path mounted
 func createPodOnNode(clients *testclient.ClientSet, nodeName, namespace string) (*corev1.Pod, error) {
 	podDefinition := pod.GetDefinition()
 	podDefinition = pod.RedefineWithNodeSelector(podDefinition, nodeName)
@@ -526,10 +526,5 @@ func GetPlatformType(clients *testclient.ClientSet, operatorNamespace string) (c
 		return consts.Baremetal, fmt.Errorf("failed to get node %s %v", ss[0].Name, err)
 	}
 
-	for key, pType := range vars.PlatformsMap {
-		if strings.Contains(strings.ToLower(nodeObj.Spec.ProviderID), strings.ToLower(key)) {
-			return pType, nil
-		}
-	}
-	return consts.Baremetal, nil
+	return vars.GetPlatformType(nodeObj.Spec.ProviderID), nil
 }

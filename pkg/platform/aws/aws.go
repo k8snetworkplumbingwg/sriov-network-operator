@@ -2,6 +2,7 @@ package aws
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -17,24 +18,34 @@ import (
 const (
 	// metadataBaseURL is the base URL for the EC2 instance metadata service.
 	metadataBaseURL = "http://169.254.169.254/latest/meta-data/"
-	// macsPath is the path to list MAC addresses. Note the trailing slash,
-	// which is standard for directory-like listings in the metadata service.
+	// macsPath is the path to list MAC addresses.
 	macsPath = "network/interfaces/macs/"
-	// subnetIDSuffix is appended to a specific MAC address path to get its subnet ID.
-	subnetIDSuffix = "/subnet-id"
+	// subnetIDPath is the path suffix for fetching subnet ID from metadata service.
+	subnetIDPath = "subnet-id"
+	// awsNetworkIDPrefix is the prefix used for AWS network ID in NetFilter field.
+	// Format: "aws/NetworkID:<subnet-id>"
+	awsNetworkIDPrefix = "aws/NetworkID:"
 )
 
+// Aws implements the platform.Interface for AWS EC2 instances.
+// It handles SR-IOV device discovery for virtual functions in AWS environments,
+// using metadata from the EC2 instance metadata service.
 type Aws struct {
-	hostHelpers       helper.HostHelpersInterface
-	loadedDevicesInfo sriovnetworkv1.InterfaceExts
+	hostHelpers        helper.HostHelpersInterface
+	InitialDevicesInfo sriovnetworkv1.InterfaceExts
 }
 
+// New creates a new Aws platform instance.
+// Returns a configured Aws platform or an error if initialization fails.
 func New(hostHelpers helper.HostHelpersInterface) (*Aws, error) {
 	return &Aws{
 		hostHelpers: hostHelpers,
 	}, nil
 }
 
+// Init initializes the AWS platform by loading device information.
+// If a checkpoint exists, it loads device info from the saved node state.
+// Otherwise, it queries the EC2 instance metadata service.
 func (a *Aws) Init() error {
 	ns, err := a.hostHelpers.GetCheckPointNodeState()
 	if err != nil {
@@ -50,10 +61,13 @@ func (a *Aws) Init() error {
 	return nil
 }
 
+// Name returns the name of the AWS platform.
 func (a *Aws) Name() string {
 	return string(consts.AWS)
 }
 
+// GetVendorPlugins returns the virtual plugin as the main plugin for AWS.
+// AWS platforms only use the virtual plugin, with no additional plugins.
 func (a *Aws) GetVendorPlugins(_ *sriovnetworkv1.SriovNetworkNodeState) (plugin.VendorPlugin, []plugin.VendorPlugin, error) {
 	virtual, err := virtualplugin.NewVirtualPlugin(a.hostHelpers)
 	return virtual, []plugin.VendorPlugin{}, err
@@ -65,74 +79,80 @@ func (a *Aws) SystemdGetVendorPlugin(_ string) (plugin.VendorPlugin, error) {
 	return nil, vars.ErrOperationNotSupportedByPlatform
 }
 
-// DiscoverSriovDevices discovers VFs on a virtual platform
+// DiscoverSriovDevices discovers VFs on the AWS virtual platform.
+// Each network device is treated as a single VF with TotalVfs=1 and NumVfs=1.
+// Device metadata (MAC address, subnet ID) is enriched from EC2 metadata service.
+// Returns a copy of the device info to prevent callers from modifying internal state.
 func (a *Aws) DiscoverSriovDevices() ([]sriovnetworkv1.InterfaceExt, error) {
-	funcLog := log.Log.WithName("DiscoverSriovDevices")
 	log.Log.V(2).Info("discovering sriov devices")
 
+	result := make([]sriovnetworkv1.InterfaceExt, 0, len(a.InitialDevicesInfo))
+
 	// TODO: check if we want to support hot plug here in the future
-	for idx, iface := range a.loadedDevicesInfo {
-		hasDriver, driver := a.hostHelpers.HasDriver(iface.PciAddress)
-		if !hasDriver {
-			funcLog.Error(nil, "device doesn't have a driver, skipping",
-				"iface", iface)
-			continue
-		}
-		iface.Driver = driver
+	for _, iface := range a.InitialDevicesInfo {
+		// Create a copy to avoid modifying the original
+		ifaceCopy := iface.DeepCopy()
+		_, driver := a.hostHelpers.HasDriver(ifaceCopy.PciAddress)
+		ifaceCopy.Driver = driver
 
-		if mtu := a.hostHelpers.GetNetdevMTU(iface.PciAddress); mtu > 0 {
-			iface.Mtu = mtu
+		if mtu := a.hostHelpers.GetNetdevMTU(ifaceCopy.PciAddress); mtu > 0 {
+			ifaceCopy.Mtu = mtu
 		}
 
-		if name := a.hostHelpers.TryToGetVirtualInterfaceName(iface.PciAddress); name != "" {
-			iface.Name = name
+		if name := a.hostHelpers.TryToGetVirtualInterfaceName(ifaceCopy.PciAddress); name != "" {
+			ifaceCopy.Name = name
 			if macAddr := a.hostHelpers.GetNetDevMac(name); macAddr != "" {
-				iface.Mac = macAddr
+				ifaceCopy.Mac = macAddr
 			}
-			iface.LinkSpeed = a.hostHelpers.GetNetDevLinkSpeed(name)
-			iface.LinkType = a.hostHelpers.GetLinkType(name)
+			ifaceCopy.LinkSpeed = a.hostHelpers.GetNetDevLinkSpeed(name)
+			ifaceCopy.LinkType = a.hostHelpers.GetLinkType(name)
 		}
-		if len(iface.VFs) != 1 {
-			log.Log.Error(nil, "only one vf should exist", "iface", iface)
-			return nil, fmt.Errorf("unexpected number of vfs found for device %s", iface.Name)
+		if len(ifaceCopy.VFs) != 1 {
+			log.Log.Error(nil, "only one vf should exist", "iface", ifaceCopy)
+			return nil, fmt.Errorf("unexpected number of vfs found for device %s", ifaceCopy.Name)
 		}
-		iface.VFs[0] = sriovnetworkv1.VirtualFunction{
-			PciAddress: iface.PciAddress,
+		// Create a new VFs slice to ensure deep copy
+		ifaceCopy.VFs = []sriovnetworkv1.VirtualFunction{{
+			PciAddress: ifaceCopy.PciAddress,
 			Driver:     driver,
 			VfID:       0,
-			Vendor:     iface.Vendor,
-			DeviceID:   iface.DeviceID,
-			Mtu:        iface.Mtu,
-			Mac:        iface.Mac,
-		}
-		a.loadedDevicesInfo[idx] = iface
+			Vendor:     ifaceCopy.Vendor,
+			DeviceID:   ifaceCopy.DeviceID,
+			Mtu:        ifaceCopy.Mtu,
+			Mac:        ifaceCopy.Mac,
+		}}
+		result = append(result, *ifaceCopy)
 	}
-	return a.loadedDevicesInfo, nil
+	return result, nil
 }
 
 // DiscoverBridges is not supported on AWS platform.
 // Returns ErrOperationNotSupportedByPlatform as AWS does not support software bridge management.
 func (a *Aws) DiscoverBridges() (sriovnetworkv1.Bridges, error) {
-	if vars.ManageSoftwareBridges {
-		return sriovnetworkv1.Bridges{}, vars.ErrOperationNotSupportedByPlatform
-	}
-	return sriovnetworkv1.Bridges{}, nil
+	return sriovnetworkv1.Bridges{}, vars.ErrOperationNotSupportedByPlatform
 }
 
 // createDevicesInfo creates the AWS device info map
 // This function is used to create the AWS device info map from the metadata server.
 func (a *Aws) createDevicesInfo() error {
-	funcLog := log.Log.WithName("getDataFromMetadataService")
-	a.loadedDevicesInfo = make(sriovnetworkv1.InterfaceExts, 0)
+	funcLog := log.Log.WithName("createDevicesInfo")
+	a.InitialDevicesInfo = make(sriovnetworkv1.InterfaceExts, 0)
 	funcLog.Info("getting aws network info from metadata server")
-	metaData, err := a.hostHelpers.HTTPGetFetchData(metadataBaseURL + macsPath)
+
+	macsURL, err := url.JoinPath(metadataBaseURL, macsPath)
 	if err != nil {
-		return fmt.Errorf("error getting aws meta_data from %s: %v", metadataBaseURL+macsPath, err)
+		return fmt.Errorf("failed to construct MACs URL: %w", err)
+	}
+
+	metaData, err := a.hostHelpers.HTTPGetFetchData(macsURL)
+	if err != nil {
+		return fmt.Errorf("error getting aws meta_data from %s: %v", macsURL, err)
 	}
 
 	// If the endpoint returns an empty body (e.g., no MACs available or an issue),
 	// treat it as no MACs found rather than an error. The caller can then decide how to handle an empty list.
 	if metaData == "" {
+		funcLog.Info("no MAC addresses found from metadata service, no devices loaded")
 		return nil
 	}
 
@@ -145,16 +165,24 @@ func (a *Aws) createDevicesInfo() error {
 
 	macAddressToSubNetID := map[string]string{}
 	for _, macEntry := range macEntries {
-		subnetIDURL := metadataBaseURL + macsPath + macEntry + subnetIDSuffix
+		// Strip trailing '/' from MAC entry before constructing URL
+		cleanMac := strings.TrimSuffix(macEntry, "/")
+		// Example URL: http://169.254.169.254/latest/meta-data/network/interfaces/macs/0e:1a:95:aa:12:a1/subnet-id
+		// Example raw response: "subnet-090ab34e7af072e18"
+		subnetIDURL, err := url.JoinPath(metadataBaseURL, macsPath, cleanMac, subnetIDPath)
+		if err != nil {
+			return fmt.Errorf("failed to construct subnet ID URL for MAC %s: %w", cleanMac, err)
+		}
+
 		subnetIDData, err := a.hostHelpers.HTTPGetFetchData(subnetIDURL)
 		if err != nil {
 			return fmt.Errorf("error getting aws subnet_id from %s: %v", subnetIDURL, err)
 		}
 
 		if subnetIDData == "" {
-			return fmt.Errorf("empty subnet_id from %s: %v", subnetIDURL, err)
+			return fmt.Errorf("empty subnet_id from %s", subnetIDURL)
 		}
-		macAddressToSubNetID[strings.ReplaceAll(macEntry, "/", "")] = subnetIDData
+		macAddressToSubNetID[cleanMac] = subnetIDData
 	}
 
 	pfList, err := a.hostHelpers.DiscoverSriovVirtualDevices()
@@ -165,11 +193,12 @@ func (a *Aws) createDevicesInfo() error {
 	for _, iface := range pfList {
 		subnetID, exist := macAddressToSubNetID[iface.Mac]
 		if !exist {
+			funcLog.Error(nil, "unable to find subnet ID for device", "device", iface)
 			continue
 		}
 
 		subnetID = strings.TrimPrefix(subnetID, "subnet-")
-		iface.NetFilter = fmt.Sprintf("aws/NetworkID:%s", subnetID)
+		iface.NetFilter = awsNetworkIDPrefix + subnetID
 		iface.TotalVfs = 1
 		iface.NumVfs = 1
 
@@ -183,12 +212,15 @@ func (a *Aws) createDevicesInfo() error {
 			Mac:        iface.Mac,
 		}
 		iface.VFs = append(iface.VFs, vf)
-		a.loadedDevicesInfo = append(a.loadedDevicesInfo, iface)
+		a.InitialDevicesInfo = append(a.InitialDevicesInfo, iface)
 	}
-	funcLog.V(2).Info("loaded devices info from metadata server", "devices", a.loadedDevicesInfo)
+	funcLog.V(2).Info("loaded devices info from metadata server", "devices", a.InitialDevicesInfo)
 	return nil
 }
 
 func (a *Aws) createDevicesInfoFromNodeStatus(networkState *sriovnetworkv1.SriovNetworkNodeState) {
-	a.loadedDevicesInfo = networkState.Status.Interfaces
+	a.InitialDevicesInfo = make(sriovnetworkv1.InterfaceExts, 0, len(networkState.Status.Interfaces))
+	for _, iface := range networkState.Status.Interfaces {
+		a.InitialDevicesInfo = append(a.InitialDevicesInfo, *iface.DeepCopy())
+	}
 }

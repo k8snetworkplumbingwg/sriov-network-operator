@@ -126,7 +126,7 @@ var _ = AfterSuite(func() {
 	}
 })
 
-func TestBaremetal(t *testing.T) {
+func TestAws(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Aws Suite")
 }

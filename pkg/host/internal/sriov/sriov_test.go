@@ -1171,7 +1171,7 @@ var _ = Describe("SRIOV", func() {
 					LinkAdminState: "down",
 				}})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("NumVfs != 1"))
+			Expect(err.Error()).To(ContainSubstring("unexpected number of VFGroups"))
 		})
 
 		It("should fail when BindDefaultDriver fails", func() {
@@ -1423,10 +1423,7 @@ var _ = Describe("SRIOV", func() {
 				}})).NotTo(HaveOccurred())
 		})
 
-		It("should configure with default driver when VfRange doesn't include vfID 0", func() {
-			hostMock.EXPECT().BindDefaultDriver("0000:d8:00.0").Return(nil)
-			storeManagerMode.EXPECT().SaveLastPfAppliedStatus(gomock.Any()).Return(nil)
-
+		It("should return error when VfRange doesn't include vfID 0", func() {
 			Expect(s.ConfigSriovDevicesVirtual(storeManagerMode,
 				[]sriovnetworkv1.Interface{{
 					Name:       "enp216s0f0np0",
@@ -1443,7 +1440,7 @@ var _ = Describe("SRIOV", func() {
 					PciAddress:     "0000:d8:00.0",
 					NumVfs:         1,
 					LinkAdminState: "down",
-				}})).NotTo(HaveOccurred())
+				}})).To(HaveOccurred())
 		})
 
 		It("should configure with default driver when DeviceType is not a DPDK driver", func() {
@@ -1489,30 +1486,6 @@ var _ = Describe("SRIOV", func() {
 					PciAddress: "0000:d8:00.0",
 					NumVfs:     1,
 					Mtu:        1500,
-				}})).NotTo(HaveOccurred())
-		})
-
-		It("should configure when EswitchMode needs update", func() {
-			hostMock.EXPECT().BindDpdkDriver("0000:d8:00.0", "vfio-pci").Return(nil)
-			storeManagerMode.EXPECT().SaveLastPfAppliedStatus(gomock.Any()).Return(nil)
-
-			Expect(s.ConfigSriovDevicesVirtual(storeManagerMode,
-				[]sriovnetworkv1.Interface{{
-					Name:        "enp216s0f0np0",
-					PciAddress:  "0000:d8:00.0",
-					NumVfs:      1,
-					EswitchMode: "switchdev",
-					VfGroups: []sriovnetworkv1.VfGroup{{
-						VfRange:      "0-0",
-						ResourceName: "test-resource0",
-						PolicyName:   "test-policy0",
-						DeviceType:   "vfio-pci",
-					}},
-				}},
-				[]sriovnetworkv1.InterfaceExt{{
-					PciAddress:  "0000:d8:00.0",
-					NumVfs:      1,
-					EswitchMode: "legacy",
 				}})).NotTo(HaveOccurred())
 		})
 

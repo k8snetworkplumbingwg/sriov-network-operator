@@ -30,6 +30,9 @@ const (
 	// with the "config-2" label.
 	//https://docs.openstack.org/nova/latest/user/config-drive.html
 	configDriveLabel = "config-2"
+	// openstackNetworkIDPrefix is the prefix used for OpenStack network ID in NetFilter field.
+	// Format: "openstack/NetworkID:<network-uuid>"
+	openstackNetworkIDPrefix = "openstack/NetworkID:"
 )
 
 var (
@@ -207,7 +210,7 @@ func (o *Openstack) createDevicesInfo() error {
 			if device.Mac == link.EthernetMac {
 				for _, network := range networkData.Networks {
 					if network.Link == link.ID {
-						networkID := sriovnetworkv1.OpenstackNetworkID.String() + ":" + network.NetworkID
+						networkID := openstackNetworkIDPrefix + network.NetworkID
 						devicesInfo[device.Address] = &OSPDeviceInfo{MacAddress: device.Mac, NetworkID: networkID}
 					}
 				}
@@ -258,7 +261,7 @@ func (o *Openstack) createDevicesInfo() error {
 			if macAddress == link.EthernetMac {
 				for _, network := range networkData.Networks {
 					if network.Link == link.ID {
-						networkID := sriovnetworkv1.OpenstackNetworkID.String() + ":" + network.NetworkID
+						networkID := openstackNetworkIDPrefix + network.NetworkID
 						devicesInfo[device.Address] = &OSPDeviceInfo{MacAddress: macAddress, NetworkID: networkID}
 					}
 				}

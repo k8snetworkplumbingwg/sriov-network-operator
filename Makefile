@@ -109,7 +109,7 @@ manifests: controller-gen
 check-manifests: manifests
 	@set +e; git diff --quiet config; \
 	if [ $$? -eq 1 ]; \
-	then echo -e "\n`config` folder is out of date. Please run `make manifests` and commit your changes"; \
+	then echo -e "'config' folder is out of date. Please run 'make manifests' and commit your changes"; \
 	exit 1; fi
 
 sync-manifests-%: manifests

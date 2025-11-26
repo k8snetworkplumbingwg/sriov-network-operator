@@ -44,21 +44,22 @@ var _ = Describe("Aws", func() {
 		It("should create devices from metadata if node state is nil", func() {
 			hostHelper.EXPECT().GetCheckPointNodeState().Return(nil, nil)
 			// Mock the metadata call to avoid real HTTP requests
-			hostHelper.EXPECT().HTTPGetFetchData(metadataBaseURL+macsPath).Return("0A:0B:0C:0D:0E:0F", nil)
-			hostHelper.EXPECT().HTTPGetFetchData(metadataBaseURL+macsPath+"0A:0B:0C:0D:0E:0F/subnet-id").Return("subnet-090ab34e7af072e18", nil)
+			// MAC addresses from metadata come with trailing "/"
+			hostHelper.EXPECT().HTTPGetFetchData("http://169.254.169.254/latest/meta-data/network/interfaces/macs/").Return("0A:0B:0C:0D:0E:0F/", nil)
+			hostHelper.EXPECT().HTTPGetFetchData("http://169.254.169.254/latest/meta-data/network/interfaces/macs/0A:0B:0C:0D:0E:0F/subnet-id").Return("subnet-090ab34e7af072e18", nil)
 			hostHelper.EXPECT().DiscoverSriovVirtualDevices().Return([]sriovnetworkv1.InterfaceExt{{
 				PciAddress: "0000:01:00.0",
 				Mac:        "0A:0B:0C:0D:0E:0F"},
 			}, nil)
 			err := awsPlatform.Init()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(awsPlatform.loadedDevicesInfo)).To(Equal(1))
-			Expect(awsPlatform.loadedDevicesInfo[0].PciAddress).To(Equal("0000:01:00.0"))
-			Expect(awsPlatform.loadedDevicesInfo[0].Mac).To(Equal("0A:0B:0C:0D:0E:0F"))
-			Expect(awsPlatform.loadedDevicesInfo[0].NetFilter).To(Equal("aws/NetworkID:090ab34e7af072e18"))
-			Expect(len(awsPlatform.loadedDevicesInfo[0].VFs)).To(Equal(1))
-			Expect(awsPlatform.loadedDevicesInfo[0].VFs[0].PciAddress).To(Equal("0000:01:00.0"))
-			Expect(awsPlatform.loadedDevicesInfo[0].VFs[0].Mac).To(Equal("0A:0B:0C:0D:0E:0F"))
+			Expect(len(awsPlatform.InitialDevicesInfo)).To(Equal(1))
+			Expect(awsPlatform.InitialDevicesInfo[0].PciAddress).To(Equal("0000:01:00.0"))
+			Expect(awsPlatform.InitialDevicesInfo[0].Mac).To(Equal("0A:0B:0C:0D:0E:0F"))
+			Expect(awsPlatform.InitialDevicesInfo[0].NetFilter).To(Equal("aws/NetworkID:090ab34e7af072e18"))
+			Expect(len(awsPlatform.InitialDevicesInfo[0].VFs)).To(Equal(1))
+			Expect(awsPlatform.InitialDevicesInfo[0].VFs[0].PciAddress).To(Equal("0000:01:00.0"))
+			Expect(awsPlatform.InitialDevicesInfo[0].VFs[0].Mac).To(Equal("0A:0B:0C:0D:0E:0F"))
 		})
 
 		It("should create devices from an existing node status", func() {
@@ -108,24 +109,16 @@ var _ = Describe("Aws", func() {
 	})
 
 	Context("Bridge Discovery", func() {
-		It("should return an error if ManageSoftwareBridges is true", func() {
-			vars.ManageSoftwareBridges = true
-			defer func() { vars.ManageSoftwareBridges = false }() // Cleanup
-			_, err := awsPlatform.DiscoverBridges()
-			Expect(err).To(MatchError(vars.ErrOperationNotSupportedByPlatform))
-		})
-
-		It("should return empty bridges if ManageSoftwareBridges is false", func() {
-			vars.ManageSoftwareBridges = false
+		It("should always return an error as bridge discovery is not supported on AWS", func() {
 			bridges, err := awsPlatform.DiscoverBridges()
-			Expect(err).NotTo(HaveOccurred())
+			Expect(err).To(MatchError(vars.ErrOperationNotSupportedByPlatform))
 			Expect(bridges).To(Equal(sriovnetworkv1.Bridges{}))
 		})
 	})
 
 	Context("DiscoverSriovDevices", func() {
 		BeforeEach(func() {
-			// Pre-populate loadedDevicesInfo for tests
+			// Pre-populate InitialDevicesInfo for tests
 			nodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
 					Interfaces: []sriovnetworkv1.InterfaceExt{
@@ -190,7 +183,7 @@ var _ = Describe("Aws", func() {
 		})
 
 		It("should handle HTTP error when fetching MACs", func() {
-			hostHelper.EXPECT().HTTPGetFetchData(metadataBaseURL+macsPath).Return("", fmt.Errorf("refused"))
+			hostHelper.EXPECT().HTTPGetFetchData("http://169.254.169.254/latest/meta-data/network/interfaces/macs/").Return("", fmt.Errorf("refused"))
 			err := awsPlatform.Init()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("error getting aws meta_data"))
@@ -198,8 +191,8 @@ var _ = Describe("Aws", func() {
 
 		It("should handle error when fetching subnet ID", func() {
 			macsResponse := "0A:0B:0C:0D:0E:0F/\n"
-			subnetURL := metadataBaseURL + macsPath + "0A:0B:0C:0D:0E:0F/" + subnetIDSuffix
-			hostHelper.EXPECT().HTTPGetFetchData(metadataBaseURL+macsPath).Return(macsResponse, nil)
+			subnetURL := "http://169.254.169.254/latest/meta-data/network/interfaces/macs/0A:0B:0C:0D:0E:0F/subnet-id"
+			hostHelper.EXPECT().HTTPGetFetchData("http://169.254.169.254/latest/meta-data/network/interfaces/macs/").Return(macsResponse, nil)
 			hostHelper.EXPECT().HTTPGetFetchData(subnetURL).Return("", errors.New("subnet timeout"))
 			err := awsPlatform.Init()
 			Expect(err).To(MatchError(fmt.Sprintf("error getting aws subnet_id from %s: %v", subnetURL, errors.New("subnet timeout"))))
@@ -207,11 +200,11 @@ var _ = Describe("Aws", func() {
 
 		It("should handle error for empty subnet ID", func() {
 			macsResponse := "0A:0B:0C:0D:0E:0F/\n"
-			subnetURL := metadataBaseURL + macsPath + "0A:0B:0C:0D:0E:0F/" + subnetIDSuffix
-			hostHelper.EXPECT().HTTPGetFetchData(metadataBaseURL+macsPath).Return(macsResponse, nil)
+			subnetURL := "http://169.254.169.254/latest/meta-data/network/interfaces/macs/0A:0B:0C:0D:0E:0F/subnet-id"
+			hostHelper.EXPECT().HTTPGetFetchData("http://169.254.169.254/latest/meta-data/network/interfaces/macs/").Return(macsResponse, nil)
 			hostHelper.EXPECT().HTTPGetFetchData(subnetURL).Return("", nil)
 			err := awsPlatform.Init()
-			Expect(err).To(MatchError(fmt.Sprintf("empty subnet_id from %s: <nil>", subnetURL)))
+			Expect(err).To(MatchError(fmt.Sprintf("empty subnet_id from %s", subnetURL)))
 		})
 	})
 })

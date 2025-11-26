@@ -208,6 +208,15 @@ func (s *sriov) SetVfAdminMac(vfAddr string, pfLink, vfLink netlink.Link) error 
 	return nil
 }
 
+// getDeviceClass parses the device class from the device
+func getDeviceClass(device *ghw.PCIDevice) (int64, error) {
+	devClass, err := strconv.ParseInt(device.Class.ID, 16, 64)
+	if err != nil {
+		return 0, fmt.Errorf("unable to parse device class: %v", err)
+	}
+	return devClass, nil
+}
+
 func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sriovnetworkv1.InterfaceExt, error) {
 	log.Log.V(2).Info("DiscoverSriovDevices")
 	pfList := []sriovnetworkv1.InterfaceExt{}
@@ -223,7 +232,7 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 	}
 
 	for _, device := range devices {
-		devClass, err := strconv.ParseInt(device.Class.ID, 16, 64)
+		devClass, err := getDeviceClass(device)
 		if err != nil {
 			log.Log.Error(err, "DiscoverSriovDevices(): unable to parse device class, skipping",
 				"device", device)
@@ -326,7 +335,7 @@ func (s *sriov) DiscoverSriovVirtualDevices() ([]sriovnetworkv1.InterfaceExt, er
 	}
 
 	for _, device := range devices {
-		devClass, err := strconv.ParseInt(device.Class.ID, 16, 64)
+		devClass, err := getDeviceClass(device)
 		if err != nil {
 			log.Log.Error(err, "DiscoverSriovVirtualDevices(): unable to parse device class for device, skipping",
 				"device", device)
@@ -915,25 +924,30 @@ func (s *sriov) ConfigSriovDevicesVirtual(storeManager store.ManagerInterface, i
 					"numVfs", ifaceToConfigure.Iface.NumVfs)
 				return errors.New("NumVfs > 1")
 			}
+			// Validate the VFGroups we need to have only one VFGroup
 			if len(ifaceToConfigure.Iface.VfGroups) != 1 {
-				log.Log.Error(nil, "ConfigSriovDeviceVirtual(): missing VFGroup")
-				return errors.New("NumVfs != 1")
+				log.Log.Error(nil, "ConfigSriovDeviceVirtual(): unexpected number of VFGroups", "vfGroups", ifaceToConfigure.Iface.VfGroups)
+				return errors.New("unexpected number of VFGroups")
 			}
+
 			addr := ifaceToConfigure.Iface.PciAddress
-			log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "address", addr)
+			log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "pciAddress", addr)
 			driver := ""
 			vfID := 0
-			for _, group := range ifaceToConfigure.Iface.VfGroups {
-				log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "group", group)
-				if sriovnetworkv1.IndexInRange(vfID, group.VfRange) {
-					log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "indexInRange", vfID)
-					if sriovnetworkv1.StringInArray(group.DeviceType, vars.DpdkDrivers) {
-						log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "driver", group.DeviceType)
-						driver = group.DeviceType
-					}
-					break
-				}
+
+			group := ifaceToConfigure.Iface.VfGroups[0]
+			// Validate the VF ID is in the range for the VFGroup
+			if !sriovnetworkv1.IndexInRange(vfID, group.VfRange) {
+				log.Log.Error(nil, "ConfigSriovDeviceVirtual(): VF ID is not in the range", "vfID", vfID, "vfRange", group.VfRange)
+				return errors.New("VF ID is not in the range")
 			}
+
+			// check if we need to bind to a DPDK driver
+			if sriovnetworkv1.StringInArray(group.DeviceType, vars.DpdkDrivers) {
+				log.Log.V(2).Info("ConfigSriovDeviceVirtual()", "driver", group.DeviceType)
+				driver = group.DeviceType
+			}
+
 			if driver == "" {
 				log.Log.V(2).Info("ConfigSriovDeviceVirtual(): bind default")
 				if err := s.kernelHelper.BindDefaultDriver(addr); err != nil {
