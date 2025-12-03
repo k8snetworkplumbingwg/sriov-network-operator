@@ -116,6 +116,25 @@ jobs:
         with:
           severity: error
 
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-24.04
+    steps:
+    - name: checkout PR 
+      uses: actions/checkout@v5
+    - name: run hadolint on operator dockerfile
+      uses: hadolint/hadolint-action@v3.3.0
+      with:
+        dockerfile: Dockerfile
+    - name: run hadolint on config daemon dockerfile
+      uses: hadolint/hadolint-action@v3.3.0
+      with:
+        dockerfile: Dockerfile.sriov-network-config-daemon
+        ignore: DL3033
+    - name: run hadolint on webhook dockerfile
+      uses: hadolint/hadolint-action@v3.3.0
+      with:
+        dockerfile: Dockerfile.webhook
   test-coverage:
     name: test-coverage
     runs-on: ubuntu-24.04
