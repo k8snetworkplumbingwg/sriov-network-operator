@@ -85,7 +85,7 @@ func (s *service) ReadService(servicePath string) (*types.Service, error) {
 // EnableService creates service file and enables it with systemctl enable
 func (s *service) EnableService(service *types.Service) error {
 	// Write service file
-	err := os.WriteFile(path.Join(consts.Chroot, service.Path), []byte(service.Content), 0644)
+	err := os.WriteFile(path.Join(consts.Chroot, service.Path), []byte(service.Content), 0o644)
 	if err != nil {
 		return err
 	}

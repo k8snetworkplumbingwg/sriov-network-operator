@@ -287,7 +287,7 @@ func (c *OpenshiftOrchestrator) GetNodeMachinePoolName(ctx context.Context, node
 }
 
 func (c *OpenshiftOrchestrator) ChangeMachineConfigPoolPause(ctx context.Context, mcp *mcv1.MachineConfigPool, pause bool) error {
-	logger := ctx.Value("logger").(logr.Logger).WithName("ChangeMachineConfigPoolPause")
+	logger := ctx.Value(consts.LoggerContextKey).(logr.Logger).WithName("ChangeMachineConfigPoolPause")
 	logger.Info("change machine config pool state", "pause", pause, "mcp", mcp.Name)
 
 	patchString := []byte(fmt.Sprintf(`{"spec":{"paused":%t}}`, pause))

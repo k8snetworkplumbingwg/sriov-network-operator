@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
@@ -86,9 +86,9 @@ var _ = Describe("Drain Controller", Ordered, func() {
 	})
 
 	BeforeEach(func() {
-		Expect(k8sClient.DeleteAllOf(context.Background(), &corev1.Node{}, &client.DeleteAllOfOptions{DeleteOptions: client.DeleteOptions{GracePeriodSeconds: pointer.Int64(0)}})).ToNot(HaveOccurred())
-		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovNetworkNodeState{}, client.InNamespace(vars.Namespace), &client.DeleteAllOfOptions{DeleteOptions: client.DeleteOptions{GracePeriodSeconds: pointer.Int64(0)}})).ToNot(HaveOccurred())
-		Expect(k8sClient.DeleteAllOf(context.Background(), &corev1.Pod{}, client.InNamespace(testNamespace), &client.DeleteAllOfOptions{DeleteOptions: client.DeleteOptions{GracePeriodSeconds: pointer.Int64(0)}})).ToNot(HaveOccurred())
+		Expect(k8sClient.DeleteAllOf(context.Background(), &corev1.Node{}, &client.DeleteAllOfOptions{DeleteOptions: client.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)}})).ToNot(HaveOccurred())
+		Expect(k8sClient.DeleteAllOf(context.Background(), &sriovnetworkv1.SriovNetworkNodeState{}, client.InNamespace(vars.Namespace), &client.DeleteAllOfOptions{DeleteOptions: client.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)}})).ToNot(HaveOccurred())
+		Expect(k8sClient.DeleteAllOf(context.Background(), &corev1.Pod{}, client.InNamespace(testNamespace), &client.DeleteAllOfOptions{DeleteOptions: client.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)}})).ToNot(HaveOccurred())
 
 		poolConfig := &sriovnetworkv1.SriovNetworkPoolConfig{}
 		poolConfig.SetNamespace(testNamespace)
@@ -102,7 +102,7 @@ var _ = Describe("Drain Controller", Ordered, func() {
 		err = k8sClient.List(context.Background(), podList, &client.ListOptions{Namespace: "default"})
 		Expect(err).ToNot(HaveOccurred())
 		for _, podObj := range podList.Items {
-			err = k8sClient.Delete(context.Background(), &podObj, &client.DeleteOptions{GracePeriodSeconds: pointer.Int64(0)})
+			err = k8sClient.Delete(context.Background(), &podObj, &client.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)})
 			Expect(err).ToNot(HaveOccurred())
 		}
 
@@ -467,6 +467,6 @@ func createNodeWithLabel(ctx context.Context, nodeName string, label string) (*c
 func createPodOnNode(ctx context.Context, podName, nodeName string) {
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: "default"},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "test", Command: []string{"test"}}},
-			NodeName: nodeName, TerminationGracePeriodSeconds: pointer.Int64(60)}}
+			NodeName: nodeName, TerminationGracePeriodSeconds: ptr.To[int64](60)}}
 	Expect(k8sClient.Create(ctx, &pod)).ToNot(HaveOccurred())
 }
