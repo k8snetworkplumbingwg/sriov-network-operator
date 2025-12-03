@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -35,6 +36,7 @@ var (
 	// PlatformsMap contains supported platforms for virtual VF
 	PlatformsMap = map[string]consts.PlatformTypes{
 		"openstack": consts.VirtualOpenStack,
+		"aws":       consts.AWS,
 	}
 
 	// SupportedVfIds list of supported virtual functions IDs
@@ -105,4 +107,13 @@ func init() {
 	ResourcePrefix = os.Getenv("RESOURCE_PREFIX")
 
 	FeatureGate = featuregate.New()
+}
+
+func GetPlatformType(providerID string) consts.PlatformTypes {
+	for key, pType := range PlatformsMap {
+		if strings.Contains(strings.ToLower(providerID), strings.ToLower(key)) {
+			return pType
+		}
+	}
+	return consts.Baremetal
 }

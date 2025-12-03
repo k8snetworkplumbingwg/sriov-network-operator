@@ -161,8 +161,11 @@ spec:
                       "0d58", "1572", "158b", "1013", "1015", "1017", "101b".
                     type: string
                   netFilter:
-                    description: Infrastructure Networking selection filter. Allowed
-                      value "openstack/NetworkID:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    description: |-
+                      Infrastructure Networking selection filter.
+                      Allowed values:
+                      - "openstack/NetworkID:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      - "aws/NetworkID:xxxxxxxx"
                     type: string
                   pfNames:
                     description: Name of SR-IoV PF.
