@@ -8,6 +8,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 )
 
 // ObjectHasAnnotationKey checks if a kubernetes object already contains annotation
@@ -32,7 +34,7 @@ func AnnotateObject(ctx context.Context, obj client.Object, key, value string, c
 	}
 
 	if obj.GetAnnotations()[key] != value {
-		logger, ok := ctx.Value("logger").(logr.Logger)
+		logger, ok := ctx.Value(constants.LoggerContextKey).(logr.Logger)
 		if !ok {
 			log.Log.Info("Annotate object",
 				"name", obj.GetName(),

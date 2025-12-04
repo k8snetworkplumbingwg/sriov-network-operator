@@ -4,6 +4,14 @@ import (
 	"time"
 )
 
+// ContextKey is a custom type for context keys to avoid collisions
+type ContextKey string
+
+const (
+	// LoggerContextKey is the key used to store/retrieve logger from context
+	LoggerContextKey ContextKey = "logger"
+)
+
 type DrainState string
 
 const (

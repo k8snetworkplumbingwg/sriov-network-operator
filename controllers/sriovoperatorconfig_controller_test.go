@@ -19,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -323,7 +322,7 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			config := &uns.Unstructured{}
+			config := &unstructured.Unstructured{}
 			config.SetGroupVersionKind(sriovnetworkv1.GroupVersion.WithKind("SriovOperatorConfig"))
 			config.SetName(consts.DefaultConfigName)
 			config.SetNamespace(testNamespace)
@@ -346,7 +345,7 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			}, util.APITimeout, util.RetryInterval).Should(Succeed())
 
 			By("Verify default values have not been omitted")
-			obj := &uns.Unstructured{}
+			obj := &unstructured.Unstructured{}
 			obj.SetGroupVersionKind(sriovnetworkv1.GroupVersion.WithKind("SriovOperatorConfig"))
 			err = k8sClient.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, obj)
 			Expect(err).NotTo(HaveOccurred())

@@ -458,7 +458,7 @@ func (n *network) SetRDMASubsystem(mode string) error {
 	}
 	config := fmt.Sprintf("# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=%d\n", modeValue)
 
-	err := os.WriteFile(path, []byte(config), 0644)
+	err := os.WriteFile(path, []byte(config), 0o644)
 	if err != nil {
 		log.Log.Error(err, "SetRDMASubsystem(): failed to write sriov_network_operator_modules_config.conf")
 		return fmt.Errorf("failed to write sriov_network_operator_modules_config.conf: %v", err)
