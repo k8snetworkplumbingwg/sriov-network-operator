@@ -13,13 +13,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.23
+    - name: Set up Go 1.24
       uses: actions/setup-go@v6
       with:
-        go-version: 1.23.x
+        go-version: 1.24.x
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: fmt
       run: IS_CONTAINER=yes make fmt
@@ -32,13 +32,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.23
+    - name: Set up Go 1.24
       uses: actions/setup-go@v6
       with:
-        go-version: 1.23.x
+        go-version: 1.24.x
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: test pkg on kubernetes
       run: CLUSTER_TYPE=kubernetes make test-pkg
@@ -72,13 +72,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.23
+    - name: Set up Go 1.24
       uses: actions/setup-go@v6
       with:
-        go-version: 1.23.x
+        go-version: 1.24.x
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: check go modules are up to date
       run: make check-deps
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
     - name: Check out code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: check if the config/ folder is up to date
       run: make check-manifests
@@ -97,12 +97,12 @@ jobs:
     name: Golangci-lint
     runs-on: ubuntu-24.04
     steps:
-    - name: Set up Go 1.23
+    - name: Set up Go 1.24
       uses: actions/setup-go@v6
       with:
-        go-version: 1.23.x
+        go-version: 1.24.x
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
     - name: run lint checks
       run: make lint
 
@@ -110,7 +110,7 @@ jobs:
     name: Shellcheck
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
@@ -121,13 +121,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.23
+    - name: Set up Go 1.24
       uses: actions/setup-go@v6
       with:
-        go-version: 1.23.x
+        go-version: 1.24.x
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: test pkg on kubernetes
       run: CLUSTER_TYPE=kubernetes make test-pkg
@@ -157,7 +157,7 @@ jobs:
       run: make merge-test-coverage
 
     - name: Coveralls
-      uses: coverallsapp/github-action@v2.3.6
+      uses: coverallsapp/github-action@v2.3.7
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         path-to-lcov: lcov.out
@@ -174,12 +174,12 @@ jobs:
       TEST_REPORT_PATH: k8s-artifacts
     steps:
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      - name: Set up Go 1.23
+      - name: Set up Go 1.24
         uses: actions/setup-go@v6
         with:
-          go-version: 1.23.x
+          go-version: 1.24.x
 
       - name: run test
         run: make test-e2e-conformance-virtual-k8s-cluster-ci
@@ -208,12 +208,12 @@ jobs:
       TEST_REPORT_PATH: ocp-artifacts
     steps:
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      - name: Set up Go 1.23
+      - name: Set up Go 1.24
         uses: actions/setup-go@v6
         with:
-          go-version: 1.23.x
+          go-version: 1.24.x
 
       - name: run test
         run: make test-e2e-conformance-virtual-ocp-cluster-ci
