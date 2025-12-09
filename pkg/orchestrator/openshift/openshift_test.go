@@ -9,7 +9,6 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 	mcv1 "github.com/openshift/api/machineconfiguration/v1"
-	mcoconsts "github.com/openshift/machine-config-operator/pkg/daemon/constants"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -309,7 +308,7 @@ var _ = Describe("Openshift Package", Ordered, func() {
 
 		It("should return error if the node doesn't have the MCO annotation", func() {
 			n := createNode("worker-0")
-			delete(n.Annotations, mcoconsts.DesiredMachineConfigAnnotationKey)
+			delete(n.Annotations, constants.DesiredMachineConfigAnnotation)
 			err = k8sClient.Update(ctx, n)
 			Expect(err).ToNot(HaveOccurred())
 
@@ -366,8 +365,8 @@ func createNode(nodeName string) *corev1.Node {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nodeName,
 			Annotations: map[string]string{
-				constants.NodeDrainAnnotation:               constants.DrainIdle,
-				mcoconsts.DesiredMachineConfigAnnotationKey: "worker",
+				constants.NodeDrainAnnotation:            constants.DrainIdle,
+				constants.DesiredMachineConfigAnnotation: "worker",
 			},
 			Labels: map[string]string{
 				"test": "",
@@ -386,8 +385,8 @@ func createNodeWithMCName(nodeName, mcName string) *corev1.Node {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nodeName,
 			Annotations: map[string]string{
-				constants.NodeDrainAnnotation:               constants.DrainIdle,
-				mcoconsts.DesiredMachineConfigAnnotationKey: mcName,
+				constants.NodeDrainAnnotation:            constants.DrainIdle,
+				constants.DesiredMachineConfigAnnotation: mcName,
 			},
 			Labels: map[string]string{
 				"test": "",
