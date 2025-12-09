@@ -80,6 +80,7 @@ const (
 	NodeDrainAnnotation             = "sriovnetwork.openshift.io/state"
 	NodeStateDrainAnnotation        = "sriovnetwork.openshift.io/desired-state"
 	NodeStateDrainAnnotationCurrent = "sriovnetwork.openshift.io/current-state"
+	DesiredMachineConfigAnnotation  = "machineconfiguration.openshift.io/desiredConfig"
 	DrainIdle                       = "Idle"
 	DrainRequired                   = "Drain_Required"
 	RebootRequired                  = "Reboot_Required"
