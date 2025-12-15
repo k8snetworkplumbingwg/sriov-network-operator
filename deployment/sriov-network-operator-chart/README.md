@@ -135,6 +135,7 @@ This section contains general parameters that apply to both the operator and dae
 | `sriovOperatorConfig.configurationMode` | string | `daemon` | sriov-network-config-daemon configuration mode. either `daemon` or `systemd` |
 | `sriovOperatorConfig.disablePlugins` | list | `[]` | list of sriov-network-config-daemon plugins to disable (e.g., `["mellanox"]`) |
 | `sriovOperatorConfig.featureGates` | map[string]bool | `{}` | feature gates to enable/disable |
+| `sriovOperatorConfig.configDaemonEnvVars` | map[string]string | `{}` | custom environment variables for sriov-network-config-daemon |
 
 **Note** 
 

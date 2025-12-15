@@ -218,6 +218,8 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 		data.Data["DisablePlugins"] = strings.Join(dc.Spec.DisablePlugins.ToStringSlice(), ",")
 	}
 
+	data.Data["ConfigDaemonEnvVars"] = dc.Spec.ConfigDaemonEnvVars
+
 	objs, err := render.RenderDir(consts.ConfigDaemonPath, &data)
 	if err != nil {
 		logger.Error(err, "Fail to render config daemon manifests")

@@ -449,7 +449,22 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 				return strings.Join(daemonSet.Spec.Template.Spec.Containers[0].Args, " ")
 			}, util.APITimeout*10, util.RetryInterval).Should(ContainSubstring("disable-plugins=mellanox"))
 		})
+		It("should render configDaemonEnvVars in sriov-network-config-daemon if provided in spec", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
 
+			config.Spec.ConfigDaemonEnvVars = map[string]string{"TEST_ENV_VAR": "test_value"}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-network-config-daemon", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(daemonSet.Spec.Template.Spec.Containers[0].Env).To(ContainElement(
+					corev1.EnvVar{Name: "TEST_ENV_VAR", Value: "test_value"}))
+			}, util.APITimeout*10, util.RetryInterval).Should(Succeed())
+		})
 		It("should render the resourceInjectorMatchCondition in the mutation if feature flag is enabled and block only pods with the networks annotation", func() {
 			By("set the feature flag")
 			config := &sriovnetworkv1.SriovOperatorConfig{}
