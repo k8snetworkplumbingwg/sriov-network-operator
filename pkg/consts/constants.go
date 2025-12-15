@@ -10,7 +10,7 @@ const (
 	Chroot = "/host"
 	Host   = "/host"
 
-	ResyncPeriod               = 5 * time.Minute
+	ResyncPeriod               = 5 * time.Minute // here
 	DaemonRequeueTime          = 30 * time.Second
 	DrainControllerRequeueTime = 5 * time.Second
 

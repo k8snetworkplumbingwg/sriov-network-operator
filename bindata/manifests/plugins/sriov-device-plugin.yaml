@@ -65,9 +65,6 @@ spec:
         - name: devicesock
           mountPath: /var/lib/kubelet/device-plugins
           readOnly: false
-        - name: plugins-registry
-          mountPath: /var/lib/kubelet/plugins_registry
-          readOnly: false
         - name: config-volume
           mountPath: /etc/pcidp/
           readOnly: true
@@ -81,9 +78,6 @@ spec:
         - name: devicesock
           hostPath:
             path: /var/lib/kubelet/device-plugins
-        - name: plugins-registry
-          hostPath:
-            path: /var/lib/kubelet/plugins_registry
         - name: config-volume
           configMap:
             name: device-plugin-config
