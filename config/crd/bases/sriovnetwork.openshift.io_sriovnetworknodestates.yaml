@@ -148,6 +148,43 @@ spec:
               interfaces:
                 items:
                   properties:
+                    devlinkParams:
+                      description: DevlinkParams defines the parameters for devlink
+                        configuration
+                      properties:
+                        params:
+                          items:
+                            description: DevlinkParam defines the parameter for devlink
+                              configuration
+                            properties:
+                              applyOn:
+                                description: 'Device to apply devlink parameter: PF
+                                  (default)|VF|SF'
+                                enum:
+                                - PF
+                                - pf
+                                - VF
+                                - vf
+                                - SF
+                                - sf
+                                type: string
+                              cmode:
+                                description: 'cmode option: runtime (default) | driverinit
+                                  | permanent (runtime is only supported now)'
+                                enum:
+                                - runtime
+                                - driverinit
+                                - permanent
+                                type: string
+                              name:
+                                description: Param name
+                                type: string
+                              value:
+                                description: Param value
+                                type: string
+                            type: object
+                          type: array
+                      type: object
                     eSwitchMode:
                       type: string
                     externallyManaged:
@@ -303,6 +340,44 @@ spec:
                             type: string
                           deviceID:
                             type: string
+                          devlinkParams:
+                            description: DevlinkParams defines the parameters for
+                              devlink configuration
+                            properties:
+                              params:
+                                items:
+                                  description: DevlinkParam defines the parameter
+                                    for devlink configuration
+                                  properties:
+                                    applyOn:
+                                      description: 'Device to apply devlink parameter:
+                                        PF (default)|VF|SF'
+                                      enum:
+                                      - PF
+                                      - pf
+                                      - VF
+                                      - vf
+                                      - SF
+                                      - sf
+                                      type: string
+                                    cmode:
+                                      description: 'cmode option: runtime (default)
+                                        | driverinit | permanent (runtime is only
+                                        supported now)'
+                                      enum:
+                                      - runtime
+                                      - driverinit
+                                      - permanent
+                                      type: string
+                                    name:
+                                      description: Param name
+                                      type: string
+                                    value:
+                                      description: Param value
+                                      type: string
+                                  type: object
+                                type: array
+                            type: object
                           driver:
                             type: string
                           guid:
@@ -330,6 +405,43 @@ spec:
                       type: array
                     deviceID:
                       type: string
+                    devlinkParams:
+                      description: DevlinkParams defines the parameters for devlink
+                        configuration
+                      properties:
+                        params:
+                          items:
+                            description: DevlinkParam defines the parameter for devlink
+                              configuration
+                            properties:
+                              applyOn:
+                                description: 'Device to apply devlink parameter: PF
+                                  (default)|VF|SF'
+                                enum:
+                                - PF
+                                - pf
+                                - VF
+                                - vf
+                                - SF
+                                - sf
+                                type: string
+                              cmode:
+                                description: 'cmode option: runtime (default) | driverinit
+                                  | permanent (runtime is only supported now)'
+                                enum:
+                                - runtime
+                                - driverinit
+                                - permanent
+                                type: string
+                              name:
+                                description: Param name
+                                type: string
+                              value:
+                                description: Param value
+                                type: string
+                            type: object
+                          type: array
+                      type: object
                     driver:
                       type: string
                     eSwitchMode:

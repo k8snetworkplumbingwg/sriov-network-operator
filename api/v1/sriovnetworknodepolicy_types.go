@@ -65,6 +65,8 @@ type SriovNetworkNodePolicySpec struct {
 	// contains bridge configuration for matching PFs,
 	// valid only for eSwitchMode==switchdev
 	Bridge Bridge `json:"bridge,omitempty"`
+	// contains devlink params for NIC devices
+	DevlinkParams DevlinkParams `json:"devlinkParams,omitempty"`
 }
 
 type SriovNetworkNicSelector struct {
@@ -133,6 +135,25 @@ type OVSInterfaceConfig struct {
 	OtherConfig map[string]string `json:"otherConfig,omitempty"`
 	// mtu_request field in the Interface table in OVSDB
 	MTURequest *int `json:"mtuRequest,omitempty"`
+}
+
+// DevlinkParam defines the parameter for devlink configuration
+type DevlinkParam struct {
+	// Param name
+	Name string `json:"name,omitempty"`
+	// Param value
+	Value string `json:"value,omitempty"`
+	// cmode option: runtime (default) | driverinit | permanent (runtime is only supported now)
+	// +kubebuilder:validation:Enum=runtime;driverinit;permanent
+	Cmode string `json:"cmode,omitempty"`
+	// Device to apply devlink parameter: PF (default)|VF|SF
+	// +kubebuilder:validation:Enum=PF;pf;VF;vf;SF;sf
+	ApplyOn string `json:"applyOn,omitempty"`
+}
+
+// DevlinkParams defines the parameters for devlink configuration
+type DevlinkParams struct {
+	Params []DevlinkParam `json:"params,omitempty"`
 }
 
 // SriovNetworkNodePolicyStatus defines the observed state of SriovNetworkNodePolicy

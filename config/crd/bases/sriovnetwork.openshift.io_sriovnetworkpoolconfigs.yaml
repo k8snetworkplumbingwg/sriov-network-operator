@@ -48,6 +48,7 @@ spec:
                   maxUnavailable defines either an integer number or percentage
                   of nodes in the pool that can go Unavailable during an update.
 
+
                   A value larger than 1 will mean multiple nodes going unavailable during
                   the update, which may affect your workload stress on the remaining nodes.
                   Drain will respect Pod Disruption Budgets (PDBs) such as etcd quorum guards,
