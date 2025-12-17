@@ -107,6 +107,9 @@ func (p *MellanoxPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeS
 		needReboot = totalVfsNeedReboot || sriovEnNeedReboot
 		changeWithoutReboot = totalVfsChangeWithoutReboot || sriovEnChangeWithoutReboot
 
+		needESwitchParamsChange := mlx.HandleESwitchParams(pciPrefix, attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+		needReboot = needReboot || needESwitchParamsChange
+
 		needLinkChange, err := mlx.HandleLinkType(pciPrefix, fwCurrent, attrs, mellanoxNicsSpec, mellanoxNicsStatus)
 		if err != nil {
 			return false, false, err
