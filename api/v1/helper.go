@@ -346,6 +346,7 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 				EswitchMode:       p.Spec.EswitchMode,
 				NumVfs:            p.Spec.NumVfs,
 				ExternallyManaged: p.Spec.ExternallyManaged,
+				DevlinkParams:     p.Spec.DevlinkParams,
 			}
 			if p.Spec.NumVfs > 0 {
 				group, err := p.generatePfNameVfGroup(&iface)

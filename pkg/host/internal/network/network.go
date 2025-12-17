@@ -14,6 +14,7 @@ import (
 	"github.com/vishvananda/netlink/nl"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	dputilsPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/dputils"
 	ethtoolPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/ethtool"
@@ -266,37 +267,10 @@ func (n *network) GetDevlinkDeviceParam(pciAddr, paramName string) (string, erro
 		funcLog.Info("GetDevlinkDeviceParam(): WARNING: can't read devlink parameter from the device, an empty value received")
 		return "", nil
 	}
-	var value string
-	var ok bool
-	switch param.Type {
-	case nl.DEVLINK_PARAM_TYPE_U8, nl.DEVLINK_PARAM_TYPE_U16, nl.DEVLINK_PARAM_TYPE_U32:
-		var valData uint64
-		switch v := param.Values[0].Data.(type) {
-		case uint8:
-			valData = uint64(v)
-		case uint16:
-			valData = uint64(v)
-		case uint32:
-			valData = uint64(v)
-		default:
-			return "", fmt.Errorf("value is not uint")
-		}
-		value = strconv.FormatUint(valData, 10)
-
-	case nl.DEVLINK_PARAM_TYPE_STRING:
-		value, ok = param.Values[0].Data.(string)
-		if !ok {
-			return "", fmt.Errorf("value is not a string")
-		}
-	case nl.DEVLINK_PARAM_TYPE_BOOL:
-		var boolValue bool
-		boolValue, ok = param.Values[0].Data.(bool)
-		if !ok {
-			return "", fmt.Errorf("value is not a bool")
-		}
-		value = strconv.FormatBool(boolValue)
-	default:
-		return "", fmt.Errorf("unknown value type: %d", param.Type)
+	value, err := n.devlinkValueToString(param.Type, param.Values[0].Data)
+	if err != nil {
+		funcLog.Error(err, "GetDevlinkDeviceParam(): fail to devlink device param to string")
+		return "", err
 	}
 	funcLog.V(2).Info("GetDevlinkDeviceParam(): result", "value", value)
 	return value, nil
@@ -349,6 +323,109 @@ func (n *network) SetDevlinkDeviceParam(pciAddr, paramName, value string) error 
 		return err
 	}
 	return nil
+}
+
+func (n *network) devlinkValueToString(pType uint8, value interface{}) (string, error) {
+	var strVal string
+	var ok bool
+	switch pType {
+	case nl.DEVLINK_PARAM_TYPE_U8, nl.DEVLINK_PARAM_TYPE_U16, nl.DEVLINK_PARAM_TYPE_U32:
+		var valData uint64
+		switch v := value.(type) {
+		case uint8:
+			valData = uint64(v)
+		case uint16:
+			valData = uint64(v)
+		case uint32:
+			valData = uint64(v)
+		default:
+			return "", fmt.Errorf("value is not uint")
+		}
+		strVal = strconv.FormatUint(valData, 10)
+
+	case nl.DEVLINK_PARAM_TYPE_STRING:
+		strVal, ok = value.(string)
+		if !ok {
+			return "", fmt.Errorf("value is not a string")
+		}
+	case nl.DEVLINK_PARAM_TYPE_BOOL:
+		var boolValue bool
+		boolValue, ok = value.(bool)
+		if !ok {
+			return "", fmt.Errorf("value is not a bool")
+		}
+		strVal = strconv.FormatBool(boolValue)
+	default:
+		return "", fmt.Errorf("unknown value type: %d", pType)
+	}
+
+	return strVal, nil
+}
+
+func (n *network) devlinkCmodeToString(c uint8) string {
+	switch c {
+	case nl.DEVLINK_PARAM_CMODE_RUNTIME:
+		return "runtime"
+	case nl.DEVLINK_PARAM_CMODE_DRIVERINIT:
+		return "driverinit"
+	case nl.DEVLINK_PARAM_CMODE_PERMANENT:
+		return "permanent"
+	default:
+		return fmt.Sprintf("unknown(%d)", c)
+	}
+}
+
+// GetDevlinkDeviceParams returns all configured devlink parameters
+func (n *network) GetDevlinkDeviceParams(pciAddr string) ([]sriovnetworkv1.DevlinkParam, error) {
+	params, err := n.netlinkLib.DevlinkGetDeviceParams(consts.BusPci, pciAddr)
+	if err != nil {
+		log.Log.Error(err, "Failed to get devlink params", "device", pciAddr)
+		return nil, err
+	}
+
+	merged := make(map[string]map[uint8]interface{})
+	devlinkParams := make([]sriovnetworkv1.DevlinkParam, 0)
+
+	for _, p := range params {
+		if _, ok := merged[p.Name]; !ok {
+			merged[p.Name] = make(map[uint8]interface{})
+		}
+
+		for _, v := range p.Values {
+			// only CLI-visible cmodes
+			strVal, _ := n.devlinkValueToString(p.Type, v.Data)
+			switch v.CMODE {
+			case nl.DEVLINK_PARAM_CMODE_RUNTIME,
+				nl.DEVLINK_PARAM_CMODE_DRIVERINIT,
+				nl.DEVLINK_PARAM_CMODE_PERMANENT:
+				merged[p.Name][v.CMODE] = strVal
+			}
+		}
+	}
+
+	for name, cmodes := range merged {
+		for _, cm := range []uint8{
+			nl.DEVLINK_PARAM_CMODE_RUNTIME,
+			nl.DEVLINK_PARAM_CMODE_DRIVERINIT,
+			nl.DEVLINK_PARAM_CMODE_PERMANENT,
+		} {
+			if val, ok := cmodes[cm]; ok {
+				strVal := val.(string)
+				if err != nil {
+					log.Log.Error(err, "Failed to decode devlink param value", "device", pciAddr)
+					return nil, err
+				}
+				devlinkParam := sriovnetworkv1.DevlinkParam{
+					Name:  name,
+					Cmode: n.devlinkCmodeToString(cm),
+					Value: strVal,
+				}
+				devlinkParams = append(devlinkParams, devlinkParam)
+			}
+		}
+	}
+
+	return devlinkParams, nil
 }
 
 // EnableHwTcOffload makes sure that hw-tc-offload feature is enabled if device supports it

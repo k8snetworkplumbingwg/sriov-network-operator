@@ -80,6 +80,8 @@ type NetworkInterface interface {
 	// GetDevlinkDeviceParam returns devlink parameter for the device as a string, if the parameter has multiple values
 	// then the function will return only first one from the list.
 	GetDevlinkDeviceParam(pciAddr, paramName string) (string, error)
+	// GetDevlinkDeviceParams returns all configured devlink parameters
+	GetDevlinkDeviceParams(pciAddr string) ([]sriovnetworkv1.DevlinkParam, error)
 	// SetDevlinkDeviceParam set devlink parameter for the device, accepts paramName and value
 	// as a string. Automatically set CMODE for the parameter and converts the value to the right
 	// type before submitting it.

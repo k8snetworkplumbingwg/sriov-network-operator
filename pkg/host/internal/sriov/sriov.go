@@ -313,6 +313,13 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 					instance := s.getVfInfo(vf, pfNetName, iface.EswitchMode, devices)
 					iface.VFs = append(iface.VFs, instance)
 				}
+				devlinkParams, err := s.networkHelper.GetDevlinkDeviceParams(device.Address)
+				if err != nil {
+					log.Log.Error(err, "DiscoverSriovDevices(): unable devlink parameters, skipping",
+						"device", device)
+					continue
+				}
+				iface.DevlinkParams.Params = devlinkParams
 			}
 		}
 		pfList = append(pfList, iface)
@@ -419,6 +426,7 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
