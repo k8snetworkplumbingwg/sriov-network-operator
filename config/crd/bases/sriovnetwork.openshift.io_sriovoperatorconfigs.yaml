@@ -40,6 +40,13 @@ spec:
           spec:
             description: SriovOperatorConfigSpec defines the desired state of SriovOperatorConfig
             properties:
+              configDaemonEnvVars:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ConfigDaemonEnvVars allows to specify custom environment variables
+                  for the sriov-network-config-daemon
+                type: object
               configDaemonNodeSelector:
                 additionalProperties:
                   type: string
