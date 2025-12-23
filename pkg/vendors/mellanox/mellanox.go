@@ -207,7 +207,9 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 			cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%s", LinkTypeP2, fwArgs.LinkTypeP2))
 		}
 
-		cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%d", LagResourceAllocation, fwArgs.Multiport))
+		if fwArgs.Multiport != -1 {
+			cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%d", LagResourceAllocation, fwArgs.Multiport))
+		}
 
 		log.Log.V(2).Info("mellanox-plugin: configFW()", "cmd-args", cmdArgs)
 		if len(cmdArgs) <= 4 {
@@ -401,6 +403,8 @@ func HandleESwitchParams(pciPrefix string, attr *MlxNic,
 				attr.Multiport = 1
 			}
 			needReboot = true
+		} else {
+			attr.Multiport = -1
 		}
 	}
 	return needReboot
@@ -427,7 +431,7 @@ func mlnxNicFromMap(mstData map[string]string) (*MlxNic, error) {
 }
 
 func isESwitchParamsRequireChange(iface sriovnetworkv1.Interface, ifaceStatus sriovnetworkv1.InterfaceExt) (bool, *sriovnetworkv1.DevlinkParam) {
-	log.Log.Info("mellanox-plugin isLagResourceAllocationRequireChange()", "device", iface.PciAddress)
+	log.Log.Info("mellanox-plugin isESwitchParamsRequireChange()", "device", iface.PciAddress)
 
 	requsted, found := false, false
 	for _, devlinkParam := range iface.DevlinkParams.Params {
