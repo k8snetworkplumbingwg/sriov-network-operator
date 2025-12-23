@@ -317,9 +317,9 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 				if err != nil {
 					log.Log.Error(err, "DiscoverSriovDevices(): unable devlink parameters, skipping",
 						"device", device)
-					continue
+				} else {
+					iface.DevlinkParams.Params = devlinkParams
 				}
-				iface.DevlinkParams.Params = devlinkParams
 			}
 		}
 		pfList = append(pfList, iface)
@@ -423,6 +423,45 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		err = s.networkHelper.SetNetdevMTU(iface.PciAddress, iface.Mtu)
 		if err != nil {
 			log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
+			return err
+		}
+	}
+
+	for _, param := range iface.DevlinkParams.Params {
+		switch param.ApplyOn {
+		case consts.DevlinkParamApplyOnPf:
+			err = s.applyDevlinkPfParam(iface, param)
+			if err != nil {
+				log.Log.Error(err, "configSriovPFDevice(): fail apply devlink param for PF", "device", iface.PciAddress, "param", param.Name)
+				return err
+			}
+		case consts.DevlinkParamApplyOnVf:
+			err = s.applyDevlinkVfParam(iface, param)
+			if err != nil {
+				log.Log.Error(err, "configSriovPFDevice(): fail apply devlink param for VFs", "device", iface.PciAddress, "param", param.Name)
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *sriov) applyDevlinkPfParam(iface *sriovnetworkv1.Interface, param sriovnetworkv1.DevlinkParam) error {
+	return s.networkHelper.SetDevlinkDeviceParam(iface.PciAddress, param.Name, param.Value)
+}
+
+func (s *sriov) applyDevlinkVfParam(iface *sriovnetworkv1.Interface, param sriovnetworkv1.DevlinkParam) error {
+	vfAddrs, err := s.dputilsLib.GetVFList(iface.PciAddress)
+	if err != nil {
+		log.Log.Error(err, "applyDevlinkVfParam(): fail to get VF list", "device", iface.PciAddress, "param")
+		return err
+	}
+
+	for _, addr := range vfAddrs {
+		err = s.networkHelper.SetDevlinkDeviceParam(addr, param.Name, param.Value)
+		if err != nil {
+			log.Log.Error(err, "applyDevlinkVfParam(): fail apply devlink param for VF", "device", iface.PciAddress, "param")
 			return err
 		}
 	}

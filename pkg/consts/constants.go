@@ -150,6 +150,10 @@ const (
 		`IMPORT{program}="/etc/udev/switchdev-vf-link-name.sh $attr{phys_port_name}", ` +
 		`NAME="%s_$env{NUMBER}"`
 
+	DevlinkParamApplyOnPf = "PF"
+	DevlinkParamApplyOnVf = "VF"
+	DevlinkParamApplyOnSf = "SF"
+
 	KernelArgPciRealloc    = "pci=realloc"
 	KernelArgIntelIommu    = "intel_iommu=on"
 	KernelArgIommuPt       = "iommu=pt"

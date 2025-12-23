@@ -281,7 +281,7 @@ var _ = Describe("SRIOV", func() {
 			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
 				getBFMstconfigOutput(false, false),
 				"", nil)
-			err := m.MlxConfigFW(map[string]MlxNic{"0000:d8:00.0": {EnableSriov: false, TotalVfs: -1}})
+                err := m.MlxConfigFW(map[string]MlxNic{"0000:d8:00.0": {EnableSriov: false, TotalVfs: -1, Multiport: -1}})
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -289,7 +289,7 @@ var _ = Describe("SRIOV", func() {
 			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
 				getBFMstconfigOutput(false, false),
 				"", nil)
-			u.EXPECT().RunCommand("mstconfig", "-d", "0000:d8:00.0", "-y", "set", "SRIOV_EN=True", "NUM_OF_VFS=10", "LINK_TYPE_P1=ETH", "LINK_TYPE_P2=ETH").Return(
+			u.EXPECT().RunCommand("mstconfig", "-d", "0000:d8:00.0", "-y", "set", "SRIOV_EN=True", "NUM_OF_VFS=10", "LINK_TYPE_P1=ETH", "LINK_TYPE_P2=ETH", "LAG_RESOURCE_ALLOCATION=0").Return(
 				"",
 				"", nil)
 			err := m.MlxConfigFW(map[string]MlxNic{"0000:d8:00.0": {EnableSriov: true, TotalVfs: 10, LinkTypeP1: "ETH", LinkTypeP2: "ETH"}})
@@ -300,7 +300,7 @@ var _ = Describe("SRIOV", func() {
 			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
 				getBFMstconfigOutput(false, false),
 				"", nil)
-			u.EXPECT().RunCommand("mstconfig", "-d", "0000:d8:00.0", "-y", "set", "SRIOV_EN=True", "NUM_OF_VFS=10", "LINK_TYPE_P1=ETH", "LINK_TYPE_P2=test").Return(
+			u.EXPECT().RunCommand("mstconfig", "-d", "0000:d8:00.0", "-y", "set", "SRIOV_EN=True", "NUM_OF_VFS=10", "LINK_TYPE_P1=ETH", "LINK_TYPE_P2=test", "LAG_RESOURCE_ALLOCATION=0").Return(
 				"",
 				"", testError)
 			err := m.MlxConfigFW(map[string]MlxNic{"0000:d8:00.0": {EnableSriov: true, TotalVfs: 10, LinkTypeP1: "ETH", LinkTypeP2: "test"}})
