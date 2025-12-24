@@ -233,6 +233,10 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	if !cr.Spec.Bridge.IsEmpty() && cr.Spec.ExternallyManaged {
 		return false, fmt.Errorf("software bridge management can't be used when the device externally managed")
 	}
+	// multiport must be enabled only in switchdev mode
+	if cr.Spec.ESwitchParams.Multiport && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
+		return false, fmt.Errorf("multiport requires the device to be configured in switchdev mode")
+	}
 	return true, nil
 }
 
