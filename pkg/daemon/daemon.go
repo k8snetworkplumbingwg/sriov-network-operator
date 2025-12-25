@@ -325,12 +325,12 @@ func (dn *NodeReconciler) checkSystemdStatus() (*hosttypes.SriovResult, bool, er
 
 	// check if the service exist
 	if serviceEnabled && postNetworkServiceEnabled {
-		exist = true
 		sriovResult, err = dn.hostHelpers.ReadSriovResult()
 		if err != nil {
 			funcLog.Error(err, "failed to load sriov result file from host")
 			return nil, false, err
 		}
+		exist = sriovResult != nil
 	}
 	return sriovResult, exist, nil
 }
