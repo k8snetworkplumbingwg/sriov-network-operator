@@ -85,6 +85,10 @@ var (
 
 	// ErrOperationNotSupportedByPlatform is returned when a platform operation is not supported by the platform implementation.
 	ErrOperationNotSupportedByPlatform = errors.New("operation not supported by the platform")
+
+	// UseExternalDrainer controls if SRIOV operator will use an external drainer
+	// for draining nodes or its internal drain controller (default)
+	UseExternalDrainer bool
 )
 
 func init() {
@@ -107,6 +111,8 @@ func init() {
 	ResourcePrefix = os.Getenv("RESOURCE_PREFIX")
 
 	FeatureGate = featuregate.New()
+
+	UseExternalDrainer = os.Getenv("USE_EXTERNAL_DRAINER") == "true"
 }
 
 func GetPlatformType(providerID string) consts.PlatformTypes {
