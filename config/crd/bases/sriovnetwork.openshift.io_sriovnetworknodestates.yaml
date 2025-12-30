@@ -56,6 +56,13 @@ spec:
               bridges:
                 description: Bridges contains list of bridges
                 properties:
+                  groupingPolicy:
+                    description: contains OVS bridges grouping configuration
+                    enum:
+                    - perPF
+                    - perNIC
+                    - all
+                    type: string
                   ovs:
                     items:
                       description: OVSConfigExt contains configuration for the concrete
@@ -239,6 +246,13 @@ spec:
               bridges:
                 description: Bridges contains list of bridges
                 properties:
+                  groupingPolicy:
+                    description: contains OVS bridges grouping configuration
+                    enum:
+                    - perPF
+                    - perNIC
+                    - all
+                    type: string
                   ovs:
                     items:
                       description: OVSConfigExt contains configuration for the concrete

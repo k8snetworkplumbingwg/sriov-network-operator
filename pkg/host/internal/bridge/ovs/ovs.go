@@ -47,6 +47,8 @@ type Interface interface {
 	GetOVSBridges(ctx context.Context) ([]sriovnetworkv1.OVSConfigExt, error)
 	// RemoveOVSBridge removes managed OVS bridge by name
 	RemoveOVSBridge(ctx context.Context, bridgeName string) error
+	// AddInterfaceToOVSBridge adds interface to the managed OVS bridge
+	AddInterfaceToOVSBridge(ctx context.Context, bridgeName, ifaceName string) error
 	// RemoveInterfaceFromOVSBridge interface from the managed OVS bridge
 	RemoveInterfaceFromOVSBridge(ctx context.Context, ifaceAddr string) error
 }
@@ -75,7 +77,7 @@ func (o *ovs) CreateOVSBridge(ctx context.Context, conf *sriovnetworkv1.OVSConfi
 	dbClient, err := getClient(ctx)
 	if err != nil {
 		funcLog.Error(err, "CreateOVSBridge(): failed to connect to OVSDB")
-		return fmt.Errorf("failed to connect to OVSDB: %v", err)
+		return fmt.Errorf("failed to connect to OVS DB: %v", err)
 	}
 	defer dbClient.Close()
 
@@ -293,6 +295,30 @@ func (o *ovs) RemoveOVSBridge(ctx context.Context, bridgeName string) error {
 	funcLog.V(2).Info("RemoveOVSBridge(): remove managed bridge configuration from the store")
 	if err := o.store.RemoveManagedOVSBridge(brConf.Name); err != nil {
 		funcLog.Error(err, "RemoveOVSBridge(): failed to remove managed bridge configuration from the store")
+		return err
+	}
+	return nil
+}
+
+// AddInterfaceToOVSBridge adds interface to the managed OVS bridge
+func (o *ovs) AddInterfaceToOVSBridge(ctx context.Context, bridgeName, ifaceName string) error {
+	funcLog := log.Log.WithValues("bridge", bridgeName)
+	funcLog.V(2).Info("AddInterfaceToOVSBridge(): add interface to the bridge")
+	dbClient, err := getClient(ctx)
+	if err != nil {
+		funcLog.Error(err, "AddInterfaceToOVSBridge(): failed to connect to OVSDB")
+		return fmt.Errorf("failed to connect to OVS DB: %v", err)
+	}
+	bridge, err := o.getBridgeByName(ctx, dbClient, bridgeName)
+	if err != nil {
+		funcLog.Error(err, "AddInterfaceToOVSBridge(): failed to get bridge", "bridge", bridgeName)
+		return fmt.Errorf("failed to connect to get bridge: %v", err)
+	}
+	if err := o.addInterface(ctx, dbClient, bridge, &InterfaceEntry{
+		Name: ifaceName,
+		UUID: uuid.NewString(),
+	}); err != nil {
+		funcLog.Error(err, "CreateOVSBridge(): failed to add uplink interface to the bridge")
 		return err
 	}
 	return nil

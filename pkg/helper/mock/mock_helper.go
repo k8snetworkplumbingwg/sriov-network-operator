@@ -243,6 +243,20 @@ func (mr *MockHostHelpersInterfaceMockRecorder) ConfigureBridges(bridgesSpec, br
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureBridges", reflect.TypeOf((*MockHostHelpersInterface)(nil).ConfigureBridges), bridgesSpec, bridgesStatus)
 }
 
+// ConfigureBridgesGrouping mocks base method.
+func (m *MockHostHelpersInterface) ConfigureBridgesGrouping(interfaces v1.Interfaces, name, groupingPolicy string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ConfigureBridgesGrouping", interfaces, name, groupingPolicy)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ConfigureBridgesGrouping indicates an expected call of ConfigureBridgesGrouping.
+func (mr *MockHostHelpersInterfaceMockRecorder) ConfigureBridgesGrouping(interfaces, name, groupingPolicy any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureBridgesGrouping", reflect.TypeOf((*MockHostHelpersInterface)(nil).ConfigureBridgesGrouping), interfaces, name, groupingPolicy)
+}
+
 // ConfigureVfGUID mocks base method.
 func (m *MockHostHelpersInterface) ConfigureVfGUID(vfAddr, pfAddr string, vfID int, pfLink netlink.Link) error {
 	m.ctrl.T.Helper()
@@ -459,6 +473,21 @@ func (m *MockHostHelpersInterface) GetDevlinkDeviceParam(pciAddr, paramName stri
 func (mr *MockHostHelpersInterfaceMockRecorder) GetDevlinkDeviceParam(pciAddr, paramName any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevlinkDeviceParam", reflect.TypeOf((*MockHostHelpersInterface)(nil).GetDevlinkDeviceParam), pciAddr, paramName)
+}
+
+// GetDevlinkDeviceParams mocks base method.
+func (m *MockHostHelpersInterface) GetDevlinkDeviceParams(pciAddr string) ([]v1.DevlinkParam, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDevlinkDeviceParams", pciAddr)
+	ret0, _ := ret[0].([]v1.DevlinkParam)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetDevlinkDeviceParams indicates an expected call of GetDevlinkDeviceParams.
+func (mr *MockHostHelpersInterfaceMockRecorder) GetDevlinkDeviceParams(pciAddr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevlinkDeviceParams", reflect.TypeOf((*MockHostHelpersInterface)(nil).GetDevlinkDeviceParams), pciAddr)
 }
 
 // GetDriverByBusAndDevice mocks base method.

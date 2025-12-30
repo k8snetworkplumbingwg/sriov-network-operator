@@ -45,6 +45,13 @@ spec:
                   contains bridge configuration for matching PFs,
                   valid only for eSwitchMode==switchdev
                 properties:
+                  groupingPolicy:
+                    description: contains OVS bridges grouping configuration
+                    enum:
+                    - perPF
+                    - perNIC
+                    - all
+                    type: string
                   ovs:
                     description: contains configuration for the OVS bridge,
                     properties:

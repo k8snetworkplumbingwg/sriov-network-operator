@@ -87,6 +87,9 @@ type SriovNetworkNicSelector struct {
 
 // contains spec for the bridge
 type Bridge struct {
+	// contains OVS bridges grouping configuration
+	// +kubebuilder:validation:Enum=perPF;perNIC;all
+	GroupingPolicy string `json:"groupingPolicy,omitempty"`
 	// contains configuration for the OVS bridge,
 	OVS *OVSConfig `json:"ovs,omitempty"`
 }

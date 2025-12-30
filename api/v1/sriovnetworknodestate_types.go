@@ -95,7 +95,10 @@ type VirtualFunction struct {
 
 // Bridges contains list of bridges
 type Bridges struct {
-	OVS []OVSConfigExt `json:"ovs,omitempty"`
+	// contains OVS bridges grouping configuration
+	// +kubebuilder:validation:Enum=perPF;perNIC;all
+	GroupingPolicy string         `json:"groupingPolicy,omitempty"`
+	OVS            []OVSConfigExt `json:"ovs,omitempty"`
 }
 
 // OVSConfigExt contains configuration for the concrete OVS bridge

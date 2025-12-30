@@ -2,10 +2,12 @@ package bridge
 
 import (
 	"context"
+	"fmt"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/bridge/ovs"
 	ovsStorePkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/bridge/ovs/store"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
@@ -65,6 +67,44 @@ func (b *bridge) ConfigureBridges(bridgesSpec sriovnetworkv1.Bridges, bridgesSta
 			return err
 		}
 	}
+	return nil
+}
+
+// ConfigureBridgesGrouping configure bridges grouping for the host
+func (b *bridge) ConfigureBridgesGrouping(interfaces sriovnetworkv1.Interfaces, name, groupingPolicy string) error {
+	if groupingPolicy != "" {
+		if groupingPolicy != constants.OvsGroupingPolicyAll {
+			log.Log.V(2).Info("DiscoverBridges(): Not supported bridge group policy, skipping", "GroupingPolicy", groupingPolicy)
+			return nil
+		}
+		if len(interfaces) == 0 {
+			return fmt.Errorf("unsupported configuration, interfaces list must contain at least one element")
+		}
+
+		uplink := &sriovnetworkv1.OVSUplinkConfigExt{
+			PciAddress: interfaces[0].PciAddress,
+			Name:       interfaces[0].Name,
+		}
+		brName := name + "-all"
+		bridgeConf := &sriovnetworkv1.OVSConfigExt{
+			Name:    brName,
+			Uplinks: []sriovnetworkv1.OVSUplinkConfigExt{*uplink},
+		}
+		err := b.ovs.CreateOVSBridge(context.Background(), bridgeConf)
+		if err != nil {
+			log.Log.Error(err, "ConfigureBridgesGrouping(): failed to create OVS bridge", "name", bridgeConf.Name)
+			return err
+		}
+
+		for _, iface := range interfaces[1:] {
+			err := b.ovs.AddInterfaceToOVSBridge(context.Background(), brName, iface.Name)
+			if err != nil {
+				log.Log.Error(err, "ConfigureBridgesGrouping(): failed to add interface to OVS bridge", "name", bridgeConf.Name, "iface", iface.Name)
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
