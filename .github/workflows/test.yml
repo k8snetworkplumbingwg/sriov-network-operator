@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.24
+    - name: Set up Go 1.25
       uses: actions/setup-go@v6
       with:
-        go-version: 1.24.x
+        go-version: 1.25.x
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v6
@@ -32,10 +32,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.24
+    - name: Set up Go 1.25
       uses: actions/setup-go@v6
       with:
-        go-version: 1.24.x
+        go-version: 1.25.x
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v6
@@ -72,10 +72,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.24
+    - name: Set up Go 1.25
       uses: actions/setup-go@v6
       with:
-        go-version: 1.24.x
+        go-version: 1.25.x
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v6
@@ -97,10 +97,10 @@ jobs:
     name: Golangci-lint
     runs-on: ubuntu-24.04
     steps:
-    - name: Set up Go 1.24
+    - name: Set up Go 1.25
       uses: actions/setup-go@v6
       with:
-        go-version: 1.24.x
+        go-version: 1.25.x
     - name: Check out code into the Go module directory
       uses: actions/checkout@v6
     - name: run lint checks
@@ -140,10 +140,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
 
-    - name: Set up Go 1.24
+    - name: Set up Go 1.25
       uses: actions/setup-go@v6
       with:
-        go-version: 1.24.x
+        go-version: 1.25.x
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v6
@@ -195,10 +195,10 @@ jobs:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v6
 
-      - name: Set up Go 1.24
+      - name: Set up Go 1.25
         uses: actions/setup-go@v6
         with:
-          go-version: 1.24.x
+          go-version: 1.25.x
 
       - name: run test
         run: make test-e2e-conformance-virtual-k8s-cluster-ci
@@ -229,10 +229,10 @@ jobs:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v6
 
-      - name: Set up Go 1.24
+      - name: Set up Go 1.25
         uses: actions/setup-go@v6
         with:
-          go-version: 1.24.x
+          go-version: 1.25.x
 
       - name: run test
         run: make test-e2e-conformance-virtual-ocp-cluster-ci
