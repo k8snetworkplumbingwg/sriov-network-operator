@@ -170,6 +170,10 @@ spec:
             value: "{{.ClusterType}}"
           - name: DEV_MODE
             value: "{{.DevMode}}"
+          {{- if .UseExternalDrainer }}
+          - name: USE_EXTERNAL_DRAINER
+            value: "{{.UseExternalDrainer}}"
+          {{- end }}
           {{- range $key, $value := .ConfigDaemonEnvVars }}
           - name: {{ $key }}
             value: "{{ $value }}"
