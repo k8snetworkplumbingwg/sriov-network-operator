@@ -287,73 +287,29 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 			Expect(nodeState.Status.LastSyncError).To(Equal(""))
 		})
 
-		It("Should apply the reset configuration when disableDrain is true", func(ctx context.Context) {
-			DeferCleanup(func(x bool) { vars.DisableDrain = x }, vars.DisableDrain)
-			vars.DisableDrain = true
-
-			discoverSriovReturn.Store(&[]sriovnetworkv1.InterfaceExt{
-				{
-					Name:           "eno1",
-					Driver:         "ice",
-					PciAddress:     "0000:16:00.0",
-					DeviceID:       "1593",
-					Vendor:         "8086",
-					EswitchMode:    "legacy",
-					LinkAdminState: "up",
-					LinkSpeed:      "10000 Mb/s",
-					LinkType:       "ETH",
-					Mac:            "aa:bb:cc:dd:ee:ff",
-					Mtu:            1500,
-					TotalVfs:       2,
-					NumVfs:         2,
-					VFs: []sriovnetworkv1.VirtualFunction{
-						{
-							Name:       "eno1f0",
-							PciAddress: "0000:16:00.1",
-							VfID:       0,
-						},
-						{
-							Name:       "eno1f1",
-							PciAddress: "0000:16:00.2",
-							VfID:       1,
-						}},
-				},
-			})
-
-			nodeState.Spec.Interfaces = []sriovnetworkv1.Interface{
-				{Name: "eno1",
-					PciAddress: "0000:16:00.0",
-					LinkType:   "eth",
-					NumVfs:     2,
-					VfGroups: []sriovnetworkv1.VfGroup{
-						{ResourceName: "test",
-							DeviceType: "netdevice",
-							PolicyName: "test-policy",
-							VfRange:    "eno1#0-1"},
-					}},
-			}
-			err := k8sClient.Update(ctx, nodeState)
-			Expect(err).ToNot(HaveOccurred())
-
-			eventuallySyncStatusEqual(nodeState, constants.SyncStatusSucceeded)
-
-			By("Simulate node policy removal")
-			EventuallyWithOffset(1, func(g Gomega) {
-				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)
-				g.Expect(err).ToNot(HaveOccurred())
-
-				nodeState.Spec.Interfaces = []sriovnetworkv1.Interface{}
-				err = k8sClient.Update(ctx, nodeState)
-				g.Expect(err).ToNot(HaveOccurred())
-			}, waitTime, retryTime).Should(Succeed())
-
-			eventuallySyncStatusEqual(nodeState, constants.SyncStatusSucceeded)
-			assertLastStatusTransitionsContains(nodeState, 2, constants.SyncStatusInProgress)
-		})
-
 		It("Should apply external drainer annotation when useExternalDrainer is true", func(ctx context.Context) {
 			DeferCleanup(func(x bool) { vars.UseExternalDrainer = x }, vars.UseExternalDrainer)
 			vars.UseExternalDrainer = true
+
+			By("waiting for drain idle states")
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+
+				g.Expect(nodeState.Annotations[constants.NodeStateDrainAnnotation]).To(Equal(constants.DrainIdle))
+				g.Expect(nodeState.Annotations[constants.NodeStateDrainAnnotationCurrent]).To(Equal(constants.DrainIdle))
+			}, waitTime, retryTime).Should(Succeed())
+
+			// trigger reconcile to add external drainer annotation
+			patchAnnotation(nodeState, "foo", "bar")
+			By("waiting for external drainer annotation to be added")
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+
+				// verify that external drainer annotation exist
+				g.Expect(nodeState.Annotations[constants.NodeStateExternalDrainerAnnotation]).To(Equal("true"))
+			}, waitTime, retryTime).Should(Succeed())
 
 			discoverSriovReturn.Store(&[]sriovnetworkv1.InterfaceExt{
 				{
@@ -410,7 +366,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 				g.Expect(err).ToNot(HaveOccurred())
 			}, waitTime, retryTime).Should(Succeed())
 
-			By("waiting to require drain")
+			By("waiting for drain required and external drainer annotation to be added")
 			EventuallyWithOffset(1, func(g Gomega) {
 				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
 					ToNot(HaveOccurred())
@@ -436,11 +392,113 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 					ToNot(HaveOccurred())
 
 				g.Expect(nodeState.Status.SyncStatus).To(Equal(constants.SyncStatusSucceeded))
-				// verify that external drainer annotation is removed
-				g.Expect(nodeState.Annotations).NotTo(ContainElement(constants.NodeStateExternalDrainerAnnotation))
+				g.Expect(nodeState.Annotations[constants.NodeStateDrainAnnotation]).To(Equal(constants.DrainIdle))
+			}, waitTime, retryTime).Should(Succeed())
+
+			// disable external drainer flag
+			vars.UseExternalDrainer = false
+			// remove 'foo' annotation to trigger reconcile that should remove external drainer annotation
+			original := nodeState.DeepCopy()
+			delete(nodeState.Annotations, "foo")
+			Expect(k8sClient.Patch(context.Background(), nodeState, client.MergeFrom(original))).ToNot(HaveOccurred())
+
+			By("waiting for external drainer annotation to be removed")
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+
+				// verify that external drainer annotation does not exist
+				g.Expect(nodeState.Annotations).ToNot(ContainElement(constants.NodeStateExternalDrainerAnnotation))
 			}, waitTime, retryTime).Should(Succeed())
 
 			Expect(nodeState.Status.LastSyncError).To(Equal(""))
+		})
+
+		It("Should apply the reset configuration when disableDrain is true", func(ctx context.Context) {
+			DeferCleanup(func(x bool) { vars.DisableDrain = x }, vars.DisableDrain)
+			vars.DisableDrain = true
+
+			By("waiting for drain idle states")
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+
+				g.Expect(nodeState.Annotations[constants.NodeStateDrainAnnotation]).To(Equal(constants.DrainIdle))
+				g.Expect(nodeState.Annotations[constants.NodeStateDrainAnnotationCurrent]).To(Equal(constants.DrainIdle))
+			}, waitTime, retryTime).Should(Succeed())
+
+			discoverSriovReturn.Store(&[]sriovnetworkv1.InterfaceExt{
+				{
+					Name:           "eno1",
+					Driver:         "ice",
+					PciAddress:     "0000:16:00.0",
+					DeviceID:       "1593",
+					Vendor:         "8086",
+					EswitchMode:    "legacy",
+					LinkAdminState: "up",
+					LinkSpeed:      "10000 Mb/s",
+					LinkType:       "ETH",
+					Mac:            "aa:bb:cc:dd:ee:ff",
+					Mtu:            1500,
+					TotalVfs:       2,
+					NumVfs:         2,
+					VFs: []sriovnetworkv1.VirtualFunction{
+						{
+							Name:       "eno1f0",
+							PciAddress: "0000:16:00.1",
+							VfID:       0,
+						},
+						{
+							Name:       "eno1f1",
+							PciAddress: "0000:16:00.2",
+							VfID:       1,
+						}},
+				},
+			})
+
+			EventuallyWithOffset(1, func(g Gomega) {
+				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				nodeState.Spec.Interfaces = []sriovnetworkv1.Interface{
+					{Name: "eno1",
+						PciAddress: "0000:16:00.0",
+						LinkType:   "eth",
+						NumVfs:     2,
+						VfGroups: []sriovnetworkv1.VfGroup{
+							{ResourceName: "test",
+								DeviceType: "netdevice",
+								PolicyName: "test-policy",
+								VfRange:    "eno1#0-1"},
+						}},
+				}
+				err = k8sClient.Update(ctx, nodeState)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, waitTime, retryTime).Should(Succeed())
+
+			eventuallySyncStatusEqual(nodeState, constants.SyncStatusSucceeded)
+
+			By("Simulate node policy removal")
+			EventuallyWithOffset(1, func(g Gomega) {
+				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				nodeState.Spec.Interfaces = []sriovnetworkv1.Interface{}
+				err = k8sClient.Update(ctx, nodeState)
+				g.Expect(err).ToNot(HaveOccurred())
+			}, waitTime, retryTime).Should(Succeed())
+
+			eventuallySyncStatusEqual(nodeState, constants.SyncStatusSucceeded)
+			assertLastStatusTransitionsContains(nodeState, 2, constants.SyncStatusInProgress)
+
+			By("waiting for drain idle")
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+
+				g.Expect(nodeState.Annotations[constants.NodeStateDrainAnnotation]).To(Equal(constants.DrainIdle))
+
+			}, waitTime, retryTime).Should(Succeed())
 		})
 	})
 })
