@@ -279,9 +279,8 @@ var _ = Describe("SRIOV", func() {
 
 		It("should not run mstconfig if no configuration is needed", func() {
 			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
-				getBFMstconfigOutput(false, false),
-				"", nil)
-                err := m.MlxConfigFW(map[string]MlxNic{"0000:d8:00.0": {EnableSriov: false, TotalVfs: -1, Multiport: -1}})
+				getBFMstconfigOutput(false, false), "", nil)
+			err := m.MlxConfigFW(map[string]MlxNic{"0000:d8:00.0": {EnableSriov: false, TotalVfs: -1, Multiport: -1}})
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -600,6 +599,292 @@ var _ = Describe("SRIOV", func() {
 		It("should handle different PCI prefixes", func() {
 			result := getOtherPortPCIAddress("0000:d9:00.0")
 			Expect(result).To(Equal("0000:d9:00.1"))
+		})
+	})
+
+	Context("HandleESwitchParams", func() {
+		It("should return false if no devlink params are specified", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				NumVfs:     10,
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {PciAddress: "0000:d8:00.0"},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(-1))
+		})
+
+		It("should return false if devlink params match status", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "true"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						Params: []sriovnetworkv1.DevlinkParam{
+							{Name: "esw_multiport", Value: "true"},
+						},
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(-1))
+		})
+
+		It("should return true and set Multiport to 1 if esw_multiport should be enabled", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "true"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						Params: []sriovnetworkv1.DevlinkParam{
+							{Name: "esw_multiport", Value: "false"},
+						},
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeTrue())
+			Expect(attrs.Multiport).To(Equal(1))
+		})
+
+		It("should return true and set Multiport to 0 if esw_multiport should be disabled", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "false"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						Params: []sriovnetworkv1.DevlinkParam{
+							{Name: "esw_multiport", Value: "true"},
+						},
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeTrue())
+			Expect(attrs.Multiport).To(Equal(0))
+		})
+
+		It("should return true and set Multiport to 1 if esw_multiport is not found in status but requested", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "true"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress:    "0000:d8:00.0",
+					Name:          "eth0",
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						// No esw_multiport parameter in status
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeTrue())
+			Expect(attrs.Multiport).To(Equal(1))
+		})
+
+		It("should return false if first port spec does not exist", func() {
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {PciAddress: "0000:d8:00.0"},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(0))
+		})
+
+		It("should ignore other devlink params and only check esw_multiport", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "other_param", Value: "value1"},
+						{Name: "another_param", Value: "value2"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						Params: []sriovnetworkv1.DevlinkParam{
+							{Name: "other_param", Value: "different_value"},
+						},
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(-1))
+		})
+
+		It("should return false if interface name does not match", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "true"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth1", // Different name
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						Params: []sriovnetworkv1.DevlinkParam{
+							{Name: "esw_multiport", Value: "false"},
+						},
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(-1))
+		})
+
+		It("should handle multiple devlink params with esw_multiport among them", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "param1", Value: "value1"},
+						{Name: "esw_multiport", Value: "true"},
+						{Name: "param2", Value: "value2"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+					DevlinkParams: sriovnetworkv1.DevlinkParams{
+						Params: []sriovnetworkv1.DevlinkParam{
+							{Name: "param1", Value: "value1"},
+							{Name: "esw_multiport", Value: "false"},
+							{Name: "param2", Value: "value2"},
+						},
+					},
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeTrue())
+			Expect(attrs.Multiport).To(Equal(1))
 		})
 	})
 })

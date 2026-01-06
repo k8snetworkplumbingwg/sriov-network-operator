@@ -102,7 +102,6 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().DiscoverVDPAType("0000:d8:00.2").Return("")
 
 			hostMock.EXPECT().TryGetInterfaceName("0000:d8:00.2").Return("enp216s0f0v0")
-			hostMock.EXPECT().GetDevlinkDeviceParams("0000:d8:00.0").Return(nil, nil)
 			vfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0v0").Return(vfLinkMock, nil)
 
@@ -113,6 +112,11 @@ var _ = Describe("SRIOV", func() {
 			}).MinTimes(1)
 
 			sriovnetLibMock.EXPECT().GetVfRepresentor("enp216s0f0np0", 0).Return("enp216s0f0np0_0", nil)
+
+			hostMock.EXPECT().GetDevlinkDeviceParams("0000:d8:00.0").Return([]sriovnetworkv1.DevlinkParam{
+				{Name: "flow_steering_mode", Value: "smfs", Cmode: "runtime"},
+				{Name: "enable_roce", Value: "true", Cmode: "driverinit"},
+			}, nil)
 
 			ret, err := s.DiscoverSriovDevices(storeManagerMode)
 			Expect(err).NotTo(HaveOccurred())
@@ -144,6 +148,12 @@ var _ = Describe("SRIOV", func() {
 					RepresentorName: "enp216s0f0np0_0",
 					GUID:            "guid1",
 				}},
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "flow_steering_mode", Value: "smfs", Cmode: "runtime"},
+						{Name: "enable_roce", Value: "true", Cmode: "driverinit"},
+					},
+				},
 			}))
 		})
 	})
