@@ -53,7 +53,7 @@ GOLANGCI_LINT = $(BIN_DIR)/golangci-lint
 # golangci-lint version should be updated periodically
 # we keep it fixed to avoid it from unexpectedly failing on the project
 # in case of a version bump
-GOLANGCI_LINT_VER = v2.6.2
+GOLANGCI_LINT_VER = v2.7.2
 
 .PHONY: all build clean gendeepcopy test test-e2e test-e2e-k8s run image fmt sync-manifests test-e2e-conformance manifests update-codegen
 
@@ -136,7 +136,7 @@ mock-generate: gomock
 
 CONTROLLER_GEN = $(BIN_DIR)/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
-	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0)
 
 ENVTEST = $(BIN_DIR)/setup-envtest
 envtest: ## Download envtest-setup locally if necessary.
@@ -256,7 +256,7 @@ $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
 YQ=$(BIN_DIR)/yq
-YQ_VERSION=v4.44.1
+YQ_VERSION=v4.50.1
 $(YQ): | $(BIN_DIR); $(info installing yq)
 	@curl -fsSL -o $(YQ) https://github.com/mikefarah/yq/releases/download/$(YQ_VERSION)/yq_linux_amd64 && chmod +x $(YQ)
 
