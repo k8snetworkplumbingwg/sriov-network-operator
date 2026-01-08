@@ -38,10 +38,29 @@ type OvsHardwareOffloadConfig struct {
 
 // SriovNetworkPoolConfigStatus defines the observed state of SriovNetworkPoolConfig
 type SriovNetworkPoolConfigStatus struct {
+	// MatchedNodeCount is the number of nodes that match the nodeSelector for this pool
+	MatchedNodeCount int `json:"matchedNodeCount"`
+
+	// ReadyNodeCount is the number of matched nodes that have successfully applied the configuration
+	ReadyNodeCount int `json:"readyNodeCount"`
+
+	// Conditions represent the latest available observations of the SriovNetworkPoolConfig's state
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Matched",type=integer,JSONPath=`.status.matchedNodeCount`
+//+kubebuilder:printcolumn:name="Ready Nodes",type=integer,JSONPath=`.status.readyNodeCount`
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+//+kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=`.status.conditions[?(@.type=="Progressing")].status`
+//+kubebuilder:printcolumn:name="Degraded",type=string,JSONPath=`.status.conditions[?(@.type=="Degraded")].status`
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SriovNetworkPoolConfig is the Schema for the sriovnetworkpoolconfigs API
 type SriovNetworkPoolConfig struct {
