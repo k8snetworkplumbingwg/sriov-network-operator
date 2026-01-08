@@ -447,6 +447,14 @@ func (p *GenericPlugin) addVfioDesiredKernelArg(state *sriovnetworkv1.SriovNetwo
 }
 
 func (p *GenericPlugin) configRdmaKernelArg(state *sriovnetworkv1.SriovNetworkNodeState) error {
+	current := state.Status.System.RdmaMode
+	desired := state.Spec.System.RdmaMode
+
+	// RDMA mode already matches desired state, skipping kernel arg changes
+	if desired == current {
+		return p.helpers.SetRDMASubsystem(desired)
+	}
+
 	if state.Spec.System.RdmaMode == "" {
 		p.disableDesiredKernelArgs(consts.KernelArgRdmaExclusive)
 		p.disableDesiredKernelArgs(consts.KernelArgRdmaShared)
