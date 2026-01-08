@@ -15,6 +15,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
@@ -692,6 +693,16 @@ func (cr *SriovIBNetwork) NetworkNamespace() string {
 	return cr.Spec.NetworkNamespace
 }
 
+// GetConditions returns the conditions from the status
+func (cr *SriovIBNetwork) GetConditions() []metav1.Condition {
+	return cr.Status.Conditions
+}
+
+// SetConditions sets the conditions in the status
+func (cr *SriovIBNetwork) SetConditions(conditions []metav1.Condition) {
+	cr.Status.Conditions = conditions
+}
+
 // RenderNetAttDef renders a net-att-def for sriov CNI
 func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
@@ -811,6 +822,16 @@ func (cr *SriovNetwork) NetworkNamespace() string {
 	return cr.Spec.NetworkNamespace
 }
 
+// GetConditions returns the conditions from the status
+func (cr *SriovNetwork) GetConditions() []metav1.Condition {
+	return cr.Status.Conditions
+}
+
+// SetConditions sets the conditions in the status
+func (cr *SriovNetwork) SetConditions(conditions []metav1.Condition) {
+	cr.Status.Conditions = conditions
+}
+
 // RenderNetAttDef renders a net-att-def for sriov CNI
 func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
@@ -872,6 +893,16 @@ func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 // NetworkNamespace returns target network namespace for the network
 func (cr *OVSNetwork) NetworkNamespace() string {
 	return cr.Spec.NetworkNamespace
+}
+
+// GetConditions returns the conditions from the status
+func (cr *OVSNetwork) GetConditions() []metav1.Condition {
+	return cr.Status.Conditions
+}
+
+// SetConditions sets the conditions in the status
+func (cr *OVSNetwork) SetConditions(conditions []metav1.Condition) {
+	cr.Status.Conditions = conditions
 }
 
 // NetFilterMatch -- parse netFilter and check for a match
@@ -993,4 +1024,225 @@ func OwnerRefToString(cr client.Object) string {
 	}
 
 	return cr.GetObjectKind().GroupVersionKind().GroupKind().String() + "/" + cr.GetNamespace() + "/" + cr.GetName()
+}
+
+// SetConfigurationConditions sets configuration-related conditions based on the SyncStatus value
+func (s *SriovNetworkNodeState) SetConfigurationConditions(syncStatus, failedMessage string) {
+	generation := s.Generation
+
+	switch syncStatus {
+	case consts.SyncStatusInProgress:
+		// Configuration is in progress
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionProgressing,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonApplyingConfiguration,
+			Message:            "Node configuration is in progress",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotReady,
+			Message:            "Node configuration is in progress",
+			ObservedGeneration: generation,
+		})
+		// If there's a previous error message, keep Degraded=True while retrying
+		if failedMessage != "" {
+			meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+				Type:               ConditionDegraded,
+				Status:             metav1.ConditionTrue,
+				Reason:             ReasonConfigurationFailed,
+				Message:            "Retrying after previous failure: " + failedMessage,
+				ObservedGeneration: generation,
+			})
+		} else {
+			meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+				Type:               ConditionDegraded,
+				Status:             metav1.ConditionFalse,
+				Reason:             ReasonNotDegraded,
+				Message:            "Node configuration is in progress",
+				ObservedGeneration: generation,
+			})
+		}
+
+	case consts.SyncStatusSucceeded:
+		// Configuration succeeded
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionProgressing,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotProgressing,
+			Message:            "Node configuration completed successfully",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonNodeReady,
+			Message:            "Node configuration is ready",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDegraded,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotDegraded,
+			Message:            "Node is functioning correctly",
+			ObservedGeneration: generation,
+		})
+
+	case consts.SyncStatusFailed:
+		// Configuration failed
+		message := "Node configuration failed"
+		if failedMessage != "" {
+			message = fmt.Sprintf("Node configuration failed: %s", failedMessage)
+		}
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionProgressing,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotProgressing,
+			Message:            "Configuration attempt completed with failure",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotReady,
+			Message:            message,
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDegraded,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonConfigurationFailed,
+			Message:            message,
+			ObservedGeneration: generation,
+		})
+	}
+}
+
+// SetDrainConditions sets drain-related conditions based on the drain state
+func (s *SriovNetworkNodeState) SetDrainConditions(state DrainState, errorMessage string) {
+	generation := s.Generation
+
+	switch state {
+	case DrainStateIdle:
+		// No drain in progress - clear all drain conditions
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainProgressing,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotProgressing,
+			Message:            "No drain operation in progress",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainDegraded,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotDegraded,
+			Message:            "No drain errors",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainComplete,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonDrainNotNeeded,
+			Message:            "No drain required",
+			ObservedGeneration: generation,
+		})
+
+	case DrainStateDraining:
+		// Drain in progress, no errors
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainProgressing,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonDrainingNode,
+			Message:            "Node drain is in progress",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainDegraded,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotDegraded,
+			Message:            "No drain errors",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainComplete,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonDrainPending,
+			Message:            "Drain operation pending completion",
+			ObservedGeneration: generation,
+		})
+
+	case DrainStateDrainingWithErrors:
+		// Drain in progress but encountering errors
+		message := "Node drain encountered errors"
+		if errorMessage != "" {
+			message = fmt.Sprintf("Node drain encountered errors: %s", errorMessage)
+		}
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainProgressing,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonDrainingNode,
+			Message:            "Node drain is in progress",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainDegraded,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonDrainFailed,
+			Message:            message,
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainComplete,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonDrainPending,
+			Message:            "Drain operation pending completion",
+			ObservedGeneration: generation,
+		})
+
+	case DrainStateComplete:
+		// Drain completed successfully
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainProgressing,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotProgressing,
+			Message:            "Node drain completed",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainDegraded,
+			Status:             metav1.ConditionFalse,
+			Reason:             ReasonNotDegraded,
+			Message:            "No drain errors",
+			ObservedGeneration: generation,
+		})
+		meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{
+			Type:               ConditionDrainComplete,
+			Status:             metav1.ConditionTrue,
+			Reason:             ReasonDrainCompleted,
+			Message:            "Drain operation completed successfully",
+			ObservedGeneration: generation,
+		})
+	}
+}
+
+// GetConditions returns the conditions from SriovOperatorConfig status
+func (s *SriovOperatorConfig) GetConditions() []metav1.Condition {
+	return s.Status.Conditions
+}
+
+// SetConditions sets the conditions in SriovOperatorConfig status
+func (s *SriovOperatorConfig) SetConditions(conditions []metav1.Condition) {
+	s.Status.Conditions = conditions
+}
+
+// GetConditions returns the conditions from SriovNetworkNodePolicy status
+func (p *SriovNetworkNodePolicy) GetConditions() []metav1.Condition {
+	return p.Status.Conditions
+}
+
+// SetConditions sets the conditions in SriovNetworkNodePolicy status
+func (p *SriovNetworkNodePolicy) SetConditions(conditions []metav1.Condition) {
+	p.Status.Conditions = conditions
 }
