@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,33 +16,38 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
 )
 
 var _ = Describe("All Network Controllers", Ordered, func() {
 	var cancel context.CancelFunc
 	var ctx context.Context
-
 	BeforeAll(func() {
 		By("Setup controller manager")
 		k8sManager, err := setupK8sManagerForTest()
 		Expect(err).ToNot(HaveOccurred())
 
+		statusPatcher := status.NewPatcher(k8sManager.GetClient(), k8sManager.GetEventRecorderFor("test"), k8sManager.GetScheme())
+
 		err = (&SriovNetworkReconciler{
-			Client: k8sManager.GetClient(),
-			Scheme: k8sManager.GetScheme(),
+			Client:        k8sManager.GetClient(),
+			Scheme:        k8sManager.GetScheme(),
+			StatusPatcher: statusPatcher,
 		}).SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
 		err = (&SriovIBNetworkReconciler{
-			Client: k8sManager.GetClient(),
-			Scheme: k8sManager.GetScheme(),
+			Client:        k8sManager.GetClient(),
+			Scheme:        k8sManager.GetScheme(),
+			StatusPatcher: statusPatcher,
 		}).SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
 		err = (&OVSNetworkReconciler{
-			Client: k8sManager.GetClient(),
-			Scheme: k8sManager.GetScheme(),
+			Client:        k8sManager.GetClient(),
+			Scheme:        k8sManager.GetScheme(),
+			StatusPatcher: statusPatcher,
 		}).SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -145,6 +151,30 @@ var _ = Describe("All Network Controllers", Ordered, func() {
 					g.Expect(netAttDef.Spec.Config).To(ContainSubstring(`"sriov"`))
 					g.Expect(netAttDef.Spec.Config).ToNot(ContainSubstring(`"ib-sriov"`))
 				}).WithPolling(30 * time.Millisecond).WithTimeout(300 * time.Millisecond).Should(Succeed())
+
+				By("Check that the second network has Degraded condition due to ownership conflict")
+				Eventually(func(g Gomega) {
+					network := &sriovnetworkv1.SriovIBNetwork{}
+					err := k8sClient.Get(ctx, client.ObjectKey{Name: cr2.Name, Namespace: cr2.Namespace}, network)
+					g.Expect(err).NotTo(HaveOccurred())
+
+					conditions := network.Status.Conditions
+					g.Expect(conditions).NotTo(BeEmpty())
+
+					// The second network should have Ready=False since it couldn't provision
+					readyCondition := findCondition(conditions, sriovnetworkv1.ConditionReady)
+					g.Expect(readyCondition).NotTo(BeNil())
+					g.Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonProvisioningFailed))
+					g.Expect(readyCondition.Message).To(ContainSubstring("Failed to provision network"))
+
+					// The second network should have Degraded=True
+					degradedCondition := findCondition(conditions, sriovnetworkv1.ConditionDegraded)
+					g.Expect(degradedCondition).NotTo(BeNil())
+					g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionTrue))
+					g.Expect(degradedCondition.Reason).To(Equal(sriovnetworkv1.ReasonProvisioningFailed))
+					g.Expect(degradedCondition.Message).To(ContainSubstring("NetworkAttachmentDefinition provisioning failed"))
+				}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
 			})
 
 			It("when using the same network type with the same name, in different namespaces", func() {
@@ -178,7 +208,277 @@ var _ = Describe("All Network Controllers", Ordered, func() {
 					g.Expect(netAttDef.Spec.Config).To(ContainSubstring(`"min_tx_rate": 42`))
 					g.Expect(netAttDef.Spec.Config).ToNot(ContainSubstring(`"min_tx_rate": 84`))
 				}).WithPolling(30 * time.Millisecond).WithTimeout(300 * time.Millisecond).Should(Succeed())
+
+				By("Check that the second network has Degraded condition due to same name conflict")
+				Eventually(func(g Gomega) {
+					network := &sriovnetworkv1.SriovNetwork{}
+					err := k8sClient.Get(ctx, client.ObjectKey{Name: cr2.Name, Namespace: cr2.Namespace}, network)
+					g.Expect(err).NotTo(HaveOccurred())
+
+					conditions := network.Status.Conditions
+					g.Expect(conditions).NotTo(BeEmpty())
+
+					// The second network should have Ready=False since it couldn't provision
+					readyCondition := findCondition(conditions, sriovnetworkv1.ConditionReady)
+					g.Expect(readyCondition).NotTo(BeNil())
+					g.Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonProvisioningFailed))
+
+					// The second network should have Degraded=True
+					degradedCondition := findCondition(conditions, sriovnetworkv1.ConditionDegraded)
+					g.Expect(degradedCondition).NotTo(BeNil())
+					g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionTrue))
+					g.Expect(degradedCondition.Reason).To(Equal(sriovnetworkv1.ReasonProvisioningFailed))
+				}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
 			})
+		})
+	})
+
+	Context("Conditions", func() {
+
+		AfterEach(func() {
+			cleanNetworksInNamespace(testNamespace)
+			cleanNetworksInNamespace("default")
+		})
+
+		It("should set Ready condition when NetworkAttachmentDefinition is created", func() {
+			cr := sriovnetworkv1.SriovNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ready-condition",
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovNetworkSpec{
+					NetworkNamespace: "default",
+					ResourceName:     "test-resource",
+				},
+			}
+
+			err := k8sClient.Create(ctx, &cr)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check Ready condition is True
+				g.Expect(network.Status.Conditions).ToNot(BeEmpty())
+				readyCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonNetworkReady))
+				g.Expect(readyCondition.ObservedGeneration).To(Equal(network.Generation))
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+		})
+
+		It("should set Degraded condition to False when network is healthy", func() {
+			cr := sriovnetworkv1.SriovIBNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-healthy-condition",
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovIBNetworkSpec{
+					NetworkNamespace: "default",
+					ResourceName:     "test-resource",
+				},
+			}
+
+			err := k8sClient.Create(ctx, &cr)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovIBNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check Degraded condition is False
+				g.Expect(network.Status.Conditions).ToNot(BeEmpty())
+				degradedCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+				g.Expect(degradedCondition).ToNot(BeNil())
+				g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(degradedCondition.Reason).To(Equal(sriovnetworkv1.ReasonNotDegraded))
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+		})
+
+		It("should set Ready to False when waiting for namespace", func() {
+			cr := sriovnetworkv1.OVSNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-waiting-condition",
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.OVSNetworkSpec{
+					NetworkNamespace: "nonexistent-namespace",
+					ResourceName:     "test-resource",
+				},
+			}
+
+			err := k8sClient.Create(ctx, &cr)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.OVSNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check Ready condition is False with NotReady reason
+				g.Expect(network.Status.Conditions).ToNot(BeEmpty())
+				readyCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonNotReady))
+				g.Expect(readyCondition.Message).To(ContainSubstring("Waiting for target namespace"))
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+		})
+
+		It("should update ObservedGeneration when spec changes", func() {
+			cr := sriovnetworkv1.SriovNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-generation",
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovNetworkSpec{
+					NetworkNamespace: "default",
+					ResourceName:     "test-resource",
+					Vlan:             100,
+				},
+			}
+
+			err := k8sClient.Create(ctx, &cr)
+			Expect(err).NotTo(HaveOccurred())
+
+			var initialGeneration int64
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(network.Status.Conditions).ToNot(BeEmpty())
+
+				readyCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				initialGeneration = readyCondition.ObservedGeneration
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+
+			// Update the spec
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				network.Spec.Vlan = 200
+				err = k8sClient.Update(ctx, network)
+				g.Expect(err).NotTo(HaveOccurred())
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+
+			// Verify ObservedGeneration is updated
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				readyCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.ObservedGeneration).To(BeNumerically(">", initialGeneration))
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+		})
+
+		It("should maintain both Ready and Degraded conditions", func() {
+			cr := sriovnetworkv1.SriovNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-multiple-conditions",
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovNetworkSpec{
+					NetworkNamespace: "default",
+					ResourceName:     "test-resource",
+				},
+			}
+
+			err := k8sClient.Create(ctx, &cr)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Should have both Ready and Degraded conditions
+				g.Expect(network.Status.Conditions).To(HaveLen(2))
+
+				readyCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+
+				degradedCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+				g.Expect(degradedCondition).ToNot(BeNil())
+				g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionFalse))
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+		})
+
+		It("should work for all network types (SriovNetwork, SriovIBNetwork, OVSNetwork)", func() {
+			networks := []struct {
+				name string
+				obj  client.Object
+			}{
+				{
+					name: "sriov-test",
+					obj: &sriovnetworkv1.SriovNetwork{
+						ObjectMeta: metav1.ObjectMeta{Name: "sriov-test", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkSpec{NetworkNamespace: "default", ResourceName: "test"},
+					},
+				},
+				{
+					name: "sriovib-test",
+					obj: &sriovnetworkv1.SriovIBNetwork{
+						ObjectMeta: metav1.ObjectMeta{Name: "sriovib-test", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovIBNetworkSpec{NetworkNamespace: "default", ResourceName: "test"},
+					},
+				},
+				{
+					name: "ovs-test",
+					obj: &sriovnetworkv1.OVSNetwork{
+						ObjectMeta: metav1.ObjectMeta{Name: "ovs-test", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.OVSNetworkSpec{NetworkNamespace: "default", ResourceName: "test"},
+					},
+				},
+			}
+
+			for _, network := range networks {
+				err := k8sClient.Create(ctx, network.obj)
+				Expect(err).NotTo(HaveOccurred())
+
+				Eventually(func(g Gomega) {
+					var networkWithConditions NetworkCRInstance
+					switch v := network.obj.(type) {
+					case *sriovnetworkv1.SriovNetwork:
+						n := &sriovnetworkv1.SriovNetwork{}
+						err := k8sClient.Get(ctx, client.ObjectKey{Name: network.name, Namespace: testNamespace}, n)
+						g.Expect(err).NotTo(HaveOccurred())
+						networkWithConditions = n
+					case *sriovnetworkv1.SriovIBNetwork:
+						n := &sriovnetworkv1.SriovIBNetwork{}
+						err := k8sClient.Get(ctx, client.ObjectKey{Name: network.name, Namespace: testNamespace}, n)
+						g.Expect(err).NotTo(HaveOccurred())
+						networkWithConditions = n
+					case *sriovnetworkv1.OVSNetwork:
+						n := &sriovnetworkv1.OVSNetwork{}
+						err := k8sClient.Get(ctx, client.ObjectKey{Name: network.name, Namespace: testNamespace}, n)
+						g.Expect(err).NotTo(HaveOccurred())
+						networkWithConditions = n
+					default:
+						Fail(fmt.Sprintf("unexpected network type: %T", v))
+					}
+
+					// Verify conditions are set
+					conditions := networkWithConditions.GetConditions()
+					g.Expect(conditions).ToNot(BeEmpty())
+
+					// Verify Ready condition
+					readyCondition := findCondition(conditions, sriovnetworkv1.ConditionReady)
+					g.Expect(readyCondition).ToNot(BeNil())
+					g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+					g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonNetworkReady))
+				}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+			}
 		})
 	})
 
