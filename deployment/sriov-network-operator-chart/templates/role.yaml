@@ -103,6 +103,14 @@ rules:
     verbs:
       - '*'
   - apiGroups:
+      - sriovnetwork.openshift.io
+    resources:
+      - sriovnetworknodestates/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
       - security.openshift.io
     resourceNames:
       - privileged

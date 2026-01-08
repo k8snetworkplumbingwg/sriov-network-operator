@@ -32,6 +32,16 @@ rules:
   - apiGroups: ["sriovnetwork.openshift.io"]
     resources: ["*"]
     verbs: ["*"]
+  - apiGroups: ["sriovnetwork.openshift.io"]
+    resources:
+      - "sriovnetworknodepolicies/status"
+      - "sriovnetworks/status"
+      - "sriovnetworkpoolconfigs/status"
+      - "ovsnetworks/status"
+      - "sriovibnetworks/status"
+      - "sriovoperatorconfigs/status"
+      - "sriovnetworknodestates/status"
+    verbs: ["get", "patch", "update"]
   - apiGroups: ["machineconfiguration.openshift.io"]
     resources: ["*"]
     verbs: ["*"]
