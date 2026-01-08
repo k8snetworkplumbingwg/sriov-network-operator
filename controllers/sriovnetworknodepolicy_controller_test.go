@@ -151,10 +151,15 @@ var _ = Describe("SriovnetworkNodePolicy controller", Ordered, func() {
 
 		By("Create SriovOperatorConfig controller k8s objs")
 		config := makeDefaultSriovOpConfig()
-		Expect(k8sClient.Create(context.Background(), config)).Should(Succeed())
+		err := k8sClient.Create(context.Background(), config)
+		if err != nil && !errors.IsAlreadyExists(err) {
+			Expect(err).ToNot(HaveOccurred())
+		}
 		DeferCleanup(func() {
 			err := k8sClient.Delete(context.Background(), config)
-			Expect(err).ToNot(HaveOccurred())
+			if err != nil && !errors.IsNotFound(err) {
+				Expect(err).ToNot(HaveOccurred())
+			}
 		})
 
 		// setup controller manager

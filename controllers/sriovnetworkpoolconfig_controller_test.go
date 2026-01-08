@@ -125,7 +125,9 @@ var _ = Describe("SriovNetworkPoolConfig controller", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(func() {
 				err = k8sClient.Delete(ctx, config)
-				Expect(err).ToNot(HaveOccurred())
+				if err != nil && !errors.IsNotFound(err) {
+					Expect(err).ToNot(HaveOccurred())
+				}
 			})
 
 			Eventually(func() error {
