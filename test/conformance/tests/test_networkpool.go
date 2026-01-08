@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -72,6 +73,15 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			By("configure rdma mode to exclusive")
 			err := clients.Create(context.Background(), networkPool)
 			Expect(err).ToNot(HaveOccurred())
+
+			By("Verifying PoolConfig has matched node")
+			Eventually(func(g Gomega) {
+				pool := &sriovv1.SriovNetworkPoolConfig{}
+				err = clients.Get(context.Background(), client.ObjectKey{Name: testNode, Namespace: operatorNamespace}, pool)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(pool.Status.MatchedNodeCount).To(Equal(1))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
 			By("waiting for operator to finish the configuration")
 			WaitForSRIOVStable()
 			nodeState := &sriovv1.SriovNetworkNodeState{}
@@ -81,6 +91,10 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 				g.Expect(nodeState.Spec.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeExclusive))
 				g.Expect(nodeState.Status.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeExclusive))
 			}, 20*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Verifying PoolConfig Ready condition after exclusive mode configuration")
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
 
 			By("Checking rdma mode and kernel args")
 			cmdlineOutput, _, err := runCommandOnConfigDaemon(testNode, "/bin/bash", "-c", "cat /host/proc/cmdline")
@@ -110,6 +124,10 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 				g.Expect(nodeState.Spec.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeShared))
 				g.Expect(nodeState.Status.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeShared))
 			}, 20*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Verifying PoolConfig Ready condition after shared mode configuration")
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
 
 			By("Checking rdma mode and kernel args")
 			cmdlineOutput, _, err = runCommandOnConfigDaemon(testNode, "/bin/bash", "-c", "cat /host/proc/cmdline")
@@ -219,6 +237,10 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 				g.Expect(nodeState.Spec.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeExclusive))
 				g.Expect(nodeState.Status.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeExclusive))
 			}, 20*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Verifying PoolConfig Ready condition")
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
 		})
 
 		It("should run pod with RDMA cni and expose nic metrics and another one without rdma info", func() {
@@ -347,6 +369,10 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 				g.Expect(nodeState.Spec.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeShared))
 				g.Expect(nodeState.Status.System.RdmaMode).To(Equal(consts.RdmaSubsystemModeShared))
 			}, 20*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("Verifying PoolConfig Ready condition")
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+			assertCondition(&sriovv1.SriovNetworkPoolConfig{}, testNode, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
 		})
 
 		It("should run pod without RDMA cni and not expose nic metrics", func() {
@@ -370,6 +396,44 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			num, err := strconv.Atoi(strOut)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(num).To(BeNumerically("==", 0))
+		})
+	})
+
+	Context("PoolConfig Status Conditions Edge Cases", func() {
+		It("should report NoMatchingNodes when nodeSelector matches nothing", func() {
+			pool := &sriovv1.SriovNetworkPoolConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "no-match-pool",
+					Namespace: operatorNamespace,
+				},
+				Spec: sriovv1.SriovNetworkPoolConfigSpec{
+					NodeSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"non-existent-label": "value",
+						},
+					},
+				},
+			}
+			err := clients.Create(context.Background(), pool)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() {
+				err := clients.Delete(context.Background(), pool)
+				Expect(err).ToNot(HaveOccurred())
+			}()
+
+			Eventually(func(g Gomega) {
+				err = clients.Get(context.Background(), client.ObjectKey{
+					Name:      pool.Name,
+					Namespace: operatorNamespace,
+				}, pool)
+				g.Expect(err).ToNot(HaveOccurred())
+
+				cond := meta.FindStatusCondition(pool.Status.Conditions, sriovv1.ConditionReady)
+				g.Expect(cond).ToNot(BeNil())
+				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(cond.Reason).To(Equal(sriovv1.ReasonNoMatchingNodes))
+				g.Expect(pool.Status.MatchedNodeCount).To(Equal(0))
+			}, 30*time.Second, 1*time.Second).Should(Succeed())
 		})
 	})
 })

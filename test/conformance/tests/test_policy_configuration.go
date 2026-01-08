@@ -76,6 +76,10 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					By("waiting the sriov to be stable on the node")
 					WaitForSRIOVStable()
 
+					By("Verifying Policy conditions are set correctly")
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, vfioPolicy.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, vfioPolicy.Name, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
+
 					By("waiting for the resources to be available")
 					Eventually(func() int64 {
 						testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), vfioNode, metav1.GetOptions{})
@@ -152,7 +156,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					}
 					By("Using device " + vfioNic.Name + " on node " + vfioNode)
 
-					_, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, vfioNic.Name+"#2-4", vfioNode, 5, testResourceName, "netdevice")
+					firstPolicy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, vfioNic.Name+"#2-4", vfioNode, 5, testResourceName, "netdevice")
 					Expect(err).ToNot(HaveOccurred())
 
 					Eventually(func() sriovv1.Interfaces {
@@ -176,6 +180,10 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 						})))
 
 					WaitForSRIOVStable()
+
+					By("Verifying Policy conditions are set correctly")
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, firstPolicy.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, firstPolicy.Name, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
 
 					Eventually(func() int64 {
 						testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), vfioNode, metav1.GetOptions{})
@@ -252,7 +260,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					Expect(err).ToNot(HaveOccurred())
 					By("Using device " + intf.Name + " on node " + node)
 
-					_, err = network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, intf.Name+"#0-1", node, 5, testResourceName, "netdevice", func(policy *sriovv1.SriovNetworkNodePolicy) {
+					mtuPartitionPolicy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, intf.Name+"#0-1", node, 5, testResourceName, "netdevice", func(policy *sriovv1.SriovNetworkNodePolicy) {
 						policy.Spec.Mtu = newMtu
 					})
 					Expect(err).ToNot(HaveOccurred())
@@ -279,6 +287,10 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 						})))
 
 					WaitForSRIOVStable()
+
+					By("Verifying Policy conditions are set correctly")
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, mtuPartitionPolicy.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, mtuPartitionPolicy.Name, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
 
 					Eventually(func() int64 {
 						testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
@@ -403,8 +415,14 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					Expect(err).ToNot(HaveOccurred())
 
 					By("Creating a netdevice policy")
-					_, err = network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, vfioNic.Name+"#2-4", vfioNode, 5, "resnetdevice", "netdevice")
+					netdevPolicy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, vfioNic.Name+"#2-4", vfioNode, 5, "resnetdevice", "netdevice")
 					Expect(err).ToNot(HaveOccurred())
+
+					WaitForSRIOVStable()
+
+					By("Verifying Policy conditions are set correctly")
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, vfiopolicy.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+					assertCondition(&sriovv1.SriovNetworkNodePolicy{}, netdevPolicy.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
 
 					By("Checking the SriovNetworkNodeState is correctly configured")
 					assertNodeStateHasVFMatching(vfioNode,
@@ -593,6 +611,11 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 						Expect(err).ToNot(HaveOccurred())
 
 						WaitForSRIOVStable()
+
+						By("Verifying Policy conditions are set correctly")
+						assertCondition(&sriovv1.SriovNetworkNodePolicy{}, mtuPolicy.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
+						assertCondition(&sriovv1.SriovNetworkNodePolicy{}, mtuPolicy.Name, operatorNamespace, sriovv1.ConditionProgressing, metav1.ConditionFalse)
+
 						By("waiting for the resources to be available")
 						Eventually(func() int64 {
 							testedNode, err := clients.CoreV1Interface.Nodes().Get(context.Background(), node, metav1.GetOptions{})
