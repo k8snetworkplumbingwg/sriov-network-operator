@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -32,6 +33,25 @@ func (dn *NodeReconciler) updateSyncState(ctx context.Context, desiredNodeState 
 		}
 		// update the object meta if not the patch can fail if the object did change
 		desiredNodeState.ObjectMeta = currentNodeState.ObjectMeta
+
+		// Preserve drain conditions from current state since they are managed by the drain controller
+		// We need to re-apply configuration conditions on top of the current conditions
+		// Important: Make a deep copy to avoid modifying currentNodeState when we modify desiredNodeState
+		desiredNodeState.Status.Conditions = make([]metav1.Condition, len(currentNodeState.Status.Conditions))
+		copy(desiredNodeState.Status.Conditions, currentNodeState.Status.Conditions)
+
+		// Set configuration conditions - SetConfigurationConditions already sets the correct
+		// ObservedGeneration for each configuration condition it creates
+		desiredNodeState.SetConfigurationConditions(status, failedMessage)
+
+		// Check if there are actual changes to avoid unnecessary API calls
+		if currentNodeState.Status.SyncStatus == desiredNodeState.Status.SyncStatus &&
+			currentNodeState.Status.LastSyncError == desiredNodeState.Status.LastSyncError &&
+			sriovnetworkv1.ConditionsEqual(currentNodeState.Status.Conditions, desiredNodeState.Status.Conditions) {
+			funcLog.V(2).Info("nodeState status unchanged, skipping update",
+				"SyncStatus", status)
+			return nil
+		}
 
 		funcLog.V(2).Info("update nodeState status",
 			"CurrentSyncStatus", currentNodeState.Status.SyncStatus,
