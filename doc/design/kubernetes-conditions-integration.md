@@ -5,14 +5,15 @@ authors:
 reviewers:
   - TBD
 creation-date: 21-07-2025
-last-updated: 21-07-2025
+last-updated: 08-01-2026
+status: implemented
 ---
 
 # Kubernetes Conditions Integration for SR-IOV Network Operator CRDs
 
 ## Summary
 
-This proposal enhances the observability and operational transparency of the SR-IOV Network Operator by integrating standard Kubernetes conditions into the status of its key Custom Resource Definitions (CRDs). This will enable users and automated systems to easily understand the current state, progress, and health of SR-IOV network configurations and components directly through Kubernetes API objects.
+This proposal enhances the observability and operational transparency of the SR-IOV Network Operator by integrating standard Kubernetes conditions into the status of its key Custom Resource Definitions (CRDs). This enables users and automated systems to easily understand the current state, progress, and health of SR-IOV network configurations and components directly through Kubernetes API objects.
 
 ## Motivation
 
@@ -20,13 +21,13 @@ Adding Kubernetes conditions to the SR-IOV Network Operator's CRDs is crucial fo
 
 * **Improved Observability:** Conditions provide a standardized, machine-readable way to convey the state of a resource, including its readiness, progress, and any encountered issues. This allows for better monitoring and debugging.
 
-* **Enhanced User Experience:** Users can quickly ascertain the health and status of their `SriovNetwork`, `SriovIBNetwork`, `OVSNetwork`, `SriovNetworkNodeState`, `SriovOperatorConfig`, and `SriovNetworkPoolConfig` resources without needing to delve into logs or complex operator-specific status fields.
+* **Enhanced User Experience:** Users can quickly ascertain the health and status of their `SriovNetwork`, `SriovIBNetwork`, `OVSNetwork`, `SriovNetworkNodeState`, `SriovOperatorConfig`, `SriovNetworkNodePolicy`, and `SriovNetworkPoolConfig` resources without needing to delve into logs or complex operator-specific status fields.
 
 * **Standardized API Interaction:** Aligning with Kubernetes' best practices for API object status makes the SR-IOV operator more consistent with other Kubernetes operators and native resources, simplifying integration with existing tooling (e.g., `kubectl wait`, Prometheus alerts).
 
 * **Automated Remediation and Orchestration:** External controllers or automation tools can reliably react to changes in resource conditions, enabling more robust and intelligent orchestration workflows and automated problem resolution.
 
-* **Clearer Error Reporting:** Specific conditions can indicate different types of errors (e.g., `Degraded`, `Available`, `Progressing`), providing more granular insight into failures.
+* **Clearer Error Reporting:** Specific conditions can indicate different types of errors (e.g., `Degraded`, `Ready`, `Progressing`), providing more granular insight into failures.
 
 * **Simplified Troubleshooting:** When a resource is not in the desired state, conditions can point directly to the reason, accelerating troubleshooting.
 
@@ -42,26 +43,36 @@ Adding Kubernetes conditions to the SR-IOV Network Operator's CRDs is crucial fo
    - Condition `Progressing` when the operator is applying changes to the node's SR-IOV configuration
    - Condition `Degraded` if a node's SR-IOV configuration is incorrect
    - Condition `Ready` indicating the overall readiness of the SR-IOV components on that specific node
+   - Drain-specific conditions (`DrainProgressing`, `DrainDegraded`, `DrainComplete`) for tracking drain operations
 
 3. **Operator Configuration Status:**
    - An administrator modifies the `SriovOperatorConfig`
    - Condition `Ready` indicates that the operator's components are running and healthy
    - Condition `Degraded` if the operator itself encounters issues
 
-4. **Pool Configuration Management:**
+4. **Policy Configuration Management:**
+   - An administrator creates or updates a `SriovNetworkNodePolicy`
+   - Condition `Ready` indicates that the policy configuration has been successfully applied to all target nodes
+   - Condition `Progressing` when the policy configuration is being applied to the selected nodes
+   - Condition `Degraded` if any matched nodes are in a degraded state
+   - Status includes `matchedNodeCount` and `readyNodeCount` for aggregated visibility
+
+5. **Pool Configuration Management:**
    - An administrator creates or updates a `SriovNetworkPoolConfig`
    - Condition `Ready` indicates that the pool configuration has been successfully applied to all target nodes
    - Condition `Progressing` when the pool configuration is being applied to the selected nodes
    - Condition `Degraded` if the pool configuration fails to apply or conflicts with existing configurations
+   - Status includes `matchedNodeCount` and `readyNodeCount` for aggregated visibility
 
 ### Goals
 
-* Add standard Kubernetes conditions to all major SR-IOV CRDs (`SriovNetwork`, `SriovIBNetwork`, `OVSNetwork`, `SriovNetworkNodeState`, `SriovOperatorConfig`, `SriovNetworkPoolConfig`)
+* Add standard Kubernetes conditions to all major SR-IOV CRDs (`SriovNetwork`, `SriovIBNetwork`, `OVSNetwork`, `SriovNetworkNodeState`, `SriovOperatorConfig`, `SriovNetworkNodePolicy`, `SriovNetworkPoolConfig`)
 * Implement consistent condition types across all CRDs where applicable
 * Ensure conditions are updated in real-time as resource states change
 * Maintain backward compatibility with existing status fields
 * Provide comprehensive documentation and examples for condition usage
 * Enable `kubectl wait` functionality for all resources
+* Add aggregated status for policy and pool resources showing matched/ready node counts
 
 ### Non-Goals
 
@@ -70,56 +81,111 @@ Adding Kubernetes conditions to the SR-IOV Network Operator's CRDs is crucial fo
 * Implementing custom condition types beyond standard Kubernetes patterns
 * Changing existing controller reconciliation logic beyond condition updates
 
-## Proposal
+## Implementation
 
-### Workflow Description
+### Condition Types
 
-The implementation will follow a phased approach to add conditions to each CRD:
-
-#### Phase 1: API Definition Updates
-1. Update CRD status structures to include `conditions []metav1.Condition` field
-2. Define standard condition types and their semantics for each CRD
-
-#### Phase 2: Controller Implementation
-1. Modify existing controllers to set and update conditions during reconciliation
-2. Implement condition helper functions for consistent condition management
-3. Ensure conditions are updated atomically with other status changes
-
-#### Phase 3: Integration and Testing
-1. Add comprehensive unit and integration tests for condition behavior
-2. Update documentation with condition examples and usage patterns
-3. Validate `kubectl wait` functionality
-
-### API Extensions
-
-#### Common Condition Types
-
-The following condition types will be used consistently across applicable CRDs:
+The following condition types are implemented across SR-IOV CRDs:
 
 ```go
 const (
-    // Progressing indicates that the resource is being actively reconciled
+    // ConditionProgressing indicates that the resource is being actively reconciled
     ConditionProgressing = "Progressing"
     
-    // Degraded indicates that the resource is not functioning as expected
+    // ConditionDegraded indicates that the resource is not functioning as expected
     ConditionDegraded = "Degraded"
     
-    // Ready indicates that the resource has reached its desired state and is fully functional
+    // ConditionReady indicates that the resource has reached its desired state and is fully functional
     ConditionReady = "Ready"
+
+    // Drain-specific conditions for SriovNetworkNodeState
+    
+    // ConditionDrainProgressing indicates that the node is being actively drained
+    ConditionDrainProgressing = "DrainProgressing"
+
+    // ConditionDrainDegraded indicates that the drain process is not functioning as expected
+    ConditionDrainDegraded = "DrainDegraded"
+
+    // ConditionDrainComplete indicates that the drain operation completed successfully
+    ConditionDrainComplete = "DrainComplete"
 )
 ```
 
-#### CRD-Specific Updates
+### Condition Reasons
 
-##### SriovNetwork Status Enhancement
+The following reasons are used across conditions:
+
+```go
+const (
+    // Reasons for Ready condition
+    ReasonNetworkReady   = "NetworkReady"
+    ReasonNodeReady      = "NodeConfigurationReady"
+    ReasonNodeDrainReady = "NodeDrainReady"
+    ReasonOperatorReady  = "OperatorReady"
+    ReasonNotReady       = "NotReady"
+
+    // Reasons for Degraded condition
+    ReasonProvisioningFailed           = "ProvisioningFailed"
+    ReasonConfigurationFailed          = "ConfigurationFailed"
+    ReasonNetworkAttachmentDefNotFound = "NetworkAttachmentDefinitionNotFound"
+    ReasonNetworkAttachmentDefInvalid  = "NetworkAttachmentDefinitionInvalid"
+    ReasonNamespaceNotFound            = "NamespaceNotFound"
+    ReasonHardwareError                = "HardwareError"
+    ReasonDriverError                  = "DriverError"
+    ReasonOperatorComponentsNotHealthy = "OperatorComponentsNotHealthy"
+    ReasonNotDegraded                  = "NotDegraded"
+
+    // Reasons for Progressing condition
+    ReasonConfiguringNode       = "ConfiguringNode"
+    ReasonApplyingConfiguration = "ApplyingConfiguration"
+    ReasonCreatingVFs           = "CreatingVFs"
+    ReasonLoadingDriver         = "LoadingDriver"
+    ReasonDrainingNode          = "DrainingNode"
+    ReasonNotProgressing        = "NotProgressing"
+
+    // Reasons for DrainComplete condition
+    ReasonDrainCompleted = "DrainCompleted"
+    ReasonDrainNotNeeded = "DrainNotNeeded"
+    ReasonDrainPending   = "DrainPending"
+
+    // Reasons for DrainDegraded condition
+    ReasonDrainFailed = "DrainFailed"
+
+    // Reasons for Policy/PoolConfig conditions
+    ReasonPolicyReady                = "PolicyReady"
+    ReasonPolicyNotReady             = "PolicyNotReady"
+    ReasonNoMatchingNodes            = "NoMatchingNodes"
+    ReasonPartiallyApplied           = "PartiallyApplied"
+    ReasonAllNodesConfigured         = "AllNodesConfigured"
+    ReasonSomeNodesFailed            = "SomeNodesFailed"
+    ReasonSomeNodesProgressing       = "SomeNodesProgressing"
+)
+```
+
+### API Extensions
+
+#### NetworkStatus (Shared by Network CRDs)
+
+```go
+// NetworkStatus defines the common observed state for network-type CRDs
+type NetworkStatus struct {
+    // Conditions represent the latest available observations of the network's state
+    // +patchMergeKey=type
+    // +patchStrategy=merge
+    // +listType=map
+    // +listMapKey=type
+    // +optional
+    Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+}
+```
+
+#### SriovNetwork, SriovIBNetwork, OVSNetwork
+
+All network CRDs embed `NetworkStatus`:
 
 ```go
 type SriovNetworkStatus struct {
-    // +patchMergeKey=type
-    // +patchStrategy=merge
-    // +listType=map
-    // +listMapKey=type
-    Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+    NetworkStatus `json:",inline"`
 }
 ```
 
@@ -127,39 +193,9 @@ type SriovNetworkStatus struct {
 - `Ready`: NetworkAttachmentDefinition is created and network is ready for use
 - `Degraded`: NetworkAttachmentDefinition creation failed or configuration is invalid
 
-##### SriovIBNetwork Status Enhancement
+**kubectl output columns:** Ready, Degraded, Age
 
-```go
-type SriovIBNetworkStatus struct {
-    // +patchMergeKey=type
-    // +patchStrategy=merge
-    // +listType=map
-    // +listMapKey=type
-    Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
-}
-```
-
-**Conditions:**
-- `Ready`: NetworkAttachmentDefinition is created and network is ready for use
-- `Degraded`: NetworkAttachmentDefinition creation failed or configuration is invalid
-
-##### OVSNetwork Status Enhancement
-
-```go
-type OVSNetworkStatus struct {
-    // +patchMergeKey=type
-    // +patchStrategy=merge
-    // +listType=map
-    // +listMapKey=type
-    Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
-}
-```
-
-**Conditions:**
-- `Ready`: NetworkAttachmentDefinition is created and network is ready for use
-- `Degraded`: NetworkAttachmentDefinition creation failed or configuration is invalid
-
-##### SriovNetworkNodeState Status Enhancement
+#### SriovNetworkNodeState
 
 ```go
 type SriovNetworkNodeStateStatus struct {
@@ -169,10 +205,12 @@ type SriovNetworkNodeStateStatus struct {
     SyncStatus    string        `json:"syncStatus,omitempty"`
     LastSyncError string        `json:"lastSyncError,omitempty"`
     
+    // Conditions represent the latest available observations of the SriovNetworkNodeState's state
     // +patchMergeKey=type
     // +patchStrategy=merge
     // +listType=map
     // +listMapKey=type
+    // +optional
     Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 ```
@@ -181,18 +219,25 @@ type SriovNetworkNodeStateStatus struct {
 - `Ready`: Node's SR-IOV configuration is complete and functional
 - `Progressing`: Node is being configured (VF creation, driver loading, node draining, etc.)
 - `Degraded`: Node configuration failed or hardware issues detected
+- `DrainProgressing`: Node drain operation is in progress
+- `DrainDegraded`: Node drain operation encountered errors (e.g., PDB violations)
+- `DrainComplete`: Node drain operation completed successfully
 
-##### SriovOperatorConfig Status Enhancement
+**kubectl output columns:** Sync Status, Ready, Progressing, Degraded, DrainProgress, DrainDegraded, DrainComplete, Age
+
+#### SriovOperatorConfig
 
 ```go
 type SriovOperatorConfigStatus struct {
     Injector        string `json:"injector,omitempty"`
     OperatorWebhook string `json:"operatorWebhook,omitempty"`
     
+    // Conditions represent the latest available observations of the SriovOperatorConfig's state
     // +patchMergeKey=type
     // +patchStrategy=merge
     // +listType=map
     // +listMapKey=type
+    // +optional
     Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 ```
@@ -200,16 +245,52 @@ type SriovOperatorConfigStatus struct {
 **Conditions:**
 - `Ready`: Operator components are running and healthy
 - `Degraded`: Operator components are failing or misconfigured
-- `Progressing`: Operator configuration is being applied
 
-##### SriovNetworkPoolConfig Status Enhancement
+**kubectl output columns:** Ready, Progressing, Degraded, Age
+
+#### SriovNetworkNodePolicy
 
 ```go
-type SriovNetworkPoolConfigStatus struct {
+type SriovNetworkNodePolicyStatus struct {
+    // MatchedNodeCount is the number of nodes that match the nodeSelector for this policy
+    MatchedNodeCount int `json:"matchedNodeCount"`
+
+    // ReadyNodeCount is the number of matched nodes that have successfully applied the configuration
+    ReadyNodeCount int `json:"readyNodeCount"`
+
+    // Conditions represent the latest available observations of the SriovNetworkNodePolicy's state
     // +patchMergeKey=type
     // +patchStrategy=merge
     // +listType=map
     // +listMapKey=type
+    // +optional
+    Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+}
+```
+
+**Conditions:**
+- `Ready`: True only when ALL matched nodes are ready
+- `Progressing`: True when ANY matched node is progressing
+- `Degraded`: True when ANY matched node is degraded
+
+**kubectl output columns:** Matched, Ready Nodes, Ready, Progressing, Degraded, Age
+
+#### SriovNetworkPoolConfig
+
+```go
+type SriovNetworkPoolConfigStatus struct {
+    // MatchedNodeCount is the number of nodes that match the nodeSelector for this pool
+    MatchedNodeCount int `json:"matchedNodeCount"`
+
+    // ReadyNodeCount is the number of matched nodes that have successfully applied the configuration
+    ReadyNodeCount int `json:"readyNodeCount"`
+
+    // Conditions represent the latest available observations of the SriovNetworkPoolConfig's state
+    // +patchMergeKey=type
+    // +patchStrategy=merge
+    // +listType=map
+    // +listMapKey=type
+    // +optional
     Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 ```
@@ -219,89 +300,152 @@ type SriovNetworkPoolConfigStatus struct {
 - `Progressing`: Pool configuration is being applied to selected nodes
 - `Degraded`: Pool configuration failed to apply or conflicts with existing configurations
 
-### Implementation Details/Notes/Constraints
+**kubectl output columns:** Matched, Ready Nodes, Ready, Progressing, Degraded, Age
 
-#### Condition Management Helper Functions
+### Implementation Details
+
+#### Status Patcher Package (pkg/status)
+
+A new `pkg/status` package provides utilities for managing CRD status updates:
 
 ```go
-// ConditionManager provides helper functions for managing conditions
-type ConditionManager struct{}
+// Interface defines methods for updating resource status with retry logic and event emission
+type Interface interface {
+    // UpdateStatus updates the status of a resource with retry on conflict
+    UpdateStatus(ctx context.Context, obj client.Object, updateFunc func() error) error
 
-func (cm *ConditionManager) SetCondition(conditions *[]metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string, generation int64) {
-    condition := metav1.Condition{
-        Type:               conditionType,
-        Status:             status,
-        Reason:             reason,
-        Message:            message,
-        ObservedGeneration: generation,
-    }
-    meta.SetStatusCondition(conditions, condition)
-}
+    // PatchStatus patches the status of a resource with retry on conflict
+    PatchStatus(ctx context.Context, obj client.Object, patch client.Patch) error
 
-func (cm *ConditionManager) IsConditionTrue(conditions []metav1.Condition, conditionType string) bool {
-    condition := meta.FindStatusCondition(conditions, conditionType)
-    return condition != nil && condition.Status == metav1.ConditionTrue
+    // UpdateStatusWithEvents updates status and emits events for condition transitions
+    UpdateStatusWithEvents(ctx context.Context, obj client.Object, oldConditions, newConditions []metav1.Condition, updateFunc func() error) error
+
+    // SetCondition sets a condition with the given type, status, reason, and message
+    SetCondition(conditions *[]metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string, generation int64)
+
+    // IsConditionTrue checks if a condition exists and has status True
+    IsConditionTrue(conditions []metav1.Condition, conditionType string) bool
+
+    // FindCondition returns the condition with the given type, or nil if not found
+    FindCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition
+
+    // HasConditionChanged checks if the new condition differs from the existing one
+    HasConditionChanged(conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string) bool
 }
 ```
 
-#### Controller Integration Pattern
+#### Transition Detection
+
+The package includes transition detection for automatic event emission:
 
 ```go
-func (r *SriovNetworkReconciler) updateConditions(ctx context.Context, sriovNetwork *sriovnetworkv1.SriovNetwork) error {
-    cm := &ConditionManager{}
-    
-    // Check if NetworkAttachmentDefinition exists and is valid
-    if nad, err := r.getNetworkAttachmentDefinition(ctx, sriovNetwork); err != nil {
-        cm.SetCondition(&sriovNetwork.Status.Conditions, 
-            ConditionReady, metav1.ConditionFalse, 
-            "NetworkAttachmentDefinitionNotFound", err.Error(), 
-            sriovNetwork.Generation)
-        cm.SetCondition(&sriovNetwork.Status.Conditions, 
-            ConditionDegraded, metav1.ConditionTrue, 
-            "ProvisioningFailed", err.Error(), 
-            sriovNetwork.Generation)
-    } else {
-        cm.SetCondition(&sriovNetwork.Status.Conditions, 
-            ConditionReady, metav1.ConditionTrue, 
-            "NetworkReady", "Network is successfully provisioned and ready for use", 
-            sriovNetwork.Generation)
-        cm.SetCondition(&sriovNetwork.Status.Conditions, 
-            ConditionDegraded, metav1.ConditionFalse, 
-            "NetworkHealthy", "Network is functioning correctly", 
-            sriovNetwork.Generation)
-    }
-    
-    return r.Status().Update(ctx, sriovNetwork)
-}
+// TransitionType represents the type of condition transition
+type TransitionType string
+
+const (
+    TransitionAdded     TransitionType = "Added"
+    TransitionChanged   TransitionType = "Changed"
+    TransitionRemoved   TransitionType = "Removed"
+    TransitionUnchanged TransitionType = "Unchanged"
+)
+
+// DetectTransitions compares old and new conditions and returns a list of transitions
+func DetectTransitions(oldConditions, newConditions []metav1.Condition) []Transition
 ```
 
-#### Backward Compatibility
+#### Helper Functions
 
-* Existing status fields will be preserved
-* Conditions will be added as optional fields
-* Controllers will continue to update legacy status fields alongside conditions
-* Client code relying on existing status fields will not be affected
+The `api/v1/conditions.go` file provides shared helper functions:
 
-#### Error Handling
+```go
+// ConditionsEqual compares two condition slices ignoring LastTransitionTime.
+// This is useful to avoid unnecessary API updates when conditions haven't actually changed.
+func ConditionsEqual(a, b []metav1.Condition) bool
+```
 
-* Condition updates will not block main reconciliation logic
-* Failed condition updates will be logged but won't cause reconciliation failure
-* Conditions will be updated atomically with other status changes when possible
+#### Controller Integration
 
-### Upgrade & Downgrade considerations
+Each controller uses the status patcher to update conditions:
 
-#### Upgrade Considerations
+**Network Controllers (SriovNetwork, SriovIBNetwork, OVSNetwork):**
+- Set `Ready=True, Degraded=False` on successful NAD provisioning
+- Set `Ready=False, Degraded=True` when namespace not found or provisioning fails
 
-* New CRD versions with condition fields will be backward compatible
-* Existing CR instances will continue to function without conditions
-* Controllers will start populating conditions immediately after upgrade
+**SriovOperatorConfig Controller:**
+- Set `Ready=True, Degraded=False` on successful reconciliation
+- Set `Ready=False, Degraded=True` on component failures
+
+**Config Daemon:**
+- Updates `SriovNetworkNodeState` conditions during sync operations
+- Sets configuration conditions based on sync status
+
+**Drain Controller:**
+- Sets drain-specific conditions during drain operations
+- Updates `DrainProgressing`, `DrainDegraded`, `DrainComplete` based on drain state
+
+**Status Controllers (Policy and PoolConfig):**
+- Dedicated controllers aggregate conditions from matching `SriovNetworkNodeState` objects
+- Watches changes to NodeStates and Nodes to update aggregated status
+
+### Usage Examples
+
+```bash
+# Check network status
+kubectl get sriovnetwork -o wide
+NAME          READY   DEGRADED   AGE
+my-network    True    False      5m
+
+# Wait for network to be ready
+kubectl wait --for=condition=Ready sriovnetwork/my-network --timeout=60s
+
+# Check policy status with node counts
+kubectl get sriovnetworknodepolicy -o wide
+NAME        MATCHED   READY NODES   READY   PROGRESSING   DEGRADED   AGE
+policy1     3         3             True    False         False      10m
+
+# Check pool config status
+kubectl get sriovnetworkpoolconfig -o wide
+NAME          MATCHED   READY NODES   READY   PROGRESSING   DEGRADED   AGE
+worker-pool   5         5             True    False         False      15m
+
+# Check node state with all conditions
+kubectl get sriovnetworknodestate -o wide
+NAME      SYNC STATUS   READY   PROGRESSING   DEGRADED   DRAINPROGRESS   DRAINDEGRADED   DRAINCOMPLETE   AGE
+worker1   Succeeded     True    False         False      False           False           True            1h
+```
+
+### Backward Compatibility
+
+* Existing status fields are preserved
+* Conditions are added as optional fields
+* Controllers continue to update legacy status fields alongside conditions
+* Client code relying on existing status fields is not affected
+
+### Error Handling
+
+* Condition updates use retry logic with conflict handling (up to 3 retries)
+* Failed condition updates are logged but don't cause reconciliation failure
+* Conditions are updated atomically using Patch operations to avoid race conditions
+
+### Upgrade & Downgrade Considerations
+
+#### Upgrade
+* New CRD versions with condition fields are backward compatible
+* Existing CR instances continue to function without conditions
+* Controllers start populating conditions immediately after upgrade
 * No manual intervention required from users
 
-#### Downgrade Considerations
-
-* Conditions will be ignored by older controller versions
-* Existing status fields will continue to be populated
+#### Downgrade
+* Conditions are ignored by older controller versions
+* Existing status fields continue to be populated
 * No data loss or functionality degradation during downgrade
 * CRD structure remains compatible with older API versions
 
-This proposal provides a comprehensive foundation for integrating Kubernetes conditions into the SR-IOV Network Operator, significantly improving observability and operational experience while maintaining full backward compatibility. 
+## Testing
+
+The implementation includes:
+
+* **Unit tests** for all condition handling logic
+* **Unit tests** for status patcher and transition detection
+* **Integration tests** for controller condition updates
+* **E2E conformance tests** validating conditions in real cluster scenarios
