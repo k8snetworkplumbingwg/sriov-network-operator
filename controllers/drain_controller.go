@@ -106,6 +106,13 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, nil
 	}
 
+	// check if use-external-drainer is set for a specific node state
+	if utils.ObjectHasAnnotation(nodeNetworkState, constants.NodeStateExternalDrainerAnnotation, "true") {
+		reqLogger.Info(`nodestate is set with external drainer annotation, don't requeue the request. 
+		Draining will be done externally`, "nodeState", req.Name)
+		return ctrl.Result{}, nil
+	}
+
 	// create the drain state annotation if it doesn't exist in the sriovNetworkNodeState object
 	nodeStateDrainAnnotationCurrent, currentNodeStateExist, err := dr.ensureAnnotationExists(ctx, nodeNetworkState, constants.NodeStateDrainAnnotationCurrent)
 	if err != nil {

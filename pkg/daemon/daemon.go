@@ -149,6 +149,17 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// add/remove external drainer annotation in case external drainer
+	changed, err := dn.addRemoveExternalDrainerAnnotation(ctx, desiredNodeState)
+	if err != nil {
+		reqLogger.Error(err, "failed to add/remove external drainer annotation")
+		return ctrl.Result{}, err
+	}
+	if changed {
+		reqLogger.Info("external drainer annotation changed, requeue to tigger reconcile")
+		return ctrl.Result{}, nil
+	}
+
 	// Check the object as the drain controller annotations
 	// if not just wait for the drain controller to add them before we start taking care of the nodeState
 	if !utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainAnnotationCurrent) ||
@@ -659,6 +670,56 @@ func (dn *NodeReconciler) annotate(
 
 	// the node was annotated we need to wait for the operator to finish the drain
 	return nil
+}
+
+// manages addition/removal of external drainer annotation upon node state objects
+func (dn *NodeReconciler) addRemoveExternalDrainerAnnotation(ctx context.Context,
+	desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) (bool, error) {
+	funcLog := log.FromContext(ctx).WithName("addRemoveExternalDrainerAnnotation")
+
+	var changedAnnotation bool
+	// external drainer annotation will be added/removed only when both desired/current node state are in 'Idle' state
+	// or while neither current nor desired node state annotations exist, indicating that drain-controller has
+	// yet to add them on nodeState object
+	neitherExists := !utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainAnnotationCurrent) &&
+		!utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainAnnotation)
+	bothIdle := utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainIdle) &&
+		utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotation, consts.DrainIdle)
+
+	if !bothIdle && !neitherExists {
+		return false, nil
+	}
+
+	annotations := desiredNodeState.GetAnnotations()
+	if !vars.UseExternalDrainer {
+		// remove external drainer nodestate annotation if exists
+		if _, ok := annotations[consts.NodeStateExternalDrainerAnnotation]; ok {
+			funcLog.Info("remove external drainer nodestate annotation", "annotation", consts.NodeStateExternalDrainerAnnotation)
+			original := desiredNodeState.DeepCopy()
+			delete(annotations, consts.NodeStateExternalDrainerAnnotation)
+			// Patch only the annotations
+			if err := dn.client.Patch(ctx, desiredNodeState, client.MergeFrom(original)); err != nil {
+				funcLog.Error(err, "failed to patch nodestate after removing external drainer annotation")
+				return false, err
+			}
+			changedAnnotation = true
+		}
+		return changedAnnotation, nil
+	}
+
+	if _, ok := annotations[consts.NodeStateExternalDrainerAnnotation]; !ok {
+		// add external drainer nodestate annotation
+		funcLog.Info("add external drainer nodestate annotation", "annotation", consts.NodeStateExternalDrainerAnnotation)
+		err := utils.AnnotateObject(ctx, desiredNodeState,
+			consts.NodeStateExternalDrainerAnnotation, "true", dn.client)
+		if err != nil {
+			funcLog.Error(err, "failed to add node external drainer annotation")
+			return false, err
+		}
+		changedAnnotation = true
+	}
+
+	return changedAnnotation, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
