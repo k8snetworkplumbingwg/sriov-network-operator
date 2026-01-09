@@ -170,33 +170,40 @@ var _ = Describe("Drain Controller", Ordered, func() {
 			node2, nodeState2 := createNode(ctx, "node2", nil)
 			node3, nodeState3 := createNode(ctx, "node3", nil)
 
+			nodes := []*corev1.Node{node1, node2}
+			nodeStates := []*sriovnetworkv1.SriovNetworkNodeState{nodeState1, nodeState2}
+
 			// Two nodes require to drain at the same time
 			simulateDaemonSetAnnotation(node1, constants.DrainRequired)
 			simulateDaemonSetAnnotation(node2, constants.DrainRequired)
 
-			// Only the first node drains
-			expectNodeStateAnnotation(nodeState1, constants.DrainComplete)
-			expectNodeStateAnnotation(nodeState2, constants.DrainIdle)
+			// Only one node drains at a time (serial draining) - don't assume which one
+			expectNumberOfDrainingNodes(1, nodeState1, nodeState2, nodeState3)
+			ExpectDrainCompleteNodesHaveIsNotSchedule(nodeState1, nodeState2, nodeState3)
+			// node3 should always be idle since it didn't request drain
 			expectNodeStateAnnotation(nodeState3, constants.DrainIdle)
-			expectNodeIsNotSchedulable(node1)
-			expectNodeIsSchedulable(node2)
 			expectNodeIsSchedulable(node3)
 
-			simulateDaemonSetAnnotation(node1, constants.DrainIdle)
+			// Find the draining node and complete its drain
+			firstDrainingNode, firstDrainingNodeState := findDrainingNode(nodes, nodeStates)
+			Expect(firstDrainingNode).ToNot(BeNil(), "Expected one node to be draining")
+			simulateDaemonSetAnnotation(firstDrainingNode, constants.DrainIdle)
 
-			expectNodeStateAnnotation(nodeState1, constants.DrainIdle)
-			expectNodeIsSchedulable(node1)
+			expectNodeStateAnnotation(firstDrainingNodeState, constants.DrainIdle)
+			expectNodeIsSchedulable(firstDrainingNode)
 
 			// Second node starts draining
-			expectNodeStateAnnotation(nodeState1, constants.DrainIdle)
-			expectNodeStateAnnotation(nodeState2, constants.DrainComplete)
+			expectNumberOfDrainingNodes(1, nodeState1, nodeState2, nodeState3)
+			ExpectDrainCompleteNodesHaveIsNotSchedule(nodeState1, nodeState2, nodeState3)
 			expectNodeStateAnnotation(nodeState3, constants.DrainIdle)
-			expectNodeIsSchedulable(node1)
-			expectNodeIsNotSchedulable(node2)
 			expectNodeIsSchedulable(node3)
 
-			simulateDaemonSetAnnotation(node2, constants.DrainIdle)
+			// Find and complete the second draining node
+			secondDrainingNode, _ := findDrainingNode(nodes, nodeStates)
+			Expect(secondDrainingNode).ToNot(BeNil(), "Expected second node to be draining")
+			simulateDaemonSetAnnotation(secondDrainingNode, constants.DrainIdle)
 
+			// All nodes should be idle now
 			expectNodeStateAnnotation(nodeState1, constants.DrainIdle)
 			expectNodeStateAnnotation(nodeState2, constants.DrainIdle)
 			expectNodeStateAnnotation(nodeState3, constants.DrainIdle)
@@ -351,6 +358,82 @@ var _ = Describe("Drain Controller", Ordered, func() {
 			expectNodeStateAnnotation(nodeState1, constants.Draining)
 		})
 	})
+
+	Context("drain conditions", func() {
+		It("should set DrainComplete=True and DrainProgressing=False when drain completes", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "cond-node1", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+
+			// Wait for drain to complete
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainComplete, metav1.ConditionTrue, sriovnetworkv1.ReasonDrainCompleted)
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainProgressing, metav1.ConditionFalse, sriovnetworkv1.ReasonNotProgressing)
+		})
+
+		It("should set DrainDegraded=False after successful drain", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "cond-node2", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainDegraded, metav1.ConditionFalse, sriovnetworkv1.ReasonNotDegraded)
+		})
+
+		It("should set all drain conditions to idle state when drain returns to idle", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "cond-node3", nil)
+
+			// Start drain
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+
+			// Return to idle
+			simulateDaemonSetAnnotation(node, constants.DrainIdle)
+			expectNodeStateAnnotation(nodeState, constants.DrainIdle)
+
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainProgressing, metav1.ConditionFalse, sriovnetworkv1.ReasonNotProgressing)
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainDegraded, metav1.ConditionFalse, sriovnetworkv1.ReasonNotDegraded)
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainComplete, metav1.ConditionFalse, sriovnetworkv1.ReasonDrainNotNeeded)
+		})
+
+		It("should have consistent observedGeneration across all drain conditions", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "cond-node4", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+
+			// Verify all drain conditions have the same observedGeneration
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+
+				drainProgressing := findCondition(nodeState.Status.Conditions, sriovnetworkv1.ConditionDrainProgressing)
+				drainDegraded := findCondition(nodeState.Status.Conditions, sriovnetworkv1.ConditionDrainDegraded)
+				drainComplete := findCondition(nodeState.Status.Conditions, sriovnetworkv1.ConditionDrainComplete)
+
+				g.Expect(drainProgressing).ToNot(BeNil())
+				g.Expect(drainDegraded).ToNot(BeNil())
+				g.Expect(drainComplete).ToNot(BeNil())
+
+				// All drain conditions should have the same observedGeneration
+				g.Expect(drainDegraded.ObservedGeneration).To(Equal(drainProgressing.ObservedGeneration),
+					"DrainDegraded and DrainProgressing should have same observedGeneration")
+				g.Expect(drainComplete.ObservedGeneration).To(Equal(drainProgressing.ObservedGeneration),
+					"DrainComplete and DrainProgressing should have same observedGeneration")
+			}, "20s", "1s").Should(Succeed())
+		})
+
+		It("should set DrainComplete=True for single node reboot", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "cond-node5", nil)
+
+			// For single node, reboot completes immediately
+			simulateDaemonSetAnnotation(node, constants.RebootRequired)
+
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			// The condition should reflect the drain completed
+			expectDrainCondition(nodeState, sriovnetworkv1.ConditionDrainComplete, metav1.ConditionTrue, sriovnetworkv1.ReasonDrainCompleted)
+		})
+	})
 })
 
 func expectNodeStateAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, expectedAnnotationValue string) {
@@ -361,6 +444,22 @@ func expectNodeStateAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, 
 		g.Expect(utils.ObjectHasAnnotation(nodeState, constants.NodeStateDrainAnnotationCurrent, expectedAnnotationValue)).
 			To(BeTrue(),
 				"Node[%s] annotation[%s] == '%s'. Expected '%s'", nodeState.Name, constants.NodeDrainAnnotation, nodeState.GetLabels()[constants.NodeStateDrainAnnotationCurrent], expectedAnnotationValue)
+	}, "20s", "1s").Should(Succeed())
+}
+
+func expectDrainCondition(nodeState *sriovnetworkv1.SriovNetworkNodeState, conditionType string, expectedStatus metav1.ConditionStatus, expectedReason string) {
+	EventuallyWithOffset(1, func(g Gomega) {
+		g.Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+			ToNot(HaveOccurred())
+
+		condition := findCondition(nodeState.Status.Conditions, conditionType)
+		g.Expect(condition).ToNot(BeNil(), "Expected condition %s to exist", conditionType)
+		g.Expect(condition.Status).To(Equal(expectedStatus),
+			"Condition %s: expected status %s, got %s", conditionType, expectedStatus, condition.Status)
+		if expectedReason != "" {
+			g.Expect(condition.Reason).To(Equal(expectedReason),
+				"Condition %s: expected reason %s, got %s", conditionType, expectedReason, condition.Reason)
+		}
 	}, "20s", "1s").Should(Succeed())
 }
 
@@ -389,6 +488,20 @@ func ExpectDrainCompleteNodesHaveIsNotSchedule(nodesState ...*sriovnetworkv1.Sri
 			expectNodeIsNotSchedulable(node)
 		}
 	}
+}
+
+// findDrainingNode finds the node that is currently draining (has DrainComplete annotation)
+// from the provided lists of nodes and nodeStates. Returns nil if no node is draining.
+func findDrainingNode(nodes []*corev1.Node, nodeStates []*sriovnetworkv1.SriovNetworkNodeState) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
+	for i, nodeState := range nodeStates {
+		// Refresh the nodeState to get the current annotation
+		Expect(k8sClient.Get(context.Background(), types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+			ToNot(HaveOccurred())
+		if utils.ObjectHasAnnotation(nodeState, constants.NodeStateDrainAnnotationCurrent, constants.DrainComplete) {
+			return nodes[i], nodeState
+		}
+	}
+	return nil, nil
 }
 
 func expectNodeIsNotSchedulable(node *corev1.Node) {

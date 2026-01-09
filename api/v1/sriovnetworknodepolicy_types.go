@@ -137,12 +137,29 @@ type OVSInterfaceConfig struct {
 
 // SriovNetworkNodePolicyStatus defines the observed state of SriovNetworkNodePolicy
 type SriovNetworkNodePolicyStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// MatchedNodeCount is the number of nodes that match the nodeSelector for this policy
+	MatchedNodeCount int `json:"matchedNodeCount"`
+
+	// ReadyNodeCount is the number of matched nodes that have successfully applied the configuration
+	ReadyNodeCount int `json:"readyNodeCount"`
+
+	// Conditions represent the latest available observations of the SriovNetworkNodePolicy's state
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Matched",type=integer,JSONPath=`.status.matchedNodeCount`
+//+kubebuilder:printcolumn:name="Ready Nodes",type=integer,JSONPath=`.status.readyNodeCount`
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+//+kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=`.status.conditions[?(@.type=="Progressing")].status`
+//+kubebuilder:printcolumn:name="Degraded",type=string,JSONPath=`.status.conditions[?(@.type=="Degraded")].status`
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SriovNetworkNodePolicy is the Schema for the sriovnetworknodepolicies API
 type SriovNetworkNodePolicy struct {
