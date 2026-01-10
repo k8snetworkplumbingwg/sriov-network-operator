@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
+	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -383,10 +384,22 @@ func (n *network) GetDevlinkDeviceParams(pciAddr string) ([]sriovnetworkv1.Devli
 		return nil, err
 	}
 
+	// Deduplicate params by name, keeping only first occurrence
+	seen := make(map[string]bool)
+	var pfParams []*netlink.DevlinkParam
+
+	for _, p := range params {
+		if !seen[p.Name] {
+			seen[p.Name] = true
+			pfParams = append(pfParams, p)
+		}
+	}
+
+	//  Merge all params by name
 	merged := make(map[string]map[uint8]interface{})
 	devlinkParams := make([]sriovnetworkv1.DevlinkParam, 0)
 
-	for _, p := range params {
+	for _, p := range pfParams {
 		if _, ok := merged[p.Name]; !ok {
 			merged[p.Name] = make(map[uint8]interface{})
 		}

@@ -406,6 +406,8 @@ func HandleESwitchParams(pciPrefix string, attr *MlxNic,
 		} else {
 			attr.Multiport = -1
 		}
+	} else {
+		attr.Multiport = -1
 	}
 	return needReboot
 }
