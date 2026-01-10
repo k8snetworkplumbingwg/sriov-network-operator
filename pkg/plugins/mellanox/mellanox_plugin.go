@@ -99,7 +99,7 @@ func (p *MellanoxPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeS
 
 		isDualPort := mlx.IsDualPort(ifaceSpec.PciAddress, mellanoxNicsStatus)
 		// Attributes to change
-		attrs := &mlx.MlxNic{TotalVfs: -1}
+		attrs := &mlx.MlxNic{TotalVfs: -1, Multiport: -1}
 		var changeWithoutReboot bool
 
 		totalVfs, totalVfsNeedReboot, totalVfsChangeWithoutReboot := mlx.HandleTotalVfs(fwCurrent, fwNext, attrs, ifaceSpec, isDualPort, mellanoxNicsSpec)
@@ -180,7 +180,7 @@ func (p *MellanoxPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeS
 		}
 
 		if fwNext.TotalVfs > 0 || fwNext.EnableSriov {
-			attributesToChange[pciAddress] = mlx.MlxNic{TotalVfs: 0}
+			attributesToChange[pciAddress] = mlx.MlxNic{TotalVfs: 0, Multiport: -1}
 			log.Log.V(2).Info("Changing TotalVfs to 0, doesn't require rebooting", "fwNext.totalVfs", fwNext.TotalVfs)
 		}
 	}

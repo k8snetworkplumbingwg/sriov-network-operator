@@ -427,23 +427,7 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		}
 	}
 
-	for _, param := range iface.DevlinkParams.Params {
-		switch param.ApplyOn {
-		case consts.DevlinkParamApplyOnPf:
-			err = s.applyDevlinkPfParam(iface, param)
-			if err != nil {
-				log.Log.Error(err, "configSriovPFDevice(): fail apply devlink param for PF", "device", iface.PciAddress, "param", param.Name)
-				return err
-			}
-		case consts.DevlinkParamApplyOnVf:
-			err = s.applyDevlinkVfParam(iface, param)
-			if err != nil {
-				log.Log.Error(err, "configSriovPFDevice(): fail apply devlink param for VFs", "device", iface.PciAddress, "param", param.Name)
-				return err
-			}
-		}
-	}
-
+	// Devlink params are applied in ConfigSriovInterfaces() after all interface configuration is complete
 	return nil
 }
 
@@ -466,6 +450,38 @@ func (s *sriov) applyDevlinkVfParam(iface *sriovnetworkv1.Interface, param sriov
 		}
 	}
 
+	return nil
+}
+
+// applyDevlinkParams applies devlink parameters for all configured interfaces.
+// This should be called after all interface configuration is complete (including switchdev mode and VF creation).
+func (s *sriov) applyDevlinkParams(interfaces []interfaceToConfigure) error {
+	log.Log.V(2).Info("applyDevlinkParams(): applying devlink params for configured interfaces")
+	for _, ifaceCfg := range interfaces {
+		iface := &ifaceCfg.Iface
+		if iface.ExternallyManaged {
+			continue
+		}
+		for _, param := range iface.DevlinkParams.Params {
+			var err error
+			switch param.ApplyOn {
+			case consts.DevlinkParamApplyOnPf:
+				err = s.applyDevlinkPfParam(iface, param)
+				if err != nil {
+					log.Log.Error(err, "applyDevlinkParams(): failed to apply devlink param for PF",
+						"device", iface.PciAddress, "param", param.Name)
+					return err
+				}
+			case consts.DevlinkParamApplyOnVf:
+				err = s.applyDevlinkVfParam(iface, param)
+				if err != nil {
+					log.Log.Error(err, "applyDevlinkParams(): failed to apply devlink param for VFs",
+						"device", iface.PciAddress, "param", param.Name)
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -739,6 +755,13 @@ func (s *sriov) ConfigSriovInterfaces(storeManager store.ManagerInterface,
 			log.Log.Error(err, "cannot reload udev rules")
 			return fmt.Errorf("failed to reload udev rules: %v", err)
 		}
+	}
+
+	// Apply devlink params after all interface configuration is complete.
+	// Some devlink params (e.g. esw_multiport) require switchdev mode and VFs to be ready.
+	if err := s.applyDevlinkParams(toBeConfigured); err != nil {
+		log.Log.Error(err, "cannot apply devlink params")
+		return fmt.Errorf("cannot apply devlink params: %v", err)
 	}
 
 	if vars.ParallelNicConfig {

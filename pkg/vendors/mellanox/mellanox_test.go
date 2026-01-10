@@ -774,7 +774,7 @@ var _ = Describe("SRIOV", func() {
 
 			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeFalse())
-			Expect(attrs.Multiport).To(Equal(0))
+			Expect(attrs.Multiport).To(Equal(-1))
 		})
 
 		It("should ignore other devlink params and only check esw_multiport", func() {
