@@ -51,7 +51,6 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 	//+kubebuilder:scaffold:imports
@@ -161,29 +160,23 @@ func main() {
 
 	featureGate := featuregate.New()
 
-	// Create status patchers for controllers (includes embedded condition manager)
-	globalStatusPatcher := status.NewPatcher(mgrGlobal.GetClient(), mgrGlobal.GetEventRecorderFor("sriov-network-operator"), mgrGlobal.GetScheme())
-
 	if err = (&controllers.SriovNetworkReconciler{
-		Client:        mgrGlobal.GetClient(),
-		Scheme:        mgrGlobal.GetScheme(),
-		StatusPatcher: globalStatusPatcher,
+		Client: mgrGlobal.GetClient(),
+		Scheme: mgrGlobal.GetScheme(),
 	}).SetupWithManager(mgrGlobal); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovNetwork")
 		os.Exit(1)
 	}
 	if err = (&controllers.SriovIBNetworkReconciler{
-		Client:        mgrGlobal.GetClient(),
-		Scheme:        mgrGlobal.GetScheme(),
-		StatusPatcher: globalStatusPatcher,
+		Client: mgrGlobal.GetClient(),
+		Scheme: mgrGlobal.GetScheme(),
 	}).SetupWithManager(mgrGlobal); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovIBNetwork")
 		os.Exit(1)
 	}
 	if err = (&controllers.OVSNetworkReconciler{
-		Client:        mgrGlobal.GetClient(),
-		Scheme:        mgrGlobal.GetScheme(),
-		StatusPatcher: globalStatusPatcher,
+		Client: mgrGlobal.GetClient(),
+		Scheme: mgrGlobal.GetScheme(),
 	}).SetupWithManager(mgrGlobal); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OVSNetwork")
 		os.Exit(1)
@@ -211,15 +204,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create status patcher for SriovOperatorConfigReconciler
-	statusPatcher := status.NewPatcher(mgr.GetClient(), mgr.GetEventRecorderFor("sriov-network-operator"), mgr.GetScheme())
 	if err = (&controllers.SriovOperatorConfigReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		Orchestrator:      orch,
 		FeatureGate:       featureGate,
 		UncachedAPIReader: mgr.GetAPIReader(),
-		StatusPatcher:     statusPatcher,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovOperatorConfig")
 		os.Exit(1)
