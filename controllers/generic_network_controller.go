@@ -220,7 +220,7 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			}
 
 			// Update conditions to reflect successful creation
-			updateErr := r.updateConditions(ctx, instance, false, err)
+			updateErr := r.updateConditions(ctx, instance, true, nil)
 			if updateErr != nil {
 				reqLogger.Error(updateErr, "Failed to update conditions")
 				return reconcile.Result{}, updateErr

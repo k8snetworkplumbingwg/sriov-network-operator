@@ -271,6 +271,55 @@ var _ = Describe("All Network Controllers", Ordered, func() {
 			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
 		})
 
+		It("should set Ready=True immediately after NAD creation (not waiting state)", func() {
+			// This test verifies the fix for the bug where after successfully creating
+			// the NetworkAttachmentDefinition, the controller incorrectly set conditions
+			// indicating it was waiting for the namespace instead of being ready.
+			cr := sriovnetworkv1.SriovNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-nad-creation-condition",
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovNetworkSpec{
+					NetworkNamespace: "default",
+					ResourceName:     "test-resource-creation",
+				},
+			}
+
+			err := k8sClient.Create(ctx, &cr)
+			Expect(err).NotTo(HaveOccurred())
+
+			// First, wait for the NAD to be created
+			netAttDef := &netattdefv1.NetworkAttachmentDefinition{}
+			err = util.WaitForNamespacedObject(netAttDef, k8sClient, "default", cr.GetName(), util.RetryInterval, util.Timeout)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Now check that conditions are correctly set to Ready=True
+			// This should happen immediately after NAD creation, not require a second reconcile
+			Eventually(func(g Gomega) {
+				network := &sriovnetworkv1.SriovNetwork{}
+				err := k8sClient.Get(ctx, client.ObjectKey{Name: cr.Name, Namespace: cr.Namespace}, network)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Conditions must be set
+				g.Expect(network.Status.Conditions).ToNot(BeEmpty())
+
+				// Ready must be True (not False with "waiting for namespace" reason)
+				readyCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue),
+					"Ready condition should be True after NAD creation, got %s with reason %s",
+					readyCondition.Status, readyCondition.Reason)
+				g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonNetworkReady),
+					"Ready reason should be NetworkReady, not waiting for namespace")
+
+				// Degraded must be False
+				degradedCondition := findCondition(network.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+				g.Expect(degradedCondition).ToNot(BeNil())
+				g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionFalse))
+			}).WithTimeout(5 * time.Second).WithPolling(100 * time.Millisecond).Should(Succeed())
+		})
+
 		It("should set Degraded condition to False when network is healthy", func() {
 			cr := sriovnetworkv1.SriovIBNetwork{
 				ObjectMeta: metav1.ObjectMeta{
