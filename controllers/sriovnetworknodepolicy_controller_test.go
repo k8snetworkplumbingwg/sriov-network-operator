@@ -151,10 +151,35 @@ var _ = Describe("SriovnetworkNodePolicy controller", Ordered, func() {
 
 		By("Create SriovOperatorConfig controller k8s objs")
 		config := makeDefaultSriovOpConfig()
+
+		// Clean up any existing config from other test suites
+		existingConfig := &sriovnetworkv1.SriovOperatorConfig{}
+		err := k8sClient.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, existingConfig)
+		if err == nil {
+			// Object exists - need to clean it up
+			// If it has a finalizer and deletion timestamp, remove the finalizer manually
+			// (since no controller is running yet to process it)
+			if len(existingConfig.Finalizers) > 0 {
+				existingConfig.Finalizers = []string{}
+				_ = k8sClient.Update(context.Background(), existingConfig)
+			}
+			// Delete the object if it doesn't have a deletion timestamp yet
+			if existingConfig.DeletionTimestamp.IsZero() {
+				_ = k8sClient.Delete(context.Background(), existingConfig)
+			}
+			// Wait for it to be fully gone
+			Eventually(func() bool {
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, existingConfig)
+				return errors.IsNotFound(err)
+			}, 10*time.Second, 100*time.Millisecond).Should(BeTrue(), "Timed out waiting for existing SriovOperatorConfig to be deleted")
+		}
+
 		Expect(k8sClient.Create(context.Background(), config)).Should(Succeed())
 		DeferCleanup(func() {
 			err := k8sClient.Delete(context.Background(), config)
-			Expect(err).ToNot(HaveOccurred())
+			if err != nil && !errors.IsNotFound(err) {
+				Expect(err).ToNot(HaveOccurred())
+			}
 		})
 
 		// setup controller manager
