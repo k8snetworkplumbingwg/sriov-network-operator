@@ -1,9 +1,18 @@
 package tests
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	runtimeclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	sriovv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/clean"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util/cluster"
@@ -67,3 +76,30 @@ var _ = AfterSuite(func() {
 	err := clean.All()
 	Expect(err).NotTo(HaveOccurred())
 })
+
+// assertCondition verifies that a SR-IOV resource has the expected condition status.
+// Supported object types: *sriovv1.SriovNetwork, *sriovv1.SriovNetworkPoolConfig, *sriovv1.SriovNetworkNodePolicy
+func assertCondition(obj runtimeclient.Object, name, namespace, conditionType string, expectedStatus metav1.ConditionStatus) {
+	EventuallyWithOffset(1, func(g Gomega) {
+		err := clients.Get(context.Background(),
+			runtimeclient.ObjectKey{Name: name, Namespace: namespace}, obj)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		var conditions []metav1.Condition
+		switch o := obj.(type) {
+		case *sriovv1.SriovNetwork:
+			conditions = o.Status.Conditions
+		case *sriovv1.SriovNetworkPoolConfig:
+			conditions = o.Status.Conditions
+		case *sriovv1.SriovNetworkNodePolicy:
+			conditions = o.Status.Conditions
+		default:
+			g.Expect(fmt.Errorf("unsupported object type %T", obj)).ToNot(HaveOccurred())
+		}
+
+		cond := meta.FindStatusCondition(conditions, conditionType)
+		g.Expect(cond).ToNot(BeNil(), "Condition %s not found on %T %s/%s", conditionType, obj, namespace, name)
+		g.Expect(cond.Status).To(Equal(expectedStatus),
+			"Expected condition %s to be %s but got %s", conditionType, expectedStatus, cond.Status)
+	}, 2*time.Minute, time.Second).Should(Succeed())
+}
