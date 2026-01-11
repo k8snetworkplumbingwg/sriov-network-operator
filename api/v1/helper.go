@@ -692,6 +692,16 @@ func (cr *SriovIBNetwork) NetworkNamespace() string {
 	return cr.Spec.NetworkNamespace
 }
 
+// GetConditions returns the conditions from the status
+func (cr *SriovIBNetwork) GetConditions() []metav1.Condition {
+	return cr.Status.Conditions
+}
+
+// SetConditions sets the conditions in the status
+func (cr *SriovIBNetwork) SetConditions(conditions []metav1.Condition) {
+	cr.Status.Conditions = conditions
+}
+
 // RenderNetAttDef renders a net-att-def for sriov CNI
 func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
@@ -811,6 +821,16 @@ func (cr *SriovNetwork) NetworkNamespace() string {
 	return cr.Spec.NetworkNamespace
 }
 
+// GetConditions returns the conditions from the status
+func (cr *SriovNetwork) GetConditions() []metav1.Condition {
+	return cr.Status.Conditions
+}
+
+// SetConditions sets the conditions in the status
+func (cr *SriovNetwork) SetConditions(conditions []metav1.Condition) {
+	cr.Status.Conditions = conditions
+}
+
 // RenderNetAttDef renders a net-att-def for sriov CNI
 func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	logger := log.WithName("RenderNetAttDef")
@@ -872,6 +892,16 @@ func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 // NetworkNamespace returns target network namespace for the network
 func (cr *OVSNetwork) NetworkNamespace() string {
 	return cr.Spec.NetworkNamespace
+}
+
+// GetConditions returns the conditions from the status
+func (cr *OVSNetwork) GetConditions() []metav1.Condition {
+	return cr.Status.Conditions
+}
+
+// SetConditions sets the conditions in the status
+func (cr *OVSNetwork) SetConditions(conditions []metav1.Condition) {
+	cr.Status.Conditions = conditions
 }
 
 // NetFilterMatch -- parse netFilter and check for a match
