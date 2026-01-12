@@ -45,9 +45,14 @@ func (dn *NodeReconciler) updateSyncState(ctx context.Context, desiredNodeState 
 		desiredNodeState.SetConfigurationConditions(status, failedMessage)
 
 		// Check if there are actual changes to avoid unnecessary API calls
+		// We need to check SyncStatus, LastSyncError, Conditions, AND the host status fields
+		// (Interfaces, Bridges, System) to ensure we don't skip updates when host state changes
 		if currentNodeState.Status.SyncStatus == desiredNodeState.Status.SyncStatus &&
 			currentNodeState.Status.LastSyncError == desiredNodeState.Status.LastSyncError &&
-			sriovnetworkv1.ConditionsEqual(currentNodeState.Status.Conditions, desiredNodeState.Status.Conditions) {
+			sriovnetworkv1.ConditionsEqual(currentNodeState.Status.Conditions, desiredNodeState.Status.Conditions) &&
+			equality.Semantic.DeepEqual(currentNodeState.Status.Interfaces, desiredNodeState.Status.Interfaces) &&
+			equality.Semantic.DeepEqual(currentNodeState.Status.Bridges, desiredNodeState.Status.Bridges) &&
+			equality.Semantic.DeepEqual(currentNodeState.Status.System, desiredNodeState.Status.System) {
 			funcLog.V(2).Info("nodeState status unchanged, skipping update",
 				"SyncStatus", status)
 			return nil
