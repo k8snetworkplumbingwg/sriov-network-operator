@@ -224,8 +224,12 @@ func createNodeStateEventHandler(enqueue enqueueFunc) handler.Funcs {
 		UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[client.Object], w workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			oldState := e.ObjectOld.(*sriovnetworkv1.SriovNetworkNodeState)
 			newState := e.ObjectNew.(*sriovnetworkv1.SriovNetworkNodeState)
-			// Only enqueue if conditions changed
-			if !equality.Semantic.DeepEqual(oldState.Status.Conditions, newState.Status.Conditions) {
+			// Enqueue if conditions changed OR if SyncStatus changed.
+			// We check SyncStatus in addition to conditions because there can be
+			// race conditions where the daemon updates SyncStatus but conditions
+			// haven't been fully propagated yet.
+			if !equality.Semantic.DeepEqual(oldState.Status.Conditions, newState.Status.Conditions) ||
+				oldState.Status.SyncStatus != newState.Status.SyncStatus {
 				enqueue(ctx, w)
 			}
 		},
