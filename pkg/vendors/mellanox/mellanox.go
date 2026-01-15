@@ -227,7 +227,7 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 
 func (m *mellanoxHelper) GetMlxNicFwData(pciAddress string) (current, next *MlxNic, err error) {
 	log.Log.Info("mellanox-plugin getMlnxNicFwData()", "device", pciAddress)
-	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2}
+	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2, LagResourceAllocation}
 
 	out, stderr, err := m.MstConfigReadData(pciAddress)
 	if err != nil {
@@ -382,7 +382,7 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 }
 
 // HandleESwitchParams check if eswitch params should be changes
-func HandleESwitchParams(pciPrefix string, attr *MlxNic,
+func HandleESwitchParams(pciPrefix string, attr *MlxNic, fwCurrent *MlxNic,
 	mellanoxNicsSpec map[string]sriovnetworkv1.Interface,
 	mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) bool {
 	needReboot := false
@@ -392,17 +392,32 @@ func HandleESwitchParams(pciPrefix string, attr *MlxNic,
 		ifaceStatus := getIfaceStatus(pciAddress, mellanoxNicsStatus)
 		needChange, devlinkParam := isESwitchParamsRequireChange(firstPortSpec, ifaceStatus)
 		if needChange {
-			log.Log.V(2).Info("Changing eswitch params (multiport), needs reboot",
-				"device", ifaceStatus.PciAddress)
+			desiredMultiport := 1
 			if devlinkParam != nil {
 				if devlinkParam.Value == devlinkMultiportEnableValue {
-					attr.Multiport = 1
+					desiredMultiport = 1
 				} else {
-					attr.Multiport = 0
+					desiredMultiport = 0
 				}
-			} else {
-				attr.Multiport = 1
 			}
+
+			if fwCurrent.Multiport == -1 {
+				log.Log.V(2).Info("LagResourceAllocation not supported in firmware, skipping firmware change",
+					"device", ifaceStatus.PciAddress)
+				attr.Multiport = -1
+				return false
+			}
+
+			if fwCurrent.Multiport == desiredMultiport {
+				log.Log.V(2).Info("Eswitch params (multiport) already set in firmware, skipping reboot",
+					"device", ifaceStatus.PciAddress)
+				attr.Multiport = -1
+				return false
+			}
+
+			log.Log.V(2).Info("Changing eswitch params (multiport), needs reboot",
+				"device", ifaceStatus.PciAddress)
+			attr.Multiport = desiredMultiport
 			needReboot = true
 		} else {
 			attr.Multiport = -1
@@ -415,7 +430,7 @@ func HandleESwitchParams(pciPrefix string, attr *MlxNic,
 
 func mlnxNicFromMap(mstData map[string]string) (*MlxNic, error) {
 	log.Log.Info("mellanox-plugin mlnxNicFromMap()", "data", mstData)
-	fwData := &MlxNic{}
+	fwData := &MlxNic{Multiport: -1}
 	if strings.Contains(mstData[EnableSriov], "True") {
 		fwData.EnableSriov = true
 	}
@@ -428,6 +443,14 @@ func mlnxNicFromMap(mstData map[string]string) (*MlxNic, error) {
 	fwData.LinkTypeP1 = getLinkType(mstData[LinkTypeP1])
 	if linkTypeP2, ok := mstData[LinkTypeP2]; ok {
 		fwData.LinkTypeP2 = getLinkType(linkTypeP2)
+	}
+
+	if val, ok := mstData[LagResourceAllocation]; ok {
+		if strings.Contains(val, "(1)") {
+			fwData.Multiport = 1
+		} else if strings.Contains(val, "(0)") {
+			fwData.Multiport = 0
+		}
 	}
 
 	return fwData, nil

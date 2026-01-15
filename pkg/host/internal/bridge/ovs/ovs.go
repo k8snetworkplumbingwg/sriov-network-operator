@@ -68,10 +68,10 @@ type ovs struct {
 func (o *ovs) CreateOVSBridge(ctx context.Context, conf *sriovnetworkv1.OVSConfigExt) error {
 	ctx, cancel := setDefaultTimeout(ctx)
 	defer cancel()
-	if len(conf.Uplinks) != 1 {
-		return fmt.Errorf("unsupported configuration, uplinks list must contain one element")
+	if len(conf.Uplinks) < 1 {
+		return fmt.Errorf("unsupported configuration, uplinks list must contain at least one element")
 	}
-	funcLog := log.Log.WithValues("bridge", conf.Name, "ifaceAddr", conf.Uplinks[0].PciAddress, "ifaceName", conf.Uplinks[0].Name)
+	funcLog := log.Log.WithValues("bridge", conf.Name, "numUplinks", len(conf.Uplinks))
 	funcLog.V(1).Info("CreateOVSBridge(): start configuration of the OVS bridge")
 
 	dbClient, err := getClient(ctx)
@@ -116,13 +116,15 @@ func (o *ovs) CreateOVSBridge(ctx context.Context, conf *sriovnetworkv1.OVSConfi
 	} else {
 		funcLog.V(2).Info("CreateOVSBridge(): configuration for the bridge not found in the store, create the bridge")
 	}
-	funcLog.V(2).Info("CreateOVSBridge(): ensure uplink is not attached to any bridge")
+	funcLog.V(2).Info("CreateOVSBridge(): ensure uplinks are not attached to any bridge")
 	// removal of the bridge should also remove all interfaces that are attached to it.
 	// we need to remove interface with additional call even if keepBridge is false to make
 	// sure that the interface is not attached to a different OVS bridge
-	if err := o.deleteInterfaceByName(ctx, dbClient, conf.Uplinks[0].Name); err != nil {
-		funcLog.Error(err, "CreateOVSBridge(): failed to remove uplink interface")
-		return err
+	for _, uplink := range conf.Uplinks {
+		if err := o.deleteInterfaceByName(ctx, dbClient, uplink.Name); err != nil {
+			funcLog.Error(err, "CreateOVSBridge(): failed to remove uplink interface", "uplink", uplink.Name)
+			return err
+		}
 	}
 	if !keepBridge {
 		// make sure that bridge with provided name not exist
@@ -160,18 +162,21 @@ func (o *ovs) CreateOVSBridge(ctx context.Context, conf *sriovnetworkv1.OVSConfi
 		funcLog.Error(err, "CreateOVSBridge(): failed to add internal interface to the bridge")
 		return err
 	}
-	funcLog.V(2).Info("CreateOVSBridge(): add uplink interface to the bridge")
-	if err := o.addInterface(ctx, dbClient, bridge, &InterfaceEntry{
-		Name:        conf.Uplinks[0].Name,
-		UUID:        uuid.NewString(),
-		Type:        conf.Uplinks[0].Interface.Type,
-		Options:     conf.Uplinks[0].Interface.Options,
-		ExternalIDs: conf.Uplinks[0].Interface.ExternalIDs,
-		OtherConfig: conf.Uplinks[0].Interface.OtherConfig,
-		MTURequest:  conf.Uplinks[0].Interface.MTURequest,
-	}); err != nil {
-		funcLog.Error(err, "CreateOVSBridge(): failed to add uplink interface to the bridge")
-		return err
+	// Add all uplink interfaces to the bridge
+	for _, uplink := range conf.Uplinks {
+		funcLog.V(2).Info("CreateOVSBridge(): add uplink interface to the bridge", "uplink", uplink.Name)
+		if err := o.addInterface(ctx, dbClient, bridge, &InterfaceEntry{
+			Name:        uplink.Name,
+			UUID:        uuid.NewString(),
+			Type:        uplink.Interface.Type,
+			Options:     uplink.Interface.Options,
+			ExternalIDs: uplink.Interface.ExternalIDs,
+			OtherConfig: uplink.Interface.OtherConfig,
+			MTURequest:  uplink.Interface.MTURequest,
+		}); err != nil {
+			funcLog.Error(err, "CreateOVSBridge(): failed to add uplink interface to the bridge", "uplink", uplink.Name)
+			return err
+		}
 	}
 	return nil
 }
@@ -630,47 +635,53 @@ func (o *ovs) getCurrentBridgeState(ctx context.Context, dbClient client.Client,
 	if len(knownConfig.Uplinks) == 0 {
 		return currentConfig, nil
 	}
-	knownConfigUplink := knownConfig.Uplinks[0]
-	iface, err := o.getInterfaceByName(ctx, dbClient, knownConfigUplink.Name)
-	if err != nil {
-		return nil, err
-	}
-	if iface == nil {
-		return currentConfig, nil
-	}
 
-	if iface.Error != nil {
-		funcLog.V(2).Info("getCurrentBridgeState(): interface has an error, remove it from the bridge state", "interface", iface.Name, "error", iface.Error)
-		// interface has an error, do not report info about it to let the operator try to recreate it
-		return currentConfig, nil
-	}
+	// Process all uplinks
+	for _, knownConfigUplink := range knownConfig.Uplinks {
+		iface, err := o.getInterfaceByName(ctx, dbClient, knownConfigUplink.Name)
+		if err != nil {
+			return nil, err
+		}
+		if iface == nil {
+			// Interface not found, skip it (bridge needs reconfiguration)
+			continue
+		}
 
-	port, err := o.getPortByInterface(ctx, dbClient, iface)
-	if err != nil {
-		return nil, err
-	}
-	if port == nil {
-		return currentConfig, nil
-	}
+		if iface.Error != nil {
+			funcLog.V(2).Info("getCurrentBridgeState(): interface has an error, skip it", "interface", iface.Name, "error", iface.Error)
+			// interface has an error, do not report info about it to let the operator try to recreate it
+			continue
+		}
 
-	if !bridge.HasPort(port.UUID) {
-		// interface belongs to a wrong bridge, do not include uplink config to
-		// the current bridge state to let the operator try to fix this
-		return currentConfig, nil
-	}
-	currentConfig.Uplinks = []sriovnetworkv1.OVSUplinkConfigExt{{
-		PciAddress: knownConfigUplink.PciAddress,
-		Name:       knownConfigUplink.Name,
-		Interface: sriovnetworkv1.OVSInterfaceConfig{
-			Type:        iface.Type,
-			ExternalIDs: updateMap(knownConfigUplink.Interface.ExternalIDs, iface.ExternalIDs),
-			Options:     updateMap(knownConfigUplink.Interface.Options, iface.Options),
-			OtherConfig: updateMap(knownConfigUplink.Interface.OtherConfig, iface.OtherConfig),
-		},
-	}}
-	if iface.MTURequest != nil {
-		mtu := *iface.MTURequest
-		currentConfig.Uplinks[0].Interface.MTURequest = &mtu
+		port, err := o.getPortByInterface(ctx, dbClient, iface)
+		if err != nil {
+			return nil, err
+		}
+		if port == nil {
+			// Port not found, skip it
+			continue
+		}
+
+		if !bridge.HasPort(port.UUID) {
+			// interface belongs to a wrong bridge, skip it
+			continue
+		}
+
+		uplinkConfig := sriovnetworkv1.OVSUplinkConfigExt{
+			PciAddress: knownConfigUplink.PciAddress,
+			Name:       knownConfigUplink.Name,
+			Interface: sriovnetworkv1.OVSInterfaceConfig{
+				Type:        iface.Type,
+				ExternalIDs: updateMap(knownConfigUplink.Interface.ExternalIDs, iface.ExternalIDs),
+				Options:     updateMap(knownConfigUplink.Interface.Options, iface.Options),
+				OtherConfig: updateMap(knownConfigUplink.Interface.OtherConfig, iface.OtherConfig),
+			},
+		}
+		if iface.MTURequest != nil {
+			mtu := *iface.MTURequest
+			uplinkConfig.Interface.MTURequest = &mtu
+		}
+		currentConfig.Uplinks = append(currentConfig.Uplinks, uplinkConfig)
 	}
 	return currentConfig, nil
 }

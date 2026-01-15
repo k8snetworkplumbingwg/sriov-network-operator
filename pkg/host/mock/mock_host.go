@@ -213,20 +213,6 @@ func (mr *MockHostManagerInterfaceMockRecorder) ConfigureBridges(bridgesSpec, br
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureBridges", reflect.TypeOf((*MockHostManagerInterface)(nil).ConfigureBridges), bridgesSpec, bridgesStatus)
 }
 
-// ConfigureBridgesGrouping mocks base method.
-func (m *MockHostManagerInterface) ConfigureBridgesGrouping(interfaces v1.Interfaces, name, groupingPolicy string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ConfigureBridgesGrouping", interfaces, name, groupingPolicy)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// ConfigureBridgesGrouping indicates an expected call of ConfigureBridgesGrouping.
-func (mr *MockHostManagerInterfaceMockRecorder) ConfigureBridgesGrouping(interfaces, name, groupingPolicy any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureBridgesGrouping", reflect.TypeOf((*MockHostManagerInterface)(nil).ConfigureBridgesGrouping), interfaces, name, groupingPolicy)
-}
-
 // ConfigureVfGUID mocks base method.
 func (m *MockHostManagerInterface) ConfigureVfGUID(vfAddr, pfAddr string, vfID int, pfLink netlink.Link) error {
 	m.ctrl.T.Helper()

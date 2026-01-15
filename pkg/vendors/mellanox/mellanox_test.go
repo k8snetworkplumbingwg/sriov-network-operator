@@ -619,7 +619,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeFalse())
 			Expect(attrs.Multiport).To(Equal(-1))
 		})
@@ -654,7 +654,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeFalse())
 			Expect(attrs.Multiport).To(Equal(-1))
 		})
@@ -689,9 +689,70 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeTrue())
 			Expect(attrs.Multiport).To(Equal(1))
+		})
+
+		It("should return false if esw_multiport is missing in status but already enabled in firmware", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "true"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+					// No esw_multiport in status
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 1}, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(-1))
+		})
+
+		It("should return false and not change Multiport if firmware does not support LagResourceAllocation", func() {
+			ifaceSpec := sriovnetworkv1.Interface{
+				PciAddress: "0000:d8:00.0",
+				Name:       "eth0",
+				NumVfs:     10,
+				DevlinkParams: sriovnetworkv1.DevlinkParams{
+					Params: []sriovnetworkv1.DevlinkParam{
+						{Name: "esw_multiport", Value: "true"},
+					},
+				},
+			}
+			mellanoxNicsSpec := map[string]sriovnetworkv1.Interface{
+				"0000:d8:00.0": ifaceSpec,
+			}
+			mellanoxNicsExt := map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.0": {
+					PciAddress: "0000:d8:00.0",
+					Name:       "eth0",
+				},
+			}
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": mellanoxNicsExt,
+			}
+			attrs := &MlxNic{}
+
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: -1}, mellanoxNicsSpec, mellanoxNicsStatus)
+			Expect(needReboot).To(BeFalse())
+			Expect(attrs.Multiport).To(Equal(-1))
 		})
 
 		It("should return true and set Multiport to 0 if esw_multiport should be disabled", func() {
@@ -724,7 +785,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 1}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeTrue())
 			Expect(attrs.Multiport).To(Equal(0))
 		})
@@ -757,7 +818,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeTrue())
 			Expect(attrs.Multiport).To(Equal(1))
 		})
@@ -772,7 +833,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeFalse())
 			Expect(attrs.Multiport).To(Equal(-1))
 		})
@@ -808,7 +869,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeFalse())
 			Expect(attrs.Multiport).To(Equal(-1))
 		})
@@ -843,7 +904,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeFalse())
 			Expect(attrs.Multiport).To(Equal(-1))
 		})
@@ -882,7 +943,7 @@ var _ = Describe("SRIOV", func() {
 			}
 			attrs := &MlxNic{}
 
-			needReboot := HandleESwitchParams("0000:d8:00.", attrs, mellanoxNicsSpec, mellanoxNicsStatus)
+			needReboot := HandleESwitchParams("0000:d8:00.", attrs, &MlxNic{Multiport: 0}, mellanoxNicsSpec, mellanoxNicsStatus)
 			Expect(needReboot).To(BeTrue())
 			Expect(attrs.Multiport).To(Equal(1))
 		})
