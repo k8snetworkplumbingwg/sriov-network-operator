@@ -1179,9 +1179,6 @@ func (s *sriov) setEswitchModeAndNumVFsMlx(pciAddr string, desiredEswitchMode st
 			return err
 		}
 	}
-	if err := s.SetSriovNumVfs(pciAddr, numVFs); err != nil {
-		return err
-	}
 
 	if desiredEswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
 		if err := s.unbindAllVFsOnPF(pciAddr); err != nil {
@@ -1191,6 +1188,9 @@ func (s *sriov) setEswitchModeAndNumVFsMlx(pciAddr string, desiredEswitchMode st
 		if err := s.SetNicSriovMode(pciAddr, desiredEswitchMode); err != nil {
 			return err
 		}
+	}
+	if err := s.SetSriovNumVfs(pciAddr, numVFs); err != nil {
+		return err
 	}
 	return nil
 }
