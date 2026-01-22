@@ -128,11 +128,25 @@ type SriovNetworkNodeStateStatus struct {
 	System        System        `json:"system,omitempty"`
 	SyncStatus    string        `json:"syncStatus,omitempty"`
 	LastSyncError string        `json:"lastSyncError,omitempty"`
+
+	// Conditions represent the latest available observations of the SriovNetworkNodeState's state
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 //+kubebuilder:printcolumn:name="Sync Status",type=string,JSONPath=`.status.syncStatus`
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+//+kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=`.status.conditions[?(@.type=="Progressing")].status`
+//+kubebuilder:printcolumn:name="Degraded",type=string,JSONPath=`.status.conditions[?(@.type=="Degraded")].status`
+//+kubebuilder:printcolumn:name="DrainProgress",type=string,JSONPath=`.status.conditions[?(@.type=="DrainProgressing")].status`
+//+kubebuilder:printcolumn:name="DrainDegraded",type=string,JSONPath=`.status.conditions[?(@.type=="DrainDegraded")].status`
+//+kubebuilder:printcolumn:name="DrainComplete",type=string,JSONPath=`.status.conditions[?(@.type=="DrainComplete")].status`
 //+kubebuilder:printcolumn:name="Desired Sync State",type=string,JSONPath=`.metadata.annotations.sriovnetwork\.openshift\.io/desired-state`
 //+kubebuilder:printcolumn:name="Current Sync State",type=string,JSONPath=`.metadata.annotations.sriovnetwork\.openshift\.io/current-state`
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
