@@ -142,8 +142,8 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				}, (10+snoTimeoutMultiplier*110)*time.Second, 1*time.Second).ShouldNot(HaveOccurred())
 
 				By("Verifying SriovNetwork conditions are set correctly")
-				assertCondition(&sriovv1.SriovNetwork{}, sriovNetwork.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
-				assertCondition(&sriovv1.SriovNetwork{}, sriovNetwork.Name, operatorNamespace, sriovv1.ConditionDegraded, metav1.ConditionFalse)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: sriovNetwork.Name, Namespace: operatorNamespace}}, sriovv1.ConditionReady, metav1.ConditionTrue)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: sriovNetwork.Name, Namespace: operatorNamespace}}, sriovv1.ConditionDegraded, metav1.ConditionFalse)
 
 				podDefinition := pod.DefineWithNetworks([]string{sriovNetwork.Name})
 				created, err := clients.Pods(namespaces.Test).Create(context.Background(), podDefinition, metav1.CreateOptions{})
@@ -199,8 +199,8 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				}, (10+snoTimeoutMultiplier*110)*time.Second, 1*time.Second).ShouldNot(HaveOccurred())
 
 				By("Verifying SriovNetwork conditions are set correctly")
-				assertCondition(&sriovv1.SriovNetwork{}, sriovNetwork.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
-				assertCondition(&sriovv1.SriovNetwork{}, sriovNetwork.Name, operatorNamespace, sriovv1.ConditionDegraded, metav1.ConditionFalse)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: sriovNetwork.Name, Namespace: operatorNamespace}}, sriovv1.ConditionReady, metav1.ConditionTrue)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: sriovNetwork.Name, Namespace: operatorNamespace}}, sriovv1.ConditionDegraded, metav1.ConditionFalse)
 
 				podDefinition := pod.DefineWithNetworks([]string{sriovNetwork.Name})
 				podDefinition.ObjectMeta.Labels = map[string]string{"anyname": "anyvalue"}
@@ -332,8 +332,8 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				validateNetworkFields(copyObj, spoofChkStatusValidation)
 
 				By("Verifying SriovNetwork conditions are set correctly")
-				assertCondition(&sriovv1.SriovNetwork{}, copyObj.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
-				assertCondition(&sriovv1.SriovNetwork{}, copyObj.Name, operatorNamespace, sriovv1.ConditionDegraded, metav1.ConditionFalse)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: copyObj.Name, Namespace: operatorNamespace}}, sriovv1.ConditionReady, metav1.ConditionTrue)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: copyObj.Name, Namespace: operatorNamespace}}, sriovv1.ConditionDegraded, metav1.ConditionFalse)
 
 				By("removing sriov network")
 				err = clients.Delete(context.Background(), sriovNetwork)
@@ -379,8 +379,8 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				validateNetworkFields(copyObj, trustChkStatusValidation)
 
 				By("Verifying SriovNetwork conditions are set correctly")
-				assertCondition(&sriovv1.SriovNetwork{}, copyObj.Name, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
-				assertCondition(&sriovv1.SriovNetwork{}, copyObj.Name, operatorNamespace, sriovv1.ConditionDegraded, metav1.ConditionFalse)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: copyObj.Name, Namespace: operatorNamespace}}, sriovv1.ConditionReady, metav1.ConditionTrue)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: copyObj.Name, Namespace: operatorNamespace}}, sriovv1.ConditionDegraded, metav1.ConditionFalse)
 
 				By("removing sriov network")
 				err = clients.Delete(context.Background(), sriovNetwork)
@@ -600,8 +600,8 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				waitForNetAttachDef(sriovNetworkName, ns1)
 
 				By("Verifying SriovNetwork conditions are set correctly")
-				assertCondition(&sriovv1.SriovNetwork{}, sriovNetworkName, operatorNamespace, sriovv1.ConditionReady, metav1.ConditionTrue)
-				assertCondition(&sriovv1.SriovNetwork{}, sriovNetworkName, operatorNamespace, sriovv1.ConditionDegraded, metav1.ConditionFalse)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: sriovNetworkName, Namespace: operatorNamespace}}, sriovv1.ConditionReady, metav1.ConditionTrue)
+				assertCondition(&sriovv1.SriovNetwork{ObjectMeta: metav1.ObjectMeta{Name: sriovNetworkName, Namespace: operatorNamespace}}, sriovv1.ConditionDegraded, metav1.ConditionFalse)
 
 				srNetwork := &sriovv1.SriovNetwork{}
 				err = clients.Get(context.Background(), runtimeclient.ObjectKey{Namespace: operatorNamespace, Name: sriovNetworkName}, srNetwork)

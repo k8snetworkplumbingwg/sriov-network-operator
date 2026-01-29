@@ -98,12 +98,12 @@ var _ = Describe("Transitions", func() {
 			Expect(transition.EventType()).To(Equal("Normal"))
 		})
 
-		It("should return Warning for new False condition", func() {
+		It("should return Normal for new False condition", func() {
 			transition := Transition{
 				Type:      TransitionAdded,
 				NewStatus: metav1.ConditionFalse,
 			}
-			Expect(transition.EventType()).To(Equal("Warning"))
+			Expect(transition.EventType()).To(Equal("Normal"))
 		})
 
 		It("should return Normal for transition to True", func() {
@@ -115,13 +115,13 @@ var _ = Describe("Transitions", func() {
 			Expect(transition.EventType()).To(Equal("Normal"))
 		})
 
-		It("should return Warning for transition from True", func() {
+		It("should return Normal for transition from True to False", func() {
 			transition := Transition{
 				Type:      TransitionChanged,
 				OldStatus: metav1.ConditionTrue,
 				NewStatus: metav1.ConditionFalse,
 			}
-			Expect(transition.EventType()).To(Equal("Warning"))
+			Expect(transition.EventType()).To(Equal("Normal"))
 		})
 	})
 

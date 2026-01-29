@@ -33,7 +33,7 @@ const (
 	MaxRetries = 3
 )
 
-// Patcher provides methods for updating resource status with retry logic and event emission
+// Interface provides methods for updating resource status with retry logic and event emission
 //
 //go:generate ../../bin/mockgen -destination mock/mock_patcher.go -source patcher.go
 type Interface interface {
@@ -45,32 +45,9 @@ type Interface interface {
 
 	// UpdateStatusWithEvents updates status and emits events for condition transitions
 	UpdateStatusWithEvents(ctx context.Context, obj client.Object, oldConditions, newConditions []metav1.Condition, updateFunc func() error) error
-
-	// Condition management methods (delegated to embedded condition manager)
-
-	// SetCondition sets a condition with the given type, status, reason, and message
-	SetCondition(conditions *[]metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string, generation int64)
-
-	// IsConditionTrue checks if a condition exists and has status True
-	IsConditionTrue(conditions []metav1.Condition, conditionType string) bool
-
-	// IsConditionFalse checks if a condition exists and has status False
-	IsConditionFalse(conditions []metav1.Condition, conditionType string) bool
-
-	// IsConditionUnknown checks if a condition exists and has status Unknown
-	IsConditionUnknown(conditions []metav1.Condition, conditionType string) bool
-
-	// FindCondition returns the condition with the given type, or nil if not found
-	FindCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition
-
-	// RemoveCondition removes the condition with the given type
-	RemoveCondition(conditions *[]metav1.Condition, conditionType string)
-
-	// HasConditionChanged checks if the new condition differs from the existing one
-	HasConditionChanged(conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string) bool
 }
 
-// Patcher is the production implementation of Patcher
+// Patcher is the production implementation of Interface
 type Patcher struct {
 	client   client.Client
 	recorder record.EventRecorder
@@ -184,10 +161,10 @@ func (p *Patcher) UpdateStatusWithEvents(ctx context.Context, obj client.Object,
 	return fmt.Errorf("failed to patch status after %d retries: %w", MaxRetries, lastErr)
 }
 
-// Condition management methods
+// Condition helper functions
 
 // SetCondition sets a condition with the given type, status, reason, and message
-func (p *Patcher) SetCondition(conditions *[]metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string, generation int64) {
+func SetCondition(conditions *[]metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string, generation int64) {
 	condition := metav1.Condition{
 		Type:               conditionType,
 		Status:             status,
@@ -199,36 +176,36 @@ func (p *Patcher) SetCondition(conditions *[]metav1.Condition, conditionType str
 }
 
 // IsConditionTrue checks if a condition exists and has status True
-func (p *Patcher) IsConditionTrue(conditions []metav1.Condition, conditionType string) bool {
+func IsConditionTrue(conditions []metav1.Condition, conditionType string) bool {
 	condition := meta.FindStatusCondition(conditions, conditionType)
 	return condition != nil && condition.Status == metav1.ConditionTrue
 }
 
 // IsConditionFalse checks if a condition exists and has status False
-func (p *Patcher) IsConditionFalse(conditions []metav1.Condition, conditionType string) bool {
+func IsConditionFalse(conditions []metav1.Condition, conditionType string) bool {
 	condition := meta.FindStatusCondition(conditions, conditionType)
 	return condition != nil && condition.Status == metav1.ConditionFalse
 }
 
 // IsConditionUnknown checks if a condition exists and has status Unknown
-func (p *Patcher) IsConditionUnknown(conditions []metav1.Condition, conditionType string) bool {
+func IsConditionUnknown(conditions []metav1.Condition, conditionType string) bool {
 	condition := meta.FindStatusCondition(conditions, conditionType)
 	return condition != nil && condition.Status == metav1.ConditionUnknown
 }
 
 // FindCondition returns the condition with the given type, or nil if not found
-func (p *Patcher) FindCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition {
+func FindCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition {
 	return meta.FindStatusCondition(conditions, conditionType)
 }
 
 // RemoveCondition removes the condition with the given type
-func (p *Patcher) RemoveCondition(conditions *[]metav1.Condition, conditionType string) {
+func RemoveCondition(conditions *[]metav1.Condition, conditionType string) {
 	meta.RemoveStatusCondition(conditions, conditionType)
 }
 
 // HasConditionChanged checks if the new condition differs from the existing one
 // Returns true if the condition doesn't exist or if status, reason, or message differ
-func (p *Patcher) HasConditionChanged(conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string) bool {
+func HasConditionChanged(conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string) bool {
 	existing := meta.FindStatusCondition(conditions, conditionType)
 	if existing == nil {
 		return true

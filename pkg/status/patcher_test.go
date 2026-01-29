@@ -29,17 +29,11 @@ func TestStatus(t *testing.T) {
 	RunSpecs(t, "Status Package Suite")
 }
 
-var _ = Describe("Patcher Condition Methods", func() {
-	var patcher *Patcher
-
-	BeforeEach(func() {
-		patcher = &Patcher{}
-	})
-
+var _ = Describe("Condition Helper Functions", func() {
 	Describe("SetCondition", func() {
 		It("should set a new condition", func() {
 			conditions := []metav1.Condition{}
-			patcher.SetCondition(&conditions, "Ready", metav1.ConditionTrue, "TestReason", "Test message", 1)
+			SetCondition(&conditions, "Ready", metav1.ConditionTrue, "TestReason", "Test message", 1)
 
 			Expect(conditions).To(HaveLen(1))
 			Expect(conditions[0].Type).To(Equal("Ready"))
@@ -60,7 +54,7 @@ var _ = Describe("Patcher Condition Methods", func() {
 				},
 			}
 
-			patcher.SetCondition(&conditions, "Ready", metav1.ConditionTrue, "NewReason", "New message", 2)
+			SetCondition(&conditions, "Ready", metav1.ConditionTrue, "NewReason", "New message", 2)
 
 			Expect(conditions).To(HaveLen(1))
 			Expect(conditions[0].Type).To(Equal("Ready"))
@@ -76,19 +70,19 @@ var _ = Describe("Patcher Condition Methods", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue},
 			}
-			Expect(patcher.IsConditionTrue(conditions, "Ready")).To(BeTrue())
+			Expect(IsConditionTrue(conditions, "Ready")).To(BeTrue())
 		})
 
 		It("should return false when condition exists but is not True", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionFalse},
 			}
-			Expect(patcher.IsConditionTrue(conditions, "Ready")).To(BeFalse())
+			Expect(IsConditionTrue(conditions, "Ready")).To(BeFalse())
 		})
 
 		It("should return false when condition does not exist", func() {
 			conditions := []metav1.Condition{}
-			Expect(patcher.IsConditionTrue(conditions, "Ready")).To(BeFalse())
+			Expect(IsConditionTrue(conditions, "Ready")).To(BeFalse())
 		})
 	})
 
@@ -97,14 +91,14 @@ var _ = Describe("Patcher Condition Methods", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionFalse},
 			}
-			Expect(patcher.IsConditionFalse(conditions, "Ready")).To(BeTrue())
+			Expect(IsConditionFalse(conditions, "Ready")).To(BeTrue())
 		})
 
 		It("should return false when condition exists but is not False", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue},
 			}
-			Expect(patcher.IsConditionFalse(conditions, "Ready")).To(BeFalse())
+			Expect(IsConditionFalse(conditions, "Ready")).To(BeFalse())
 		})
 	})
 
@@ -113,7 +107,7 @@ var _ = Describe("Patcher Condition Methods", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionUnknown},
 			}
-			Expect(patcher.IsConditionUnknown(conditions, "Ready")).To(BeTrue())
+			Expect(IsConditionUnknown(conditions, "Ready")).To(BeTrue())
 		})
 	})
 
@@ -122,14 +116,14 @@ var _ = Describe("Patcher Condition Methods", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue},
 			}
-			condition := patcher.FindCondition(conditions, "Ready")
+			condition := FindCondition(conditions, "Ready")
 			Expect(condition).ToNot(BeNil())
 			Expect(condition.Type).To(Equal("Ready"))
 		})
 
 		It("should return nil when condition does not exist", func() {
 			conditions := []metav1.Condition{}
-			condition := patcher.FindCondition(conditions, "Ready")
+			condition := FindCondition(conditions, "Ready")
 			Expect(condition).To(BeNil())
 		})
 	})
@@ -140,7 +134,7 @@ var _ = Describe("Patcher Condition Methods", func() {
 				{Type: "Ready", Status: metav1.ConditionTrue},
 				{Type: "Degraded", Status: metav1.ConditionFalse},
 			}
-			patcher.RemoveCondition(&conditions, "Ready")
+			RemoveCondition(&conditions, "Ready")
 			Expect(conditions).To(HaveLen(1))
 			Expect(conditions[0].Type).To(Equal("Degraded"))
 		})
@@ -149,7 +143,7 @@ var _ = Describe("Patcher Condition Methods", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue},
 			}
-			patcher.RemoveCondition(&conditions, "NonExistent")
+			RemoveCondition(&conditions, "NonExistent")
 			Expect(conditions).To(HaveLen(1))
 		})
 	})
@@ -157,35 +151,35 @@ var _ = Describe("Patcher Condition Methods", func() {
 	Describe("HasConditionChanged", func() {
 		It("should return true when condition does not exist", func() {
 			conditions := []metav1.Condition{}
-			Expect(patcher.HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "Message")).To(BeTrue())
+			Expect(HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "Message")).To(BeTrue())
 		})
 
 		It("should return true when status changed", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionFalse, Reason: "Reason", Message: "Message"},
 			}
-			Expect(patcher.HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "Message")).To(BeTrue())
+			Expect(HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "Message")).To(BeTrue())
 		})
 
 		It("should return true when reason changed", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "OldReason", Message: "Message"},
 			}
-			Expect(patcher.HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "NewReason", "Message")).To(BeTrue())
+			Expect(HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "NewReason", "Message")).To(BeTrue())
 		})
 
 		It("should return true when message changed", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Reason", Message: "Old"},
 			}
-			Expect(patcher.HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "New")).To(BeTrue())
+			Expect(HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "New")).To(BeTrue())
 		})
 
 		It("should return false when nothing changed", func() {
 			conditions := []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Reason", Message: "Message"},
 			}
-			Expect(patcher.HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "Message")).To(BeFalse())
+			Expect(HasConditionChanged(conditions, "Ready", metav1.ConditionTrue, "Reason", "Message")).To(BeFalse())
 		})
 	})
 })

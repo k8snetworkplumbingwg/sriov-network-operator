@@ -52,25 +52,19 @@ type Transition struct {
 
 // EventType returns the Kubernetes event type for this transition
 func (t *Transition) EventType() string {
-	switch t.Type {
-	case TransitionAdded:
-		if t.NewStatus == metav1.ConditionTrue {
-			return EventTypeNormal
-		}
-		return EventTypeWarning
-	case TransitionChanged:
-		// True -> False/Unknown is a warning
-		if t.OldStatus == metav1.ConditionTrue && t.NewStatus != metav1.ConditionTrue {
-			return EventTypeWarning
-		}
-		// False/Unknown -> True is normal
-		if t.NewStatus == metav1.ConditionTrue {
-			return EventTypeNormal
-		}
-		return EventTypeWarning
-	case TransitionRemoved, TransitionUnchanged:
-		return EventTypeNormal
-	}
+	// TODO: for now we put everything in normal events, in the future we can differentiate between warnings and normal events for draining and other cases
+	// switch t.Type {
+	// case TransitionAdded:
+	// 	if t.NewStatus == metav1.ConditionTrue {
+	// 		return EventTypeNormal
+	// 	}
+	// 	return EventTypeWarning
+	// case TransitionChanged:
+	// 	// TODO: for now we put everything in normal events, in the future we can differentiate between warnings and normal events for draining and other cases
+	// 	return EventTypeNormal
+	// case TransitionRemoved, TransitionUnchanged:
+	// 	return EventTypeNormal
+	// }
 	return EventTypeNormal
 }
 

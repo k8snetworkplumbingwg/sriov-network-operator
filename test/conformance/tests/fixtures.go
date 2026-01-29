@@ -79,7 +79,10 @@ var _ = AfterSuite(func() {
 
 // assertCondition verifies that a SR-IOV resource has the expected condition status.
 // Supported object types: *sriovv1.SriovNetwork
-func assertCondition(obj runtimeclient.Object, name, namespace, conditionType string, expectedStatus metav1.ConditionStatus) {
+func assertCondition(obj runtimeclient.Object, conditionType string, expectedStatus metav1.ConditionStatus) {
+	name := obj.GetName()
+	namespace := obj.GetNamespace()
+
 	EventuallyWithOffset(1, func(g Gomega) {
 		err := clients.Get(context.Background(),
 			runtimeclient.ObjectKey{Name: name, Namespace: namespace}, obj)

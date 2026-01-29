@@ -432,26 +432,26 @@ func (r *genericNetworkReconciler) updateConditions(ctx context.Context, instanc
 
 	if err != nil {
 		// Network provisioning failed
-		r.statusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionFalse,
+		status.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionFalse,
 			sriovnetworkv1.ReasonProvisioningFailed, fmt.Sprintf("Failed to provision network: %v", err),
 			instance.GetGeneration())
-		r.statusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionTrue,
+		status.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionTrue,
 			sriovnetworkv1.ReasonProvisioningFailed, fmt.Sprintf("NetworkAttachmentDefinition provisioning failed: %v", err),
 			instance.GetGeneration())
 	} else if nadFound {
 		// Network is ready
-		r.statusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionTrue,
+		status.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionTrue,
 			sriovnetworkv1.ReasonNetworkReady, "NetworkAttachmentDefinition is provisioned and ready",
 			instance.GetGeneration())
-		r.statusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionFalse,
+		status.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionFalse,
 			sriovnetworkv1.ReasonNotDegraded, "Network is functioning correctly",
 			instance.GetGeneration())
 	} else {
 		// NAD not found yet (waiting for namespace) - this is a degraded state
-		r.statusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionFalse,
+		status.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionFalse,
 			sriovnetworkv1.ReasonNotReady, "Waiting for target namespace to be created",
 			instance.GetGeneration())
-		r.statusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionTrue,
+		status.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionTrue,
 			sriovnetworkv1.ReasonNamespaceNotFound, "Target namespace does not exist",
 			instance.GetGeneration())
 	}
