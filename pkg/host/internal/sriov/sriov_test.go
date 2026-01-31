@@ -17,6 +17,7 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	dputilsMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/dputils/mock"
 	ghwMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/ghw/mock"
+	netlinkLibPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/netlink"
 	netlinkMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/netlink/mock"
 	sriovnetMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/internal/lib/sriovnet/mock"
 	hostMockPkg "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/mock"
@@ -453,6 +454,84 @@ var _ = Describe("SRIOV", func() {
 							VfRange:      "0-0",
 							ResourceName: "test-resource0",
 							PolicyName:   "test-policy0",
+							Mtu:          2000,
+							IsRdma:       true,
+						}},
+				}},
+				[]sriovnetworkv1.InterfaceExt{{PciAddress: "0000:d8:00.0"}},
+				false)).NotTo(HaveOccurred())
+			helpers.GinkgoAssertFileContentsEquals("/sys/bus/pci/devices/0000:d8:00.0/sriov_numvfs", "1")
+		})
+
+		It("should configure IB with LinkByNameForSetVf fallback when netlink message too long", func() {
+			// This test covers the scenario where LinkByName fails with "message too long"
+			// error (common with InfiniBand devices with many VFs) and falls back to
+			// LinkByNameForSetVf which reads minimal info from sysfs.
+			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
+				Dirs: []string{"/sys/bus/pci/devices/0000:d8:00.0", "/sys/class/net/ibp13s0"},
+				Files: map[string][]byte{
+					"/sys/bus/pci/devices/0000:d8:00.0/sriov_numvfs": {},
+					"/sys/class/net/ibp13s0/ifindex":                 []byte("10"),
+				},
+			})
+
+			dputilsLibMock.EXPECT().GetSriovVFcapacity("0000:d8:00.0").Return(1)
+			dputilsLibMock.EXPECT().GetVFconfigured("0000:d8:00.0").Return(0)
+			dputilsLibMock.EXPECT().GetDriverName("0000:d8:00.0").Return("mlx5_core", nil)
+			netlinkLibMock.EXPECT().DevLinkGetDeviceByName("pci", "0000:d8:00.0").Return(&netlink.DevlinkDevice{
+				Attrs: netlink.DevlinkDevAttrs{Eswitch: netlink.DevlinkDevEswitchAttr{Mode: "legacy"}}}, nil)
+			hostMock.EXPECT().RemoveDisableNMUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().RemovePersistPFNameUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().RemoveVfRepresentorUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().AddDisableNMUdevRule("0000:d8:00.0").Return(nil)
+			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2"}, nil)
+
+			pfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
+
+			// Order of LinkByName calls in the code:
+			// 1. configSriovVFDevices() - fails with "message too long", triggers fallback
+			// 2. configSriovDevice() for PF link up - succeeds
+			linkByNameCallCount := 0
+			netlinkLibMock.EXPECT().LinkByName("ibp13s0").DoAndReturn(
+				func(name string) (netlinkLibPkg.Link, error) {
+					linkByNameCallCount++
+					if linkByNameCallCount == 1 {
+						// First call in configSriovVFDevices - simulate IB netlink buffer overflow
+						return nil, syscall.EMSGSIZE
+					}
+					// Second call for PF link up - succeeds
+					return pfLinkMock, nil
+				}).Times(2)
+
+			// Fallback to LinkByNameForSetVf after "message too long" error
+			netlinkLibMock.EXPECT().LinkByNameForSetVf("ibp13s0").Return(pfLinkMock, nil)
+
+			// PF link up check (after configSriovVFDevices succeeds)
+			netlinkLibMock.EXPECT().IsLinkAdminStateUp(pfLinkMock).Return(false)
+			netlinkLibMock.EXPECT().LinkSetUp(pfLinkMock).Return(nil)
+
+			dputilsLibMock.EXPECT().GetVFID("0000:d8:00.2").Return(0, nil).Times(1)
+			hostMock.EXPECT().HasDriver("0000:d8:00.2").Return(true, "mlx5_core").Times(2)
+			hostMock.EXPECT().UnbindDriverIfNeeded("0000:d8:00.2", true).Return(nil)
+			hostMock.EXPECT().BindDefaultDriver("0000:d8:00.2").Return(nil)
+			hostMock.EXPECT().SetNetdevMTU("0000:d8:00.2", 2000).Return(nil)
+			hostMock.EXPECT().ConfigureVfGUID(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+
+			hostMock.EXPECT().Unbind(gomock.Any()).Return(nil).Times(1)
+
+			storeManagerMode.EXPECT().SaveLastPfAppliedStatus(gomock.Any()).Return(nil)
+
+			Expect(s.ConfigSriovInterfaces(storeManagerMode,
+				[]sriovnetworkv1.Interface{{
+					Name:       "ibp13s0",
+					PciAddress: "0000:d8:00.0",
+					NumVfs:     1,
+					LinkType:   "IB",
+					VfGroups: []sriovnetworkv1.VfGroup{
+						{
+							VfRange:      "0-0",
+							ResourceName: "ib-resource",
+							PolicyName:   "ib-policy",
 							Mtu:          2000,
 							IsRdma:       true,
 						}},

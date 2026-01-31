@@ -1,11 +1,17 @@
 package netlink
 
 import (
+	"fmt"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/vishvananda/netlink"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+// New creates a new NetlinkLib instance.
 func New() NetlinkLib {
 	return &libWrapper{}
 }
@@ -23,7 +29,14 @@ type NetlinkLib interface {
 	// Equivalent to: `ip link set dev $link vf $vf port_guid $portguid`
 	LinkSetVfPortGUID(link Link, vf int, portguid net.HardwareAddr) error
 	// LinkByName finds a link by name and returns a pointer to the object.
+	// Note: This may fail with "message too long" for InfiniBand devices with many VFs.
+	// Use LinkByNameForSetVf() instead when you only need the link for setting VF properties.
 	LinkByName(name string) (Link, error)
+	// LinkByNameForSetVf returns a minimal link object that can be used for VF operations
+	// like LinkSetVfNodeGUID. This avoids the "message too long" error that can occur
+	// with InfiniBand devices that have many VFs, because it reads link info from sysfs
+	// instead of requesting VF info via netlink.
+	LinkByNameForSetVf(name string) (Link, error)
 	// LinkByIndex finds a link by index and returns a pointer to the object.
 	LinkByIndex(index int) (Link, error)
 	// LinkList gets a list of link devices.
@@ -89,6 +102,41 @@ func (w *libWrapper) LinkSetVfPortGUID(link Link, vf int, portguid net.HardwareA
 // LinkByName finds a link by name and returns a pointer to the object.
 func (w *libWrapper) LinkByName(name string) (Link, error) {
 	return netlink.LinkByName(name)
+}
+
+// LinkByNameForSetVf returns a minimal link object that can be used for VF operations
+// like LinkSetVfNodeGUID. This avoids the "message too long" error that can occur
+// with InfiniBand devices that have many VFs. Instead of querying netlink (which
+// requests all VF info and can exceed the kernel's ~16KB message limit), this method
+// reads the interface index directly from sysfs.
+func (w *libWrapper) LinkByNameForSetVf(name string) (Link, error) {
+	log.Log.V(2).Info("LinkByNameForSetVf(): getting minimal link info from sysfs", "name", name)
+
+	// Sanitize the interface name to prevent path traversal
+	if strings.ContainsAny(name, "/\\") {
+		return nil, fmt.Errorf("invalid interface name, contains path separators: %s", name)
+	}
+
+	// Read interface index from sysfs
+	indexPath := fmt.Sprintf("/sys/class/net/%s/ifindex", name)
+	indexData, err := os.ReadFile(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read interface index from %s: %w", indexPath, err)
+	}
+
+	index, err := strconv.Atoi(strings.TrimSpace(string(indexData)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse interface index: %w", err)
+	}
+
+	// Create a minimal Device link with just name and index
+	// This is sufficient for VF operations like LinkSetVfNodeGUID
+	link := &netlink.Device{}
+	link.Attrs().Name = name
+	link.Attrs().Index = index
+
+	log.Log.V(2).Info("LinkByNameForSetVf(): created minimal link", "name", name, "index", index)
+	return link, nil
 }
 
 // LinkByIndex finds a link by index and returns a pointer to the object.

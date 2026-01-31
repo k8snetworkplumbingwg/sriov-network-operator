@@ -196,6 +196,21 @@ func (mr *MockNetlinkLibMockRecorder) LinkByName(name any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LinkByName", reflect.TypeOf((*MockNetlinkLib)(nil).LinkByName), name)
 }
 
+// LinkByNameForSetVf mocks base method.
+func (m *MockNetlinkLib) LinkByNameForSetVf(name string) (netlink.Link, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LinkByNameForSetVf", name)
+	ret0, _ := ret[0].(netlink.Link)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LinkByNameForSetVf indicates an expected call of LinkByNameForSetVf.
+func (mr *MockNetlinkLibMockRecorder) LinkByNameForSetVf(name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LinkByNameForSetVf", reflect.TypeOf((*MockNetlinkLib)(nil).LinkByNameForSetVf), name)
+}
+
 // LinkList mocks base method.
 func (m *MockNetlinkLib) LinkList() ([]netlink.Link, error) {
 	m.ctrl.T.Helper()

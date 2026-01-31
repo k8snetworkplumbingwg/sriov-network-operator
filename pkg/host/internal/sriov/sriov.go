@@ -507,10 +507,21 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 		if err != nil {
 			log.Log.Error(err, "configSriovVFDevices(): unable to parse VFs for device", "device", iface.PciAddress)
 		}
+
+		// Try standard LinkByName first. For InfiniBand devices with many VFs, this may fail
+		// with EMSGSIZE (message too long) because the kernel's netlink response exceeds ~16KB limit.
+		// In that case, fall back to LinkByNameForSetVf which reads minimal info from sysfs.
 		pfLink, err := s.netlinkLib.LinkByName(iface.Name)
 		if err != nil {
-			log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface)
-			return err
+			if errors.Is(err, syscall.EMSGSIZE) {
+				log.Log.V(2).Info("configSriovVFDevices(): LinkByName failed with EMSGSIZE, using sysfs fallback",
+					"device", iface.Name)
+				pfLink, err = s.netlinkLib.LinkByNameForSetVf(iface.Name)
+			}
+			if err != nil {
+				log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface)
+				return err
+			}
 		}
 
 		for _, addr := range vfAddrs {
@@ -657,7 +668,14 @@ func (s *sriov) configSriovDevice(iface *sriovnetworkv1.Interface, skipVFConfigu
 	// Set PF link up
 	pfLink, err := s.netlinkLib.LinkByName(iface.Name)
 	if err != nil {
-		return err
+		if errors.Is(err, syscall.EMSGSIZE) {
+			log.Log.V(2).Info("configSriovDevice(): LinkByName failed with EMSGSIZE, using sysfs fallback",
+				"device", iface.Name)
+			pfLink, err = s.netlinkLib.LinkByNameForSetVf(iface.Name)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if !s.netlinkLib.IsLinkAdminStateUp(pfLink) {
 		err = s.netlinkLib.LinkSetUp(pfLink)
