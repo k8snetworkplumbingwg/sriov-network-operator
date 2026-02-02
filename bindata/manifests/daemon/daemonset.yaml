@@ -185,6 +185,8 @@ spec:
         volumeMounts:
           - name: host
             mountPath: /host
+          - name: tmp
+            mountPath: /tmp
         lifecycle:
           preStop:
             exec:
@@ -200,3 +202,5 @@ spec:
         hostPath:
           path: /etc/os-release
           type: File
+      - name: tmp
+        emptyDir: {}
