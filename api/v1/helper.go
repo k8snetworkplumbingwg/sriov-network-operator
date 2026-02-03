@@ -344,6 +344,7 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 				Name:              iface.Name,
 				LinkType:          p.Spec.LinkType,
 				EswitchMode:       p.Spec.EswitchMode,
+				ESwitchParams:     p.Spec.ESwitchParams,
 				NumVfs:            p.Spec.NumVfs,
 				ExternallyManaged: p.Spec.ExternallyManaged,
 			}
