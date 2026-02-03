@@ -76,10 +76,22 @@ type SriovOperatorConfigStatus struct {
 	Injector string `json:"injector,omitempty"`
 	// Show the runtime status of the operator admission controller webhook
 	OperatorWebhook string `json:"operatorWebhook,omitempty"`
+
+	// Conditions represent the latest available observations of the SriovOperatorConfig's state
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+//+kubebuilder:printcolumn:name="Progressing",type=string,JSONPath=`.status.conditions[?(@.type=="Progressing")].status`
+//+kubebuilder:printcolumn:name="Degraded",type=string,JSONPath=`.status.conditions[?(@.type=="Degraded")].status`
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SriovOperatorConfig is the Schema for the sriovoperatorconfigs API
 type SriovOperatorConfig struct {
