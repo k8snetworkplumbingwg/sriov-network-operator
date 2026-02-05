@@ -24,6 +24,9 @@ type NetlinkLib interface {
 	LinkSetVfPortGUID(link Link, vf int, portguid net.HardwareAddr) error
 	// LinkByName finds a link by name and returns a pointer to the object.
 	LinkByName(name string) (Link, error)
+	// LinkByNameWithLargeBuffer finds a link by name using an increased netlink buffer size.
+	// This is necessary for InfiniBand devices with many VFs to avoid "message too long" errors.
+	LinkByNameWithLargeBuffer(name string) (Link, error)
 	// LinkByIndex finds a link by index and returns a pointer to the object.
 	LinkByIndex(index int) (Link, error)
 	// LinkList gets a list of link devices.
@@ -89,6 +92,27 @@ func (w *libWrapper) LinkSetVfPortGUID(link Link, vf int, portguid net.HardwareA
 // LinkByName finds a link by name and returns a pointer to the object.
 func (w *libWrapper) LinkByName(name string) (Link, error) {
 	return netlink.LinkByName(name)
+}
+
+// LinkByNameWithLargeBuffer finds a link by name using an increased netlink buffer size.
+// This is necessary for InfiniBand devices with many VFs to avoid "message too long" errors.
+// See: https://issues.redhat.com/browse/OCPBUGS-74637
+func (w *libWrapper) LinkByNameWithLargeBuffer(name string) (Link, error) {
+	// Create a custom netlink handle with increased receive buffer
+	handle, err := netlink.NewHandle()
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+
+	// Set receive buffer to 16MB (force override kernel limit)
+	// This fixes "message too long" errors for IB devices with many VFs
+	const bufferSize = 16 * 1024 * 1024 // 16MB
+	if err := handle.SetSocketReceiveBufferSize(bufferSize, true); err != nil {
+		return nil, err
+	}
+
+	return handle.LinkByName(name)
 }
 
 // LinkByIndex finds a link by index and returns a pointer to the object.

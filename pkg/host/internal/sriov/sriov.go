@@ -507,7 +507,17 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 		if err != nil {
 			log.Log.Error(err, "configSriovVFDevices(): unable to parse VFs for device", "device", iface.PciAddress)
 		}
-		pfLink, err := s.netlinkLib.LinkByName(iface.Name)
+
+		// Use larger netlink buffer for InfiniBand devices to avoid "message too long" errors
+		// See: https://issues.redhat.com/browse/OCPBUGS-74637
+		var pfLink netlinkLib.Link
+		if iface.LinkType == "IB" || iface.LinkType == "infiniband" {
+			log.Log.V(2).Info("configSriovVFDevices(): using large buffer for InfiniBand device",
+				"device", iface.PciAddress, "linkType", iface.LinkType)
+			pfLink, err = s.netlinkLib.LinkByNameWithLargeBuffer(iface.Name)
+		} else {
+			pfLink, err = s.netlinkLib.LinkByName(iface.Name)
+		}
 		if err != nil {
 			log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface)
 			return err
@@ -654,8 +664,15 @@ func (s *sriov) configSriovDevice(iface *sriovnetworkv1.Interface, skipVFConfigu
 	if err := s.configSriovVFDevices(iface); err != nil {
 		return err
 	}
+
 	// Set PF link up
-	pfLink, err := s.netlinkLib.LinkByName(iface.Name)
+	// Use larger netlink buffer for InfiniBand devices to avoid "message too long" errors
+	var pfLink netlinkLib.Link
+	if iface.LinkType == "IB" || iface.LinkType == "infiniband" {
+		pfLink, err = s.netlinkLib.LinkByNameWithLargeBuffer(iface.Name)
+	} else {
+		pfLink, err = s.netlinkLib.LinkByName(iface.Name)
+	}
 	if err != nil {
 		return err
 	}
