@@ -511,7 +511,6 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 		// Use larger netlink buffer for InfiniBand devices to avoid "message too long" errors
 		// See: https://issues.redhat.com/browse/OCPBUGS-74637
 		var pfLink netlinkPkg.Link
-		var err error
 		if iface.LinkType == "IB" || iface.LinkType == "infiniband" {
 			log.Log.V(2).Info("configSriovVFDevices(): using large buffer for InfiniBand device",
 				"device", iface.PciAddress, "linkType", iface.LinkType)
