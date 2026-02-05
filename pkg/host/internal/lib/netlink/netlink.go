@@ -105,9 +105,9 @@ func (w *libWrapper) LinkByNameWithLargeBuffer(name string) (Link, error) {
 	}
 	defer handle.Close()
 
-	// Set receive buffer to 16MB (force override kernel limit)
+	// Set receive buffer to 32MB (force override kernel limit)
 	// This fixes "message too long" errors for IB devices with many VFs
-	const bufferSize = 16 * 1024 * 1024 // 16MB
+	const bufferSize = 32 * 1024 * 1024 // 32MB
 	if err := handle.SetSocketReceiveBufferSize(bufferSize, true); err != nil {
 		return nil, err
 	}
