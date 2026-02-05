@@ -270,7 +270,17 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 			continue
 		}
 
-		link, err := s.netlinkLib.LinkByName(pfNetName)
+		// Use larger netlink buffer for Mellanox devices to avoid "message too long" errors
+		// Mellanox devices (vendor 15b3) are commonly InfiniBand which need larger buffers with many VFs
+		// See: https://issues.redhat.com/browse/OCPBUGS-74637
+		var link netlinkPkg.Link
+		if device.Vendor.ID == "15b3" {
+			log.Log.V(2).Info("DiscoverSriovDevices(): using large buffer for Mellanox device",
+				"device", device.Address, "vendor", device.Vendor.ID)
+			link, err = s.netlinkLib.LinkByNameWithLargeBuffer(pfNetName)
+		} else {
+			link, err = s.netlinkLib.LinkByName(pfNetName)
+		}
 		if err != nil {
 			log.Log.Error(err, "DiscoverSriovDevices(): unable to get Link for device, skipping", "device", device.Address)
 			continue
