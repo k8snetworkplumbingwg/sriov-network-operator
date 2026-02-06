@@ -196,6 +196,21 @@ func (mr *MockNetlinkLibMockRecorder) LinkByName(name any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LinkByName", reflect.TypeOf((*MockNetlinkLib)(nil).LinkByName), name)
 }
 
+// LinkByNameWithLargeBuffer mocks base method.
+func (m *MockNetlinkLib) LinkByNameWithLargeBuffer(name string) (netlink.Link, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LinkByNameWithLargeBuffer", name)
+	ret0, _ := ret[0].(netlink.Link)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LinkByNameWithLargeBuffer indicates an expected call of LinkByNameWithLargeBuffer.
+func (mr *MockNetlinkLibMockRecorder) LinkByNameWithLargeBuffer(name any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LinkByNameWithLargeBuffer", reflect.TypeOf((*MockNetlinkLib)(nil).LinkByNameWithLargeBuffer), name)
+}
+
 // LinkList mocks base method.
 func (m *MockNetlinkLib) LinkList() ([]netlink.Link, error) {
 	m.ctrl.T.Helper()
