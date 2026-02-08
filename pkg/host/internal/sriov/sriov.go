@@ -562,14 +562,26 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 	}
 	// set PF mtu
 	if iface.Mtu > 0 {
-		currentMtu, err := s.getCurrentMtu(iface)
-		if err != nil {
-			log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU", "device", iface.PciAddress)
-			return err
+		linkType := s.getLinkTypeWithIBFallback(iface)
+		var currentMtu int
+		if strings.EqualFold(linkType, consts.LinkTypeIB) {
+			ifName := iface.Name
+			if ifName == "" {
+				err := fmt.Errorf("failed to get interface name for IB device %s", iface.PciAddress)
+				log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU")
+				return err
+			}
+			mtu, err := s.getMTUFromSysfs(ifName)
+			if err != nil {
+				log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU from sysfs", "device", iface.PciAddress)
+				return err
+			}
+			currentMtu = mtu
+		} else {
+			currentMtu = s.networkHelper.GetNetdevMTU(iface.PciAddress)
 		}
-		
+
 		if iface.Mtu > currentMtu {
-			linkType := s.getLinkTypeWithIBFallback(iface)
 			if strings.EqualFold(linkType, consts.LinkTypeIB) {
 				ifName := iface.Name
 				if ifName == "" {
