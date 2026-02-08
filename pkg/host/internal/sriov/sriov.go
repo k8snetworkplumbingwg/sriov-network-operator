@@ -562,40 +562,21 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 	}
 	// set PF mtu
 	if iface.Mtu > 0 {
-		linkType := s.getLinkTypeWithIBFallback(iface)
-		var currentMtu int
-		if strings.EqualFold(linkType, consts.LinkTypeIB) {
-			ifName := iface.Name
-			if ifName == "" {
-				err := fmt.Errorf("failed to get interface name for IB device %s", iface.PciAddress)
-				log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU")
-				return err
-			}
-			mtu, err := s.getMTUFromSysfs(ifName)
-			if err != nil {
-				log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU from sysfs", "device", iface.PciAddress)
-				return err
-			}
-			currentMtu = mtu
-		} else {
-			currentMtu = s.networkHelper.GetNetdevMTU(iface.PciAddress)
+		currentMtu, err := s.getCurrentMtu(iface)
+		if err != nil {
+			log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU", "device", iface.PciAddress)
+			return err
 		}
 
 		if iface.Mtu > currentMtu {
+			linkType := s.getLinkTypeWithIBFallback(iface)
 			if strings.EqualFold(linkType, consts.LinkTypeIB) {
-				ifName := iface.Name
-				if ifName == "" {
-					err := fmt.Errorf("interface name is empty for device %s", iface.PciAddress)
-					log.Log.Error(err, "configSriovPFDevice(): fail to get interface name")
-					return err
-				}
-				if err := s.setMTUViaIPCommand(ifName, iface.Mtu); err != nil {
+				if err := s.setMTUViaIPCommand(iface.Name, iface.Mtu); err != nil {
 					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
 					return err
 				}
 			} else {
-				err = s.networkHelper.SetNetdevMTU(iface.PciAddress, iface.Mtu)
-				if err != nil {
+				if err := s.networkHelper.SetNetdevMTU(iface.PciAddress, iface.Mtu); err != nil {
 					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
 					return err
 				}
