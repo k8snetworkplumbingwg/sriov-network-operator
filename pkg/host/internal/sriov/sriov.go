@@ -314,6 +314,27 @@ func (s *sriov) getLinkAdminStateFromSysfs(ifaceName string) (string, error) {
 	return consts.LinkAdminStateDown, nil
 }
 
+// getCurrentMtu gets the current MTU for an interface, handling both IB and non-IB devices
+func (s *sriov) getCurrentMtu(iface *sriovnetworkv1.Interface) (int, error) {
+	linkType := s.getLinkTypeWithIBFallback(iface)
+	
+	if strings.EqualFold(linkType, consts.LinkTypeIB) {
+		// Use sysfs for IB to avoid netlink PAGE_SIZE limit
+		ifName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
+		if ifName == "" {
+			return 0, fmt.Errorf("failed to get interface name for IB device %s", iface.PciAddress)
+		}
+		mtu, err := s.getMTUFromSysfs(ifName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get MTU from sysfs for IB device %s: %w", ifName, err)
+		}
+		return mtu, nil
+	}
+	
+	// Use netlink for non-IB devices
+	return s.networkHelper.GetNetdevMTU(iface.PciAddress), nil
+}
+
 
 func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sriovnetworkv1.InterfaceExt, error) {
 	log.Log.V(2).Info("DiscoverSriovDevices")
@@ -540,30 +561,22 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		return err
 	}
 	// set PF mtu
-	// set PF mtu
 	if iface.Mtu > 0 {
-		linkType := s.getLinkTypeWithIBFallback(iface)
-		var currentMtu int
-		if strings.EqualFold(linkType, consts.LinkTypeIB) {
-			// Use sysfs for IB to avoid netlink PAGE_SIZE limit
-			ifName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
-			if ifName == "" {
-				log.Log.Error(nil, "configSriovPFDevice(): failed to get interface name", "device", iface.PciAddress)
-				return fmt.Errorf("failed to get interface name for %s", iface.PciAddress)
-			}
-			if mtu, err := s.getMTUFromSysfs(ifName); err == nil {
-				currentMtu = mtu
-			}
-			if iface.Mtu > currentMtu {
+		currentMtu, err := s.getCurrentMtu(iface)
+		if err != nil {
+			log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU", "device", iface.PciAddress)
+			return err
+		}
+		
+		if iface.Mtu > currentMtu {
+			linkType := s.getLinkTypeWithIBFallback(iface)
+			if strings.EqualFold(linkType, consts.LinkTypeIB) {
+				ifName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
 				if err := s.setMTUViaIPCommand(ifName, iface.Mtu); err != nil {
 					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
 					return err
 				}
-			}
-		} else {
-			// Use netlink for non-IB devices
-			currentMtu = s.networkHelper.GetNetdevMTU(iface.PciAddress)
-			if iface.Mtu > currentMtu {
+			} else {
 				err = s.networkHelper.SetNetdevMTU(iface.PciAddress, iface.Mtu)
 				if err != nil {
 					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
@@ -642,18 +655,10 @@ func (s *sriov) checkExternallyManagedPF(iface *sriovnetworkv1.Interface) error 
 		log.Log.Error(nil, errMsg)
 		return errors.New(errMsg)
 	}
-	linkType := s.getLinkTypeWithIBFallback(iface)
-	var currentMtu int
-	if strings.EqualFold(linkType, consts.LinkTypeIB) {
-		// Use sysfs for IB to avoid netlink PAGE_SIZE limit
-		ifName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
-		if ifName != "" {
-			if mtu, err := s.getMTUFromSysfs(ifName); err == nil {
-				currentMtu = mtu
-			}
-		}
-	} else {
-		currentMtu = s.networkHelper.GetNetdevMTU(iface.PciAddress)
+	currentMtu, err := s.getCurrentMtu(iface)
+	if err != nil {
+		log.Log.Error(err, "checkExternallyManagedPF(): failed to get current MTU", "device", iface.PciAddress)
+		return err
 	}
 	if iface.Mtu > 0 && iface.Mtu > currentMtu {
 		err := fmt.Errorf("checkExternallyManagedPF(): requested MTU(%d) is greater than configured MTU(%d) for device %s. cannot change MTU as policy is configured as ExternallyManaged",
