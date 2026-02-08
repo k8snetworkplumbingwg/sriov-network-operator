@@ -132,7 +132,7 @@ func (s *sriov) ResetSriovDevice(ifaceStatus sriovnetworkv1.InterfaceExt) error 
 			return err
 		}
 		// Use ip command to avoid netlink PAGE_SIZE limit for IB devices
-		ifName := s.networkHelper.TryGetInterfaceName(ifaceStatus.PciAddress)
+		ifName := ifaceStatus.Name
 		if ifName == "" {
 			return fmt.Errorf("failed to get interface name for %s", ifaceStatus.PciAddress)
 		}
@@ -320,7 +320,7 @@ func (s *sriov) getCurrentMtu(iface *sriovnetworkv1.Interface) (int, error) {
 	
 	if strings.EqualFold(linkType, consts.LinkTypeIB) {
 		// Use sysfs for IB to avoid netlink PAGE_SIZE limit
-		ifName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
+		ifName := iface.Name
 		if ifName == "" {
 			return 0, fmt.Errorf("failed to get interface name for IB device %s", iface.PciAddress)
 		}
@@ -571,7 +571,12 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		if iface.Mtu > currentMtu {
 			linkType := s.getLinkTypeWithIBFallback(iface)
 			if strings.EqualFold(linkType, consts.LinkTypeIB) {
-				ifName := s.networkHelper.TryGetInterfaceName(iface.PciAddress)
+				ifName := iface.Name
+				if ifName == "" {
+					err := fmt.Errorf("interface name is empty for device %s", iface.PciAddress)
+					log.Log.Error(err, "configSriovPFDevice(): fail to get interface name")
+					return err
+				}
 				if err := s.setMTUViaIPCommand(ifName, iface.Mtu); err != nil {
 					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
 					return err
