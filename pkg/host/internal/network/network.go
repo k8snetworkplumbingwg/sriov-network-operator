@@ -241,11 +241,11 @@ func (n *network) GetNetDevNodeGUID(pciAddr string) string {
 }
 
 func (n *network) GetNetDevLinkSpeed(ifaceName string) string {
-	log.Log.V(2).Info("GetNetDevLinkSpeed(): get LinkSpeed", "device", ifaceName)
+	funcLog := log.Log.WithValues("device", ifaceName)
 	speedFilePath := filepath.Join(vars.FilesystemRoot, consts.SysClassNet, ifaceName, "speed")
 	data, err := os.ReadFile(speedFilePath)
 	if err != nil {
-		log.Log.Error(err, "GetNetDevLinkSpeed(): fail to read Link Speed file", "path", speedFilePath)
+		funcLog.Info("GetNetDevLinkSpeed(): WARNING: fail to read Link Speed file", "path", speedFilePath, "error", err)
 		return ""
 	}
 
