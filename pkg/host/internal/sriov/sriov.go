@@ -734,6 +734,10 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 					if err := s.configureVfGUIDWithIPCommand(addr, iface.PciAddress, iface.Name, vfID); err != nil {
 						return err
 					}
+					// Set VF policy to "Follow" so VF inherits PF link state
+					if err := s.setInfinibandVfPolicy(iface.Name, vfID, "Follow"); err != nil {
+						return err
+					}
 					if err := s.kernelHelper.Unbind(addr); err != nil {
 						return err
 					}
@@ -1468,6 +1472,26 @@ func (s *sriov) configureVfGUIDWithIPCommand(vfAddr string, pfAddr string, pfNam
 			return fmt.Errorf("failed to set %s: %w, output: %s", guidType, err, string(output))
 		}
 	}
+
+	return nil
+}
+
+// setInfinibandVfPolicy sets the VF policy via sysfs for InfiniBand devices
+// Policy can be "Down", "Up", or "Follow" (follow PF link state)
+func (s *sriov) setInfinibandVfPolicy(pfName string, vfID int, policy string) error {
+	log.Log.V(2).Info("setInfinibandVfPolicy(): setting VF policy via sysfs",
+		"pfName", pfName, "vfID", vfID, "policy", policy)
+
+	// Path: /sys/class/net/<pfName>/device/sriov/<vfID>/policy
+	policyPath := fmt.Sprintf("/sys/class/net/%s/device/sriov/%d/policy", pfName, vfID)
+
+	// Write policy to sysfs
+	if err := os.WriteFile(policyPath, []byte(policy), 0644); err != nil {
+		return fmt.Errorf("failed to set VF %d policy to %s: %w", vfID, policy, err)
+	}
+
+	log.Log.Info("setInfinibandVfPolicy(): VF policy set successfully",
+		"vfID", vfID, "policy", policy)
 
 	return nil
 }
