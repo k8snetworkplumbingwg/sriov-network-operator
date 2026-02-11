@@ -1,6 +1,8 @@
 package types
 
 import (
+	"net"
+
 	"github.com/vishvananda/netlink"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
@@ -197,6 +199,8 @@ type BridgeInterface interface {
 type InfinibandInterface interface {
 	// ConfigureVfGUID configures and sets a GUID for an IB VF device
 	ConfigureVfGUID(vfAddr string, pfAddr string, vfID int, pfLink netlink.Link) error
+	// GetVfGUID gets a GUID for an IB VF device (checks pool first, then generates random)
+	GetVfGUID(pfAddr string, vfID int) (net.HardwareAddr, error)
 }
 
 type CPUVendor int

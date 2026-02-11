@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,6 +27,20 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
+)
+
+const (
+	// ARPHRD_ETHER is the ARP protocol hardware identifier for Ethernet
+	// Defined in Linux kernel: include/uapi/linux/if_arp.h
+	ARPHRD_ETHER = 1
+	// ARPHRD_INFINIBAND is the ARP protocol hardware identifier for InfiniBand
+	// Defined in Linux kernel: include/uapi/linux/if_arp.h
+	ARPHRD_INFINIBAND = 32
+)
+
+var (
+	// ibGUIDTypes are the GUID types that need to be configured for InfiniBand VFs
+	ibGUIDTypes = []string{"node_guid", "port_guid"}
 )
 
 type interfaceToConfigure struct {
@@ -116,7 +131,12 @@ func (s *sriov) ResetSriovDevice(ifaceStatus sriovnetworkv1.InterfaceExt) error 
 		if err := s.SetSriovNumVfs(ifaceStatus.PciAddress, 0); err != nil {
 			return err
 		}
-		if err := s.networkHelper.SetNetdevMTU(ifaceStatus.PciAddress, 2048); err != nil {
+		// Use ip command to avoid netlink PAGE_SIZE limit for IB devices
+		ifName := ifaceStatus.Name
+		if ifName == "" {
+			return fmt.Errorf("failed to get interface name for %s", ifaceStatus.PciAddress)
+		}
+		if err := s.setMTUViaIPCommand(ifName, 2048); err != nil {
 			return err
 		}
 	}
@@ -213,10 +233,108 @@ func (s *sriov) SetVfAdminMac(vfAddr string, pfLink, vfLink netlink.Link) error 
 func getDeviceClass(device *ghw.PCIDevice) (int64, error) {
 	devClass, err := strconv.ParseInt(device.Class.ID, 16, 64)
 	if err != nil {
-		return 0, fmt.Errorf("unable to parse device class: %v", err)
+		return 0, fmt.Errorf("unable to parse device class: %w", err)
 	}
 	return devClass, nil
 }
+
+// getLinkTypeFromSysfs reads the link type from sysfs without using netlink
+func (s *sriov) getLinkTypeFromSysfs(ifaceName string) string {
+	// Read from /sys/class/net/<iface>/type to avoid netlink call
+	typePath := filepath.Join(vars.FilesystemRoot, consts.SysClassNet, ifaceName, "type")
+	data, err := os.ReadFile(typePath)
+	if err != nil {
+		log.Log.V(2).Info("getLinkTypeFromSysfs(): failed to read link type from sysfs", "path", typePath, "error", err)
+		return ""
+	}
+
+	typeInt, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		log.Log.V(2).Info("getLinkTypeFromSysfs(): failed to parse link type from sysfs", "path", typePath, "data", string(data), "error", err)
+		return ""
+	}
+
+	if typeInt == ARPHRD_INFINIBAND {
+		return consts.LinkTypeIB
+	} else if typeInt == ARPHRD_ETHER {
+		return consts.LinkTypeETH
+	}
+
+	return ""
+}
+
+// getLinkTypeWithIBFallback determines the link type for an interface.
+// It prefers the type from the spec, but falls back to checking sysfs for InfiniBand.
+func (s *sriov) getLinkTypeWithIBFallback(iface *sriovnetworkv1.Interface) string {
+	if iface.LinkType != "" {
+		return iface.LinkType
+	}
+
+	return s.getLinkTypeFromSysfs(iface.Name)
+}
+
+// getMTUFromSysfs reads MTU from sysfs without using netlink
+func (s *sriov) getMTUFromSysfs(ifaceName string) (int, error) {
+	mtuPath := filepath.Join(vars.FilesystemRoot, consts.SysClassNet, ifaceName, "mtu")
+	data, err := os.ReadFile(mtuPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read MTU from sysfs: %w", err)
+	}
+	mtu, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse MTU: %w", err)
+	}
+	return mtu, nil
+}
+
+// setMTUViaIPCommand sets MTU using ip command to avoid netlink
+func (s *sriov) setMTUViaIPCommand(ifaceName string, mtu int) error {
+	cmd := exec.Command("ip", "link", "set", "dev", ifaceName, "mtu", strconv.Itoa(mtu))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set MTU via ip command: %w, output: %s", err, string(output))
+	}
+	return nil
+}
+
+// getLinkAdminStateFromSysfs reads admin state from sysfs without using netlink
+func (s *sriov) getLinkAdminStateFromSysfs(ifaceName string) (string, error) {
+	flagsPath := filepath.Join(vars.FilesystemRoot, consts.SysClassNet, ifaceName, "flags")
+	data, err := os.ReadFile(flagsPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read link flags: %w", err)
+	}
+	flags, err := strconv.ParseInt(strings.TrimSpace(string(data)), 0, 64)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse link flags: %w", err)
+	}
+	isUp := (flags & syscall.IFF_UP) != 0
+	if isUp {
+		return consts.LinkAdminStateUp, nil
+	}
+	return consts.LinkAdminStateDown, nil
+}
+
+// getCurrentMtu gets the current MTU for an interface, handling both IB and non-IB devices
+func (s *sriov) getCurrentMtu(iface *sriovnetworkv1.Interface) (int, error) {
+	linkType := s.getLinkTypeWithIBFallback(iface)
+	
+	if strings.EqualFold(linkType, consts.LinkTypeIB) {
+		// Use sysfs for IB to avoid netlink PAGE_SIZE limit
+		ifName := iface.Name
+		if ifName == "" {
+			return 0, fmt.Errorf("failed to get interface name for IB device %s", iface.PciAddress)
+		}
+		mtu, err := s.getMTUFromSysfs(ifName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get MTU from sysfs for IB device %s: %w", ifName, err)
+		}
+		return mtu, nil
+	}
+	
+	// Use netlink for non-IB devices
+	return s.networkHelper.GetNetdevMTU(iface.PciAddress), nil
+}
+
 
 func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sriovnetworkv1.InterfaceExt, error) {
 	log.Log.V(2).Info("DiscoverSriovDevices")
@@ -224,7 +342,7 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 
 	pci, err := s.ghwLib.PCI()
 	if err != nil {
-		return nil, fmt.Errorf("DiscoverSriovDevices(): error getting PCI info: %v", err)
+		return nil, fmt.Errorf("DiscoverSriovDevices(): error getting PCI info: %w", err)
 	}
 
 	devices := pci.Devices
@@ -270,11 +388,9 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 			continue
 		}
 
-		link, err := s.netlinkLib.LinkByName(pfNetName)
-		if err != nil {
-			log.Log.Error(err, "DiscoverSriovDevices(): unable to get Link for device, skipping", "device", device.Address)
-			continue
-		}
+		// Check if this is an InfiniBand device to avoid netlink PAGE_SIZE limit
+		linkType := s.getLinkTypeFromSysfs(pfNetName)
+		isIB := strings.EqualFold(linkType, consts.LinkTypeIB)
 
 		iface := sriovnetworkv1.InterfaceExt{
 			Name:           pfNetName,
@@ -282,11 +398,43 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 			Driver:         driver,
 			Vendor:         device.Vendor.ID,
 			DeviceID:       device.Product.ID,
-			Mtu:            link.Attrs().MTU,
-			Mac:            link.Attrs().HardwareAddr.String(),
-			LinkType:       s.encapTypeToLinkType(link.Attrs().EncapType),
-			LinkSpeed:      s.networkHelper.GetNetDevLinkSpeed(pfNetName),
-			LinkAdminState: s.networkHelper.GetNetDevLinkAdminState(pfNetName),
+		}
+
+		if isIB {
+			// For InfiniBand devices with many VFs, avoid netlink query
+			log.Log.V(2).Info("DiscoverSriovDevices(): detected InfiniBand device, using sysfs instead of netlink",
+				"device", device.Address, "name", pfNetName)
+			// Read MTU and MAC directly from sysfs to avoid netlink
+			if mtu, err := s.getMTUFromSysfs(pfNetName); err == nil {
+				iface.Mtu = mtu
+			} else {
+				log.Log.V(2).Info("DiscoverSriovDevices(): failed to get MTU from sysfs for IB device", "name", pfNetName, "error", err)
+			}
+			if data, err := os.ReadFile(filepath.Join(vars.FilesystemRoot, consts.SysClassNet, pfNetName, "address")); err == nil {
+				iface.Mac = strings.TrimSpace(string(data))
+			} else {
+				log.Log.V(2).Info("DiscoverSriovDevices(): failed to get MAC from sysfs for IB device", "name", pfNetName, "error", err)
+			}
+			iface.LinkType = linkType
+			iface.LinkSpeed = s.networkHelper.GetNetDevLinkSpeed(pfNetName)
+			if adminState, err := s.getLinkAdminStateFromSysfs(pfNetName); err == nil {
+				iface.LinkAdminState = adminState
+			} else {
+				log.Log.V(2).Info("DiscoverSriovDevices(): failed to get link admin state from sysfs for IB device", "name", pfNetName, "error", err)
+			}
+		} else {
+			// For non-IB devices, use netlink as before
+			link, err := s.netlinkLib.LinkByName(pfNetName)
+			if err != nil {
+				log.Log.Error(err, "DiscoverSriovDevices(): unable to get Link for device, skipping", "device", device.Address)
+				continue
+			}
+
+			iface.Mtu = link.Attrs().MTU
+			iface.Mac = link.Attrs().HardwareAddr.String()
+			iface.LinkType = s.encapTypeToLinkType(link.Attrs().EncapType)
+			iface.LinkSpeed = s.networkHelper.GetNetDevLinkSpeed(pfNetName)
+			iface.LinkAdminState = s.networkHelper.GetNetDevLinkAdminState(pfNetName)
 		}
 
 		pfStatus, exist, err := storeManager.LoadPfsStatus(iface.PciAddress)
@@ -327,7 +475,7 @@ func (s *sriov) DiscoverSriovVirtualDevices() ([]sriovnetworkv1.InterfaceExt, er
 
 	pci, err := s.ghwLib.PCI()
 	if err != nil {
-		return nil, fmt.Errorf("DiscoverSriovVirtualDevices(): error getting PCI info: %v", err)
+		return nil, fmt.Errorf("DiscoverSriovVirtualDevices(): error getting PCI info: %w", err)
 	}
 
 	devices := pci.Devices
@@ -369,7 +517,8 @@ func (s *sriov) DiscoverSriovVirtualDevices() ([]sriovnetworkv1.InterfaceExt, er
 				iface.Mac = macAddr
 			}
 			iface.LinkSpeed = s.networkHelper.GetNetDevLinkSpeed(name)
-			iface.LinkType = s.GetLinkType(name)
+			// Use sysfs to avoid netlink PAGE_SIZE limit for InfiniBand devices
+			iface.LinkType = s.getLinkTypeFromSysfs(name)
 		}
 
 		pfList = append(pfList, iface)
@@ -412,11 +561,26 @@ func (s *sriov) configSriovPFDevice(iface *sriovnetworkv1.Interface) error {
 		return err
 	}
 	// set PF mtu
-	if iface.Mtu > 0 && iface.Mtu > s.networkHelper.GetNetdevMTU(iface.PciAddress) {
-		err = s.networkHelper.SetNetdevMTU(iface.PciAddress, iface.Mtu)
+	if iface.Mtu > 0 {
+		currentMtu, err := s.getCurrentMtu(iface)
 		if err != nil {
-			log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
+			log.Log.Error(err, "configSriovPFDevice(): failed to get current MTU", "device", iface.PciAddress)
 			return err
+		}
+
+		if iface.Mtu > currentMtu {
+			linkType := s.getLinkTypeWithIBFallback(iface)
+			if strings.EqualFold(linkType, consts.LinkTypeIB) {
+				if err := s.setMTUViaIPCommand(iface.Name, iface.Mtu); err != nil {
+					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
+					return err
+				}
+			} else {
+				if err := s.networkHelper.SetNetdevMTU(iface.PciAddress, iface.Mtu); err != nil {
+					log.Log.Error(err, "configSriovPFDevice(): fail to set mtu for PF", "device", iface.PciAddress)
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -489,7 +653,11 @@ func (s *sriov) checkExternallyManagedPF(iface *sriovnetworkv1.Interface) error 
 		log.Log.Error(nil, errMsg)
 		return errors.New(errMsg)
 	}
-	currentMtu := s.networkHelper.GetNetdevMTU(iface.PciAddress)
+	currentMtu, err := s.getCurrentMtu(iface)
+	if err != nil {
+		log.Log.Error(err, "checkExternallyManagedPF(): failed to get current MTU", "device", iface.PciAddress)
+		return err
+	}
 	if iface.Mtu > 0 && iface.Mtu > currentMtu {
 		err := fmt.Errorf("checkExternallyManagedPF(): requested MTU(%d) is greater than configured MTU(%d) for device %s. cannot change MTU as policy is configured as ExternallyManaged",
 			iface.Mtu, currentMtu, iface.PciAddress)
@@ -507,10 +675,25 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 		if err != nil {
 			log.Log.Error(err, "configSriovVFDevices(): unable to parse VFs for device", "device", iface.PciAddress)
 		}
-		pfLink, err := s.netlinkLib.LinkByName(iface.Name)
-		if err != nil {
-			log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface)
-			return err
+
+		// For InfiniBand devices, skip netlink query to avoid kernel PAGE_SIZE limit
+		// Kernel netlink responses are limited to PAGE_SIZE (~4KB) and IB devices with VFs
+		// exceed this limit. We'll use 'ip link set' commands directly instead.
+		// See: https://issues.redhat.com/browse/OCPBUGS-74637
+
+		linkType := s.getLinkTypeWithIBFallback(iface)
+
+		var pfLink netlinkPkg.Link
+		if strings.EqualFold(linkType, consts.LinkTypeIB) {
+			log.Log.V(2).Info("configSriovVFDevices(): skipping netlink query for InfiniBand device, will use ip commands",
+				"device", iface.PciAddress, "linkType", linkType)
+			// pfLink remains nil for IB - we'll use ip commands instead
+		} else {
+			pfLink, err = s.netlinkLib.LinkByName(iface.Name)
+			if err != nil {
+				log.Log.Error(err, "configSriovVFDevices(): unable to get PF link for device", "device", iface)
+				return err
+			}
 		}
 
 		for _, addr := range vfAddrs {
@@ -545,14 +728,14 @@ func (s *sriov) configSriovVFDevices(iface *sriovnetworkv1.Interface) error {
 			// for userspace drivers like vfio we configure the vf mac using the kernel nic mac address
 			// before we switch to the userspace driver
 			if yes, d := s.kernelHelper.HasDriver(addr); yes && !sriovnetworkv1.StringInArray(d, vars.DpdkDrivers) {
-				// LinkType is an optional field. Let's fallback to current link type
-				// if nothing is specified in the SriovNodePolicy
-				linkType := iface.LinkType
-				if linkType == "" {
-					linkType = s.GetLinkType(iface.Name)
-				}
 				if strings.EqualFold(linkType, consts.LinkTypeIB) {
-					if err := s.infinibandHelper.ConfigureVfGUID(addr, iface.PciAddress, vfID, pfLink); err != nil {
+					// For IB devices, pfLink is nil to avoid netlink PAGE_SIZE limit
+					// Use ip command to set VF GUID directly
+					if err := s.configureVfGUIDWithIPCommand(addr, iface.PciAddress, iface.Name, vfID); err != nil {
+						return err
+					}
+					// Set VF policy to "Follow" so VF inherits PF link state
+					if err := s.setInfinibandVfPolicy(iface.Name, vfID, "Follow"); err != nil {
 						return err
 					}
 					if err := s.kernelHelper.Unbind(addr); err != nil {
@@ -655,14 +838,31 @@ func (s *sriov) configSriovDevice(iface *sriovnetworkv1.Interface, skipVFConfigu
 		return err
 	}
 	// Set PF link up
-	pfLink, err := s.netlinkLib.LinkByName(iface.Name)
-	if err != nil {
-		return err
-	}
-	if !s.netlinkLib.IsLinkAdminStateUp(pfLink) {
-		err = s.netlinkLib.LinkSetUp(pfLink)
+	linkType := s.getLinkTypeWithIBFallback(iface)
+
+	// For InfiniBand devices, use sysfs to avoid netlink PAGE_SIZE limit
+	if strings.EqualFold(linkType, consts.LinkTypeIB) {
+		adminState, err := s.getLinkAdminStateFromSysfs(iface.Name)
 		if err != nil {
 			return err
+		}
+		if adminState != consts.LinkAdminStateUp {
+			cmd := exec.Command("ip", "link", "set", iface.Name, "up")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to set link up for %s: %w, output: %s", iface.Name, err, string(output))
+			}
+		}
+	} else {
+		// For non-IB devices, use standard netlink path
+		pfLink, err := s.netlinkLib.LinkByName(iface.Name)
+		if err != nil {
+			return err
+		}
+		if !s.netlinkLib.IsLinkAdminStateUp(pfLink) {
+			err = s.netlinkLib.LinkSetUp(pfLink)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -690,7 +890,7 @@ func (s *sriov) ConfigSriovInterfaces(storeManager store.ManagerInterface,
 		// after VFs are created. Reload rules to update interfaces
 		if err := s.udevHelper.LoadUdevRules(); err != nil {
 			log.Log.Error(err, "cannot reload udev rules")
-			return fmt.Errorf("failed to reload udev rules: %v", err)
+			return fmt.Errorf("failed to reload udev rules: %w", err)
 		}
 	}
 
@@ -1313,5 +1513,53 @@ func (s *sriov) unbindAllVFsOnPF(addr string) error {
 			return fmt.Errorf("failed to unbind VF from the driver PF[%s], PF[%s]: %w", addr, vfAddr, err)
 		}
 	}
+	return nil
+}
+
+// configureVfGUIDWithIPCommand configures VF GUIDs using ip command directly
+// This bypasses netlink queries which hit kernel PAGE_SIZE limit for IB devices with many VFs
+func (s *sriov) configureVfGUIDWithIPCommand(vfAddr string, pfAddr string, pfName string, vfID int) error {
+	log.Log.V(2).Info("configureVfGUIDWithIPCommand(): configure vf guid using ip command",
+		"vfAddr", vfAddr, "pfAddr", pfAddr, "pfName", pfName, "vfID", vfID)
+
+	// Get GUID from pool or generate random (same logic as ConfigureVfGUID)
+	guid, err := s.infinibandHelper.GetVfGUID(pfAddr, vfID)
+	if err != nil {
+		return fmt.Errorf("failed to get VF GUID: %w", err)
+	}
+
+	// Format GUID as hex string with colons using net.HardwareAddr
+	guidStr := guid.String()
+
+	log.Log.Info("configureVfGUIDWithIPCommand(): set vf guid", "address", vfAddr, "guid", guidStr)
+
+	// Set both node_guid and port_guid using ip command
+	for _, guidType := range ibGUIDTypes {
+		cmd := exec.Command("ip", "link", "set", "dev", pfName, "vf", strconv.Itoa(vfID), guidType, guidStr)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to set %s: %w, output: %s", guidType, err, string(output))
+		}
+	}
+
+	return nil
+}
+
+// setInfinibandVfPolicy sets the VF policy via sysfs for InfiniBand devices
+// Policy can be "Down", "Up", or "Follow" (follow PF link state)
+func (s *sriov) setInfinibandVfPolicy(pfName string, vfID int, policy string) error {
+	log.Log.V(2).Info("setInfinibandVfPolicy(): setting VF policy via sysfs",
+		"pfName", pfName, "vfID", vfID, "policy", policy)
+
+	// Path: /sys/class/net/<pfName>/device/sriov/<vfID>/policy
+	policyPath := fmt.Sprintf("/sys/class/net/%s/device/sriov/%d/policy", pfName, vfID)
+
+	// Write policy to sysfs
+	if err := os.WriteFile(policyPath, []byte(policy), 0644); err != nil {
+		return fmt.Errorf("failed to set VF %d policy to %s: %w", vfID, policy, err)
+	}
+
+	log.Log.Info("setInfinibandVfPolicy(): VF policy set successfully",
+		"vfID", vfID, "policy", policy)
+
 	return nil
 }
