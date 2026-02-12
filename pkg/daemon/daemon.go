@@ -606,7 +606,6 @@ func (dn *NodeReconciler) getDevicePluginPodsForNode(ctx context.Context) ([]cor
 		return []corev1.Pod{}, err
 	}
 	if len(pods.Items) == 0 {
-		funcLog.Info("no device plugin pods found")
 		return []corev1.Pod{}, nil
 	}
 	return pods.Items, nil
@@ -621,6 +620,10 @@ func (dn *NodeReconciler) restartDevicePluginPod(ctx context.Context) error {
 	devicePluginPods, err := dn.getDevicePluginPodsForNode(ctx)
 	if err != nil {
 		return err
+	}
+	if len(devicePluginPods) == 0 {
+		funcLog.V(2).Info("no device plugin pods found during restart attempt")
+		return nil
 	}
 	for _, pod := range devicePluginPods {
 		podUID := pod.UID
