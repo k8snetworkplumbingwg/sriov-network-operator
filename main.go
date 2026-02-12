@@ -299,7 +299,7 @@ func setupDrainController(mgr ctrl.Manager, restConfig *rest.Config,
 	drainController, err := controllers.NewDrainReconcileController(
 		drainKClient,
 		mgr.GetScheme(),
-		mgr.GetEventRecorderFor("SR-IOV operator"),
+		mgr.GetEventRecorder("SR-IOV operator"),
 		orch)
 	if err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DrainReconcile")

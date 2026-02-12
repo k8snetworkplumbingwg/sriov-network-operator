@@ -10,7 +10,6 @@ import (
 
 	"github.com/jaypipes/ghw"
 	"github.com/jaypipes/ghw/pkg/net"
-	"github.com/jaypipes/ghw/pkg/option"
 )
 
 func TestUtilsVirtual(t *testing.T) {
@@ -29,7 +28,7 @@ var _ = Describe("Virtual", func() {
 				ospMetaDataFile = ospMetaDataDir + "/meta_data.json"
 			})
 
-			ghw.Network = func(opts ...*option.Option) (*net.Info, error) {
+			ghw.Network = func(args ...any) (*net.Info, error) {
 				return &net.Info{
 					NICs: []*net.NIC{{
 						MacAddress: "fa:16:3e:00:00:00",
