@@ -189,6 +189,21 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovNetworkNodePolicy")
 		os.Exit(1)
 	}
+	if err = (&controllers.SriovNetworkNodePolicyStatusReconciler{
+		Client: mgrGlobal.GetClient(),
+		Scheme: mgrGlobal.GetScheme(),
+	}).SetupWithManager(mgrGlobal); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SriovNetworkNodePolicyStatus")
+		os.Exit(1)
+	}
+	if err = (&controllers.SriovNetworkPoolConfigStatusReconciler{
+		Client: mgrGlobal.GetClient(),
+		Scheme: mgrGlobal.GetScheme(),
+	}).SetupWithManager(mgrGlobal); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SriovNetworkPoolConfigStatus")
+		os.Exit(1)
+	}
+
 	if err = (&controllers.SriovOperatorConfigReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),

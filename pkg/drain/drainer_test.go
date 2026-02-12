@@ -97,16 +97,57 @@ var _ = Describe("Drainer", Ordered, func() {
 			n, _ := createNode("node0")
 			orchestrator.EXPECT().BeforeDrainNode(ctx, n).Return(false, fmt.Errorf("failed"))
 
-			completed, err := drn.DrainNode(ctx, n, false, false)
+			completed, err := drn.DrainNode(ctx, n, false, false, nil)
 			Expect(err).To(HaveOccurred())
 			Expect(completed).To(BeFalse())
+		})
+
+		It("should call the error callback when BeforeDrainNode fails", func() {
+			n, _ := createNode("node0")
+			expectedErr := fmt.Errorf("orchestrator failed")
+			orchestrator.EXPECT().BeforeDrainNode(ctx, n).Return(false, expectedErr)
+
+			var callbackCalled bool
+			var callbackErr error
+			onError := func(err error) {
+				callbackCalled = true
+				callbackErr = err
+			}
+
+			completed, err := drn.DrainNode(ctx, n, false, false, onError)
+			Expect(err).To(HaveOccurred())
+			Expect(completed).To(BeFalse())
+			Expect(callbackCalled).To(BeTrue())
+			Expect(callbackErr).To(Equal(expectedErr))
+		})
+
+		It("should call the error callback when cordon fails", func() {
+			n, _ := createNode("node0")
+			nCopy := n.DeepCopy()
+			nCopy.Name = "non-existent-node"
+			originalDrainTimeOut := drain.DrainTimeOut
+			drain.DrainTimeOut = 3 * time.Second
+			defer func() {
+				drain.DrainTimeOut = originalDrainTimeOut
+			}()
+
+			orchestrator.EXPECT().BeforeDrainNode(ctx, nCopy).Return(true, nil)
+
+			var callbackCalled bool
+			onError := func(err error) {
+				callbackCalled = true
+			}
+
+			_, err := drn.DrainNode(ctx, nCopy, false, false, onError)
+			Expect(err).To(HaveOccurred())
+			Expect(callbackCalled).To(BeTrue())
 		})
 
 		It("should return not completed base on OpenshiftBeforeDrainNode call", func() {
 			n, _ := createNode("node0")
 			orchestrator.EXPECT().BeforeDrainNode(ctx, n).Return(false, nil)
 
-			completed, err := drn.DrainNode(ctx, n, false, false)
+			completed, err := drn.DrainNode(ctx, n, false, false, nil)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(completed).To(BeFalse())
 		})
@@ -123,7 +164,7 @@ var _ = Describe("Drainer", Ordered, func() {
 
 			orchestrator.EXPECT().BeforeDrainNode(ctx, nCopy).Return(true, nil)
 
-			_, err := drn.DrainNode(ctx, nCopy, false, false)
+			_, err := drn.DrainNode(ctx, nCopy, false, false, nil)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -137,7 +178,7 @@ var _ = Describe("Drainer", Ordered, func() {
 				drain.DrainTimeOut = originalDrainTimeOut
 			}()
 
-			_, err := drn.DrainNode(ctx, n, true, false)
+			_, err := drn.DrainNode(ctx, n, true, false, nil)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -163,7 +204,7 @@ var _ = Describe("Drainer", Ordered, func() {
 				}, 2*time.Minute, time.Second).Should(Succeed())
 			}()
 
-			_, err = drn.DrainNode(ctx, n, false, false)
+			_, err = drn.DrainNode(ctx, n, false, false, nil)
 			Expect(err).ToNot(HaveOccurred())
 			pod := &corev1.Pod{}
 			err = k8sClient.Get(ctx, client.ObjectKey{Name: "regular-pod", Namespace: testNamespace}, pod)
