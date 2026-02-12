@@ -103,12 +103,16 @@ type ServiceInterface interface {
 	IsServiceEnabled(servicePath string) (bool, error)
 	// ReadService reads a systemd servers and return it as a struct
 	ReadService(servicePath string) (*Service, error)
-	// EnableService enables a systemd server on the host
+	// EnableService enables a systemd service on the host
 	EnableService(service *Service) error
+	// ReloadService reloads a systemd unit files on the host
+	ReloadService() error
+	// RestartService restarts a systemd service on the host
+	RestartService(service *Service) error
 	// ReadServiceManifestFile reads the systemd manifest for a specific service
 	ReadServiceManifestFile(path string) (*Service, error)
 	// ReadServiceInjectionManifestFile reads the injection manifest file for the systemd service
-	ReadServiceInjectionManifestFile(path string) (*Service, error)
+	ReadServiceInjectionManifestFile(path string, ovsConfig map[string]string) (*Service, error)
 	// CompareServices returns true if serviceA needs update(doesn't contain all fields from service B)
 	CompareServices(serviceA, serviceB *Service) (bool, error)
 	// UpdateSystemService updates a system service on the host
