@@ -57,7 +57,7 @@ var _ = Describe("Drain Controller", Ordered, func() {
 
 		drainController, err := NewDrainReconcileController(drainKClient,
 			k8sManager.GetScheme(),
-			k8sManager.GetEventRecorderFor("operator"),
+			k8sManager.GetEventRecorder("operator"),
 			orchestrator)
 		Expect(err).ToNot(HaveOccurred())
 		err = drainController.SetupWithManager(k8sManager)

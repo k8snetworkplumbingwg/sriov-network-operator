@@ -26,9 +26,10 @@ func (dr *DrainReconcile) handleNodeIdleNodeStateDrainingOrCompleted(ctx context
 	completed, err := dr.drainer.CompleteDrainNode(ctx, node)
 	if err != nil {
 		reqLogger.Error(err, "failed to complete drain on node")
-		dr.recorder.Event(nodeNetworkState,
+		dr.recorder.Eventf(nodeNetworkState, nil,
 			corev1.EventTypeWarning,
 			"DrainController",
+			"CompleteDrain",
 			"failed to drain node")
 		return ctrl.Result{}, err
 	}
@@ -36,9 +37,10 @@ func (dr *DrainReconcile) handleNodeIdleNodeStateDrainingOrCompleted(ctx context
 	// if we didn't manage to complete the un drain of the node we retry
 	if !completed {
 		reqLogger.Info("complete drain was not completed re queueing the request")
-		dr.recorder.Event(nodeNetworkState,
+		dr.recorder.Eventf(nodeNetworkState, nil,
 			corev1.EventTypeWarning,
 			"DrainController",
+			"CompleteDrain",
 			"node complete drain was not completed")
 		// TODO: make this time configurable
 		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
@@ -52,9 +54,10 @@ func (dr *DrainReconcile) handleNodeIdleNodeStateDrainingOrCompleted(ctx context
 	}
 
 	reqLogger.Info("completed the un drain for node")
-	dr.recorder.Event(nodeNetworkState,
+	dr.recorder.Eventf(nodeNetworkState, nil,
 		corev1.EventTypeWarning,
 		"DrainController",
+		"CompleteDrain",
 		"node un drain completed")
 	return ctrl.Result{}, nil
 }
@@ -105,9 +108,10 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	drained, err := dr.drainer.DrainNode(ctx, node, fullNodeDrain, singleNode)
 	if err != nil {
 		reqLogger.Error(err, "error trying to drain the node")
-		dr.recorder.Event(nodeNetworkState,
+		dr.recorder.Eventf(nodeNetworkState, nil,
 			corev1.EventTypeWarning,
 			"DrainController",
+			"DrainNode",
 			"failed to drain node")
 		return reconcile.Result{}, err
 	}
@@ -115,9 +119,10 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	// if we didn't manage to complete the drain of the node we retry
 	if !drained {
 		reqLogger.Info("the nodes was not drained re queueing the request")
-		dr.recorder.Event(nodeNetworkState,
+		dr.recorder.Eventf(nodeNetworkState, nil,
 			corev1.EventTypeWarning,
 			"DrainController",
+			"DrainNode",
 			"node drain operation was not completed")
 		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
 	}
@@ -130,9 +135,10 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	}
 
 	reqLogger.Info("node drained successfully")
-	dr.recorder.Event(nodeNetworkState,
+	dr.recorder.Eventf(nodeNetworkState, nil,
 		corev1.EventTypeWarning,
 		"DrainController",
+		"DrainNode",
 		"node drain completed")
 	return ctrl.Result{}, nil
 }
