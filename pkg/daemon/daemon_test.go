@@ -247,6 +247,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		discoverSriovReturn.SetOriginal([]sriovnetworkv1.InterfaceExt{})
 		discoverSriovReturn.SetAfter([]sriovnetworkv1.InterfaceExt{})
 		nodeState = ensureEmptyNodeState(nodeName)
+		patchAnnotation(nodeState, "ensure-reconcile", time.Now().Format(time.RFC3339Nano))
 		Eventually(func(g Gomega) {
 			g.Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(nodeState), nodeState)).
 				ToNot(HaveOccurred())
