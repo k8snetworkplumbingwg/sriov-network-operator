@@ -1,6 +1,7 @@
 package infiniband
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -36,20 +37,39 @@ type infiniband struct {
 	kernelHelper types.KernelInterface
 }
 
+// GetVfGUID gets a GUID for an IB VF device (checks pool first, then generates random)
+func (i *infiniband) GetVfGUID(pfAddr string, vfID int) (net.HardwareAddr, error) {
+	if i.guidPool != nil {
+		guidFromPool, err := i.guidPool.GetVFGUID(pfAddr, vfID)
+		if err != nil {
+			log.Log.Error(err, "GetVfGUID(): failed to get GUID from IB GUID pool", "pfAddr", pfAddr, "vfID", vfID)
+			return nil, err
+		}
+		return guidFromPool, nil
+	}
+
+	// Fallback to random GUID generation if pool is not available.
+	// Using crypto/rand for cryptographically secure random numbers to avoid collisions.
+	guid := make(net.HardwareAddr, 8)
+	if _, err := rand.Read(guid); err != nil {
+		return nil, fmt.Errorf("failed to generate random GUID: %w", err)
+	}
+	// Set U/L bit to indicate locally administered address.
+	guid[0] |= 0x02
+	// Unset I/G bit for unicast.
+	guid[0] &^= 0x01
+	return guid, nil
+}
+
 // ConfigureVfGUID configures and sets a GUID for an IB VF device
 func (i *infiniband) ConfigureVfGUID(vfAddr string, pfAddr string, vfID int, pfLink netlink.Link) error {
 	log.Log.Info("ConfigureVfGUID(): configure vf guid", "vfAddr", vfAddr, "pfAddr", pfAddr, "vfID", vfID)
 
-	guid := generateRandomGUID()
-
-	if i.guidPool != nil {
-		guidFromPool, err := i.guidPool.GetVFGUID(pfAddr, vfID)
-		if err != nil {
-			log.Log.Info("ConfigureVfGUID(): failed to get GUID from IB GUID pool", "address", vfAddr, "error", err)
-			return err
-		}
-		guid = guidFromPool
+	guid, err := i.GetVfGUID(pfAddr, vfID)
+	if err != nil {
+		return err
 	}
+
 	log.Log.Info("ConfigureVfGUID(): set vf guid", "address", vfAddr, "guid", guid)
 
 	return i.applyVfGUIDToInterface(guid, vfAddr, vfID, pfLink)
