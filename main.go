@@ -51,6 +51,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 	//+kubebuilder:scaffold:imports
@@ -160,23 +161,29 @@ func main() {
 
 	featureGate := featuregate.New()
 
+	// Create status patcher for network controllers (includes embedded condition manager)
+	globalStatusPatcher := status.NewPatcher(mgrGlobal.GetClient(), mgrGlobal.GetEventRecorder("sriov-network-operator"), mgrGlobal.GetScheme())
+
 	if err = (&controllers.SriovNetworkReconciler{
-		Client: mgrGlobal.GetClient(),
-		Scheme: mgrGlobal.GetScheme(),
+		Client:        mgrGlobal.GetClient(),
+		Scheme:        mgrGlobal.GetScheme(),
+		StatusPatcher: globalStatusPatcher,
 	}).SetupWithManager(mgrGlobal); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovNetwork")
 		os.Exit(1)
 	}
 	if err = (&controllers.SriovIBNetworkReconciler{
-		Client: mgrGlobal.GetClient(),
-		Scheme: mgrGlobal.GetScheme(),
+		Client:        mgrGlobal.GetClient(),
+		Scheme:        mgrGlobal.GetScheme(),
+		StatusPatcher: globalStatusPatcher,
 	}).SetupWithManager(mgrGlobal); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SriovIBNetwork")
 		os.Exit(1)
 	}
 	if err = (&controllers.OVSNetworkReconciler{
-		Client: mgrGlobal.GetClient(),
-		Scheme: mgrGlobal.GetScheme(),
+		Client:        mgrGlobal.GetClient(),
+		Scheme:        mgrGlobal.GetScheme(),
+		StatusPatcher: globalStatusPatcher,
 	}).SetupWithManager(mgrGlobal); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OVSNetwork")
 		os.Exit(1)
