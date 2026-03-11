@@ -28,6 +28,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	orchestratorMock "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator/mock"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
 )
@@ -39,7 +40,40 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 	BeforeAll(func() {
 		By("Create SriovOperatorConfig controller k8s objs")
 		config := makeDefaultSriovOpConfig()
-		Expect(k8sClient.Create(context.Background(), config)).Should(Succeed())
+
+		// Ensure any existing config is fully deleted before creating a new one
+		// This prevents test pollution from previous test runs where an object
+		// might still be in deletion (with finalizer blocking)
+		existingConfig := &sriovnetworkv1.SriovOperatorConfig{}
+		err := k8sClient.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, existingConfig)
+		if err == nil {
+			// Object exists - need to clean it up
+			// If it has a finalizer and deletion timestamp, remove the finalizer manually
+			// (since no controller is running yet to process it)
+			if len(existingConfig.Finalizers) > 0 {
+				existingConfig.Finalizers = []string{}
+				_ = k8sClient.Update(context.Background(), existingConfig)
+			}
+			// Delete the object if it doesn't have a deletion timestamp yet
+			if existingConfig.DeletionTimestamp.IsZero() {
+				_ = k8sClient.Delete(context.Background(), existingConfig)
+			}
+			// Wait for it to be fully gone
+			Eventually(func() bool {
+				err := k8sClient.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, existingConfig)
+				return errors.IsNotFound(err)
+			}, 10*time.Second, 100*time.Millisecond).Should(BeTrue(), "Timed out waiting for existing SriovOperatorConfig to be deleted")
+		}
+
+		err = k8sClient.Create(context.Background(), config)
+		Expect(err).ToNot(HaveOccurred())
+
+		DeferCleanup(func() {
+			err := k8sClient.Delete(context.Background(), config)
+			if err != nil && !errors.IsNotFound(err) {
+				Expect(err).ToNot(HaveOccurred())
+			}
+		})
 
 		somePolicy := &sriovnetworkv1.SriovNetworkNodePolicy{}
 		somePolicy.SetNamespace(testNamespace)
@@ -77,6 +111,7 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			Orchestrator:      orchestrator,
 			FeatureGate:       featuregate.New(),
 			UncachedAPIReader: k8sManager.GetAPIReader(),
+			StatusPatcher:     status.NewPatcher(k8sManager.GetClient(), k8sManager.GetEventRecorder("test"), k8sManager.GetScheme()),
 		}).SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -638,6 +673,225 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(injectorCfg.Webhooks[0].ClientConfig.CABundle).To(Equal([]byte("ca-bundle-2\n")))
 			}, "1s").Should(Succeed())
+		})
+
+		Context("conditions", func() {
+			It("should set Ready=True and Degraded=False when operator reconciles successfully", func() {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				Eventually(func(g Gomega) {
+					err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)
+					g.Expect(err).NotTo(HaveOccurred())
+
+					// Verify Ready condition
+					readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+					g.Expect(readyCondition).ToNot(BeNil())
+					g.Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+					g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonOperatorReady))
+					g.Expect(readyCondition.Message).To(ContainSubstring("Operator components are running and healthy"))
+
+					// Verify Degraded condition
+					degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+					g.Expect(degradedCondition).ToNot(BeNil())
+					g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(degradedCondition.Reason).To(Equal(sriovnetworkv1.ReasonNotDegraded))
+					g.Expect(degradedCondition.Message).To(ContainSubstring("Operator is functioning correctly"))
+				}, util.APITimeout, util.RetryInterval).Should(Succeed())
+			})
+
+			It("should have consistent observedGeneration in conditions", func() {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				Eventually(func(g Gomega) {
+					err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)
+					g.Expect(err).NotTo(HaveOccurred())
+
+					readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+					degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+
+					g.Expect(readyCondition).ToNot(BeNil())
+					g.Expect(degradedCondition).ToNot(BeNil())
+
+					// Both conditions should have the same observedGeneration
+					g.Expect(readyCondition.ObservedGeneration).To(Equal(degradedCondition.ObservedGeneration))
+					// And it should match the current generation
+					g.Expect(readyCondition.ObservedGeneration).To(Equal(config.Generation))
+				}, util.APITimeout, util.RetryInterval).Should(Succeed())
+			})
+
+			It("should have both Ready and Degraded conditions present", func() {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				Eventually(func(g Gomega) {
+					err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)
+					g.Expect(err).NotTo(HaveOccurred())
+
+					// Verify both conditions are present
+					g.Expect(config.Status.Conditions).To(HaveLen(2))
+
+					readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+					g.Expect(readyCondition).ToNot(BeNil())
+
+					degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+					g.Expect(degradedCondition).ToNot(BeNil())
+
+					// Verify they are complementary (Ready=True means Degraded=False and vice versa)
+					if readyCondition.Status == metav1.ConditionTrue {
+						g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionFalse))
+					} else {
+						g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionTrue))
+					}
+				}, util.APITimeout, util.RetryInterval).Should(Succeed())
+			})
+
+		})
+	})
+})
+
+var _ = Describe("SriovOperatorConfig controller - degraded conditions", Ordered, func() {
+	var cancel context.CancelFunc
+	var ctx context.Context
+
+	BeforeAll(func() {
+		By("Ensure SriovOperatorConfig exists for degraded test")
+		// The controller only watches config named "default" in the operator namespace
+		config := &sriovnetworkv1.SriovOperatorConfig{}
+		err := k8sClient.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, config)
+		if errors.IsNotFound(err) {
+			config = &sriovnetworkv1.SriovOperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: testNamespace,
+					Name:      consts.DefaultConfigName,
+				},
+				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+					EnableInjector:           true,
+					EnableOperatorWebhook:    true,
+					ConfigDaemonNodeSelector: map[string]string{},
+					LogLevel:                 2,
+				},
+			}
+			Expect(k8sClient.Create(context.Background(), config)).Should(Succeed())
+		} else {
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		// Setup controller manager with hypershift mock to trigger degraded state
+		By("Setup controller manager with hypershift configuration")
+		k8sManager, err := setupK8sManagerForTest()
+		Expect(err).ToNot(HaveOccurred())
+
+		t := GinkgoT()
+		mockCtrl := gomock.NewController(t)
+		orchestrator := orchestratorMock.NewMockInterface(mockCtrl)
+
+		// Configure mock to return OpenShift + Hypershift which triggers an error
+		orchestrator.EXPECT().ClusterType().Return(consts.ClusterTypeOpenshift).AnyTimes()
+		orchestrator.EXPECT().Flavor().Return(consts.ClusterFlavorHypershift).AnyTimes()
+
+		err = (&SriovOperatorConfigReconciler{
+			Client:            k8sManager.GetClient(),
+			Scheme:            k8sManager.GetScheme(),
+			Orchestrator:      orchestrator,
+			FeatureGate:       featuregate.New(),
+			UncachedAPIReader: k8sManager.GetAPIReader(),
+			StatusPatcher:     status.NewPatcher(k8sManager.GetClient(), k8sManager.GetEventRecorder("test-degraded"), k8sManager.GetScheme()),
+		}).SetupWithManager(k8sManager)
+		Expect(err).ToNot(HaveOccurred())
+
+		ctx, cancel = context.WithCancel(context.Background())
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer GinkgoRecover()
+			By("Start controller manager for degraded test")
+			err := k8sManager.Start(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}()
+
+		DeferCleanup(func() {
+			By("Shut down degraded test manager")
+			cancel()
+			wg.Wait()
+		})
+	})
+
+	Context("when reconciliation fails", func() {
+		It("should set Ready=False and Degraded=True when operator encounters an error", func() {
+			// The hypershift configuration triggers an error: "systemd mode is not supported on hypershift"
+			// This causes the controller to set degraded conditions
+			Eventually(func(g Gomega) {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, config)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Verify Ready condition is False
+				readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(readyCondition.Reason).To(Equal(sriovnetworkv1.ReasonOperatorComponentsNotHealthy))
+				g.Expect(readyCondition.Message).To(ContainSubstring("Operator reconciliation failed"))
+
+				// Verify Degraded condition is True
+				degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+				g.Expect(degradedCondition).ToNot(BeNil())
+				g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(degradedCondition.Reason).To(Equal(sriovnetworkv1.ReasonOperatorComponentsNotHealthy))
+				g.Expect(degradedCondition.Message).To(ContainSubstring("Operator components failed to reconcile"))
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should have consistent observedGeneration in degraded conditions", func() {
+			Eventually(func(g Gomega) {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, config)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+				degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(degradedCondition).ToNot(BeNil())
+
+				// Both conditions should have the same observedGeneration
+				g.Expect(readyCondition.ObservedGeneration).To(Equal(degradedCondition.ObservedGeneration))
+				// And it should match the current generation
+				g.Expect(readyCondition.ObservedGeneration).To(Equal(config.Generation))
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should have both Ready and Degraded conditions present in degraded state", func() {
+			Eventually(func(g Gomega) {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, config)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Verify both conditions are present
+				g.Expect(config.Status.Conditions).To(HaveLen(2))
+
+				readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+
+				degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+				g.Expect(degradedCondition).ToNot(BeNil())
+				g.Expect(degradedCondition.Status).To(Equal(metav1.ConditionTrue))
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should include error details in condition messages", func() {
+			Eventually(func(g Gomega) {
+				config := &sriovnetworkv1.SriovOperatorConfig{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DefaultConfigName}, config)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Verify the error message contains relevant information
+				readyCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionReady)
+				g.Expect(readyCondition).ToNot(BeNil())
+				g.Expect(readyCondition.Message).To(ContainSubstring("systemd mode is not supported on hypershift"))
+
+				degradedCondition := findCondition(config.Status.Conditions, sriovnetworkv1.ConditionDegraded)
+				g.Expect(degradedCondition).ToNot(BeNil())
+				g.Expect(degradedCondition.Message).To(ContainSubstring("systemd mode is not supported on hypershift"))
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
 		})
 	})
 })
