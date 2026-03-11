@@ -109,7 +109,7 @@ func (s *sriov) ResetSriovDevice(ifaceStatus sriovnetworkv1.InterfaceExt) error 
 			return err
 		}
 		log.Log.V(2).Info("ResetSriovDevice(): reset eswitch mode and number of VFs", "mode", eswitchMode)
-		if err := s.setEswitchModeAndNumVFs(ifaceStatus.PciAddress, eswitchMode, 0); err != nil {
+		if err := s.setEswitchModeAndNumVFs(ifaceStatus.PciAddress, ifaceStatus.Name, eswitchMode, 0); err != nil {
 			return err
 		}
 	} else if ifaceStatus.LinkType == consts.LinkTypeIB {
@@ -461,7 +461,7 @@ func (s *sriov) configureHWOptionsForSwitchdev(iface *sriovnetworkv1.Interface) 
 	}
 	// flow steering mode can be changed only when NIC is in legacy mode
 	if s.GetNicSriovMode(iface.PciAddress) != sriovnetworkv1.ESwithModeLegacy {
-		err = s.setEswitchModeAndNumVFs(iface.PciAddress, sriovnetworkv1.ESwithModeLegacy, 0)
+		err = s.setEswitchModeAndNumVFs(iface.PciAddress, iface.Name, sriovnetworkv1.ESwithModeLegacy, 0)
 		if err != nil {
 			log.Log.Error(err, "falied to switch Eswitch mode to legacy and reset number of vfs to 0")
 			return err
@@ -1131,12 +1131,22 @@ func (s *sriov) createVFs(iface *sriovnetworkv1.Interface) error {
 			return nil
 		}
 	}
-	return s.setEswitchModeAndNumVFs(iface.PciAddress, expectedEswitchMode, iface.NumVfs)
+	// Clean stale VF representor interfaces and detach PF uplink from the managed
+	// bridge before VF re-creation. After host reboot, representors from the previous
+	// lifecycle remain in the bridge; the PF uplink also needs to be detached because
+	// setEswitchModeAndNumVFsMlx() skips detachPFFromBridge() when NIC is already
+	// in legacy mode (which is always the case after reboot).
+	if expectedEswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
+		if err := s.detachPFFromBridge(iface.PciAddress, iface.Name, iface.NumVfs); err != nil {
+			return err
+		}
+	}
+	return s.setEswitchModeAndNumVFs(iface.PciAddress, iface.Name, expectedEswitchMode, iface.NumVfs)
 }
 
-type setEswitchModeAndNumVFsFn func(string, string, int) error
+type setEswitchModeAndNumVFsFn func(string, string, string, int) error
 
-func (s *sriov) setEswitchModeAndNumVFs(pciAddr string, desiredEswitchMode string, numVFs int) error {
+func (s *sriov) setEswitchModeAndNumVFs(pciAddr string, pfName string, desiredEswitchMode string, numVFs int) error {
 	pfDriverName, err := s.dputilsLib.GetDriverName(pciAddr)
 	if err != nil {
 		return err
@@ -1159,7 +1169,7 @@ func (s *sriov) setEswitchModeAndNumVFs(pciAddr string, desiredEswitchMode strin
 		fn = s.setEswitchModeAndNumVFsMlx
 	}
 
-	return fn(pciAddr, desiredEswitchMode, numVFs)
+	return fn(pciAddr, pfName, desiredEswitchMode, numVFs)
 }
 
 func (s *sriov) waitForVFLinks(pciAddr string, expectedNum int, maxTimeout time.Duration) error {
@@ -1232,7 +1242,7 @@ func (s *sriov) waitForVFLinks(pciAddr string, expectedNum int, maxTimeout time.
 // b. set the desired number of Virtual Functions
 // c. unbind driver of all VFs
 // d. set eSwitchMode to `switchdev` if requested
-func (s *sriov) setEswitchModeAndNumVFsMlx(pciAddr string, desiredEswitchMode string, numVFs int) error {
+func (s *sriov) setEswitchModeAndNumVFsMlx(pciAddr string, pfName string, desiredEswitchMode string, numVFs int) error {
 	log.Log.V(2).Info("setEswitchModeAndNumVFsMlx(): configure VFs for device",
 		"device", pciAddr, "count", numVFs, "mode", desiredEswitchMode)
 
@@ -1241,7 +1251,7 @@ func (s *sriov) setEswitchModeAndNumVFsMlx(pciAddr string, desiredEswitchMode st
 	if s.GetNicSriovMode(pciAddr) != sriovnetworkv1.ESwithModeLegacy {
 		// detach PF from the managed bridge before switching the mode,
 		// changing of eSwitch mode may fail if NIC is part of the bridge (has offloaded TC rules)
-		if err := s.detachPFFromBridge(pciAddr); err != nil {
+		if err := s.detachPFFromBridge(pciAddr, pfName, numVFs); err != nil {
 			return err
 		}
 		if err := s.unbindAllVFsOnPF(pciAddr); err != nil {
@@ -1275,7 +1285,7 @@ func (s *sriov) setEswitchModeAndNumVFsMlx(pciAddr string, desiredEswitchMode st
 // a. set eSwitchMode to the desired mode if needed
 // a1. set sriov_numvfs to 0 before updating the eSwitchMode
 // b. set sriov_numvfs to the desired number of VFs
-func (s *sriov) setEswitchModeAndNumVFsIce(pciAddr string, desiredEswitchMode string, numVFs int) error {
+func (s *sriov) setEswitchModeAndNumVFsIce(pciAddr string, pfName string, desiredEswitchMode string, numVFs int) error {
 	log.Log.V(2).Info("setEswitchModeAndNumVFsIce(): configure VFs for device",
 		"device", pciAddr, "count", numVFs, "mode", desiredEswitchMode)
 
@@ -1297,12 +1307,12 @@ func (s *sriov) setEswitchModeAndNumVFsIce(pciAddr string, desiredEswitchMode st
 }
 
 // detach PF from the managed bridge
-func (s *sriov) detachPFFromBridge(pciAddr string) error {
-	log.Log.V(2).Info("detachPFFromBridge(): detach PF", "device", pciAddr)
+func (s *sriov) detachPFFromBridge(pciAddr string, pfName string, numVfs int) error {
+	log.Log.V(2).Info("detachPFFromBridge(): detach PF", "device", pciAddr, "pfName", pfName, "numVfs", numVfs)
 	if !vars.ManageSoftwareBridges {
 		return nil
 	}
-	if err := s.bridgeHelper.DetachInterfaceFromManagedBridge(pciAddr); err != nil {
+	if err := s.bridgeHelper.DetachInterfaceFromManagedBridge(pciAddr, pfName, numVfs); err != nil {
 		log.Log.Error(err, "detachPFFromBridge(): failed to detach interface from the managed bridge", "device", pciAddr)
 		return err
 	}

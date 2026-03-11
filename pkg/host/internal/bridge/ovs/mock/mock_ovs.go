@@ -71,17 +71,17 @@ func (mr *MockInterfaceMockRecorder) GetOVSBridges(ctx any) *gomock.Call {
 }
 
 // RemoveInterfaceFromOVSBridge mocks base method.
-func (m *MockInterface) RemoveInterfaceFromOVSBridge(ctx context.Context, ifaceAddr string) error {
+func (m *MockInterface) RemoveInterfaceFromOVSBridge(ctx context.Context, pciAddress, pfName string, numVfs int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RemoveInterfaceFromOVSBridge", ctx, ifaceAddr)
+	ret := m.ctrl.Call(m, "RemoveInterfaceFromOVSBridge", ctx, pciAddress, pfName, numVfs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RemoveInterfaceFromOVSBridge indicates an expected call of RemoveInterfaceFromOVSBridge.
-func (mr *MockInterfaceMockRecorder) RemoveInterfaceFromOVSBridge(ctx, ifaceAddr any) *gomock.Call {
+func (mr *MockInterfaceMockRecorder) RemoveInterfaceFromOVSBridge(ctx, pciAddress, pfName, numVfs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveInterfaceFromOVSBridge", reflect.TypeOf((*MockInterface)(nil).RemoveInterfaceFromOVSBridge), ctx, ifaceAddr)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveInterfaceFromOVSBridge", reflect.TypeOf((*MockInterface)(nil).RemoveInterfaceFromOVSBridge), ctx, pciAddress, pfName, numVfs)
 }
 
 // RemoveOVSBridge mocks base method.
