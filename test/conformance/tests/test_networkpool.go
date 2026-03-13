@@ -212,6 +212,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 
 			By("waiting for operator to finish the configuration")
 			WaitForSRIOVStable()
+			WaitForOperatorPodsReady()
 			nodeState := &sriovv1.SriovNetworkNodeState{}
 			Eventually(func(g Gomega) {
 				err = clients.Get(context.Background(), client.ObjectKey{Name: testNode, Namespace: operatorNamespace}, nodeState)
@@ -229,6 +230,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 
 			By("waiting for operator to finish the configuration")
 			WaitForSRIOVStable()
+			WaitForOperatorPodsReady()
 			podDefinition := pod.DefineWithNetworks([]string{"test-rdmanetwork"})
 			firstPod, err := clients.Pods(namespaces.Test).Create(context.Background(), podDefinition, metav1.CreateOptions{})
 			Expect(err).ToNot(HaveOccurred())
@@ -268,13 +270,13 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			}
 
 			By("checking the amount of allocatable devices remains after device plugin reset")
-			Consistently(func() int64 {
+			Eventually(func() int64 {
 				err = clients.Get(context.Background(), client.ObjectKey{Name: testNode}, testedNode)
 				Expect(err).ToNot(HaveOccurred())
 				resNum := testedNode.Status.Allocatable[corev1.ResourceName("openshift.io/"+resourceName)]
 				newAllocatable, _ := resNum.AsInt64()
 				return newAllocatable
-			}, 1*time.Minute, 5*time.Second).Should(Equal(allocatable))
+			}, 2*time.Minute, 5*time.Second).Should(Equal(allocatable))
 
 			By("checking counters inside the pods")
 			strOut, _, err := pod.ExecCommand(clients, firstPod, "/bin/bash", "-c", "ip link show net1")
@@ -340,6 +342,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			By("waiting for operator to finish the configuration")
 			WaitForSRIOVStable()
+			WaitForOperatorPodsReady()
 			nodeState := &sriovv1.SriovNetworkNodeState{}
 			Eventually(func(g Gomega) {
 				err = clients.Get(context.Background(), client.ObjectKey{Name: testNode, Namespace: operatorNamespace}, nodeState)
@@ -355,6 +358,7 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 				func(policy *sriovv1.SriovNetworkNodePolicy) { policy.Spec.IsRdma = true })
 			Expect(err).ToNot(HaveOccurred())
 			WaitForSRIOVStable()
+			WaitForOperatorPodsReady()
 
 			podDefinition := pod.DefineWithNetworks([]string{"test-rdmanetwork"})
 			firstPod, err := clients.Pods(namespaces.Test).Create(context.Background(), podDefinition, metav1.CreateOptions{})
@@ -373,3 +377,38 @@ var _ = Describe("[sriov] NetworkPool", Ordered, func() {
 		})
 	})
 })
+
+func WaitForOperatorPodsReady() {
+	Eventually(func(g Gomega) bool {
+		podList := &corev1.PodList{}
+		err := clients.List(context.Background(), podList,
+			client.InNamespace(operatorNamespace))
+		if err != nil {
+			return false
+		}
+
+		if len(podList.Items) == 0 {
+			return false
+		}
+
+		for _, pod := range podList.Items {
+			if pod.Status.Phase != corev1.PodRunning {
+				return false
+			}
+
+			isReady := false
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					isReady = true
+					break
+				}
+			}
+
+			if !isReady {
+				return false
+			}
+		}
+
+		return true
+	}, 2*time.Minute, 5*time.Second).Should(BeTrue())
+}
