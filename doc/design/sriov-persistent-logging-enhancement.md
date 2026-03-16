@@ -65,11 +65,11 @@ Since the log file is opened via the `/host/var/log/...` mount path (an absolute
 
 **Important**: If log rotation triggers during a chroot (the daemon is chrooted to `/host`), the path `/host/var/log/...` would resolve incorrectly (it would look for `/host/host/var/log/...` on the actual host). To handle this:
 
-- **Option A (recommended)**: Use a dedicated goroutine for log writing that never enters chroot, or buffer log writes and flush outside chroot sections.
-- **Option B**: Write the log file to a path that resolves correctly in both contexts. Since `/host` maps to `/` on the host, the log path inside chroot would be `/var/log/sriov-network-config-daemon/config-daemon.log`, which is valid. We can open the file using this host-relative path before chroot, and lumberjack rotation will work because chroot sections are short-lived and the file is re-opened at the original path when chroot exits.
+- **Option A**: Use a dedicated goroutine for log writing that never enters chroot, or buffer log writes and flush outside chroot sections.
+- **Option B**: Write the log file to a path that resolves correctly in both contexts. Since `/host` maps to `/` on the host, the log path inside chroot would be `/var/log/sriov-network-config-daemon/config-daemon.log`, which is valid. We can open the file using this host-relative path before chroot, and lumberjack rotation will work because chroot sections are short-lived and the file is re-opened at the original path when chroot exits. However, this relies on timing assumptions and could fail if rotation occurs during chroot.
 - **Option C**: Write to a tmpfs or emptyDir mount that is also bind-mounted to the host. However, this does not survive pod restarts.
 
-**Recommended approach**: Option B — rely on the fact that chroot sections in the config daemon are short-lived (typically a single command execution), and lumberjack rotation during a chroot is extremely unlikely. As an additional safeguard, the log file path will be set to `/host/var/log/sriov-network-config-daemon/config-daemon.log` and the directory will be created at daemon startup before any chroot operations.
+**Recommended approach**: Option A — Use a dedicated logging mechanism that is isolated from chroot operations. This provides a robust solution that avoids race conditions entirely. The zap logger will buffer writes in memory, and the underlying file writer (lumberjack) will operate in the main namespace, never entering the chrooted environment. This eliminates the risk of path resolution failures during log rotation, regardless of when rotation occurs relative to chroot operations.
 
 ### API Extensions
 
