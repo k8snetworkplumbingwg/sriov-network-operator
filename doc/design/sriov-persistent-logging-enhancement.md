@@ -154,20 +154,26 @@ func InitLogWithFile(logFilePath string, maxSizeMB, maxFiles, maxAgeDays int, co
         Compress:   compress,
     }
 
-    // Create a zap core for file output
+    // Get the current log level (from existing configuration)
+    // The log level is typically set via the --v flag or SriovOperatorConfig
+    logLevel := // ... retrieve current log level from existing config ...
+
+    // Create a zap core for file output using the same log level as console
     fileEncoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-    fileCore := zapcore.NewCore(fileEncoder, zapcore.AddSync(fileWriter), zapcore.DebugLevel)
+    fileCore := zapcore.NewCore(fileEncoder, zapcore.AddSync(fileWriter), logLevel)
 
     // Create the console core (existing behavior)
-    consoleCore := // ... existing zap setup ...
+    consoleCore := // ... existing zap setup with the same logLevel ...
 
-    // Combine both cores
+    // Combine both cores - both will respect the same log level
     combinedCore := zapcore.NewTee(consoleCore, fileCore)
 
     logger := zap.New(combinedCore)
     log.SetLogger(zapr.NewLogger(logger))
 }
 ```
+
+**Important**: The file logger must use the same log level as the console logger. Both loggers should respect the log level configured via the `--v` flag (verbosity) or any other existing log level configuration mechanism in `SriovOperatorConfig`. This ensures consistency between console and file output, and prevents the file logger from generating excessive logs when a higher log level (less verbose) is configured for the operator.
 
 ### 3. Changes to DaemonSet manifest
 
@@ -201,21 +207,53 @@ func init() {
 func runStartCmd(cmd *cobra.Command, args []string) {
     // ... read SriovOperatorConfig ...
 
-    if operatorConfig.Spec.LogConfig != nil && operatorConfig.Spec.LogConfig.Enabled {
+    // Default behavior: enabled unless explicitly disabled
+    logCfg := operatorConfig.Spec.LogConfig
+    if logCfg == nil || logCfg.Enabled == nil || *logCfg.Enabled {
+        // Apply defaults for any unspecified values
+        maxSizeMB := 100
+        maxFiles := 5
+        maxAgeDays := 30
+        compress := true
+        hostPath := "/var/log/sriov-network-config-daemon"
+
+        if logCfg != nil {
+            if logCfg.MaxSizeMB != nil {
+                maxSizeMB = *logCfg.MaxSizeMB
+            }
+            if logCfg.MaxFiles != nil {
+                maxFiles = *logCfg.MaxFiles
+            }
+            if logCfg.MaxAgeDays != nil {
+                maxAgeDays = *logCfg.MaxAgeDays
+            }
+            if logCfg.Compress != nil {
+                compress = *logCfg.Compress
+            }
+            if logCfg.HostPath != nil {
+                hostPath = *logCfg.HostPath
+            }
+        }
+
         snolog.InitLogWithFile(
-            filepath.Join("/host/var/log/sriov-network-config-daemon", "config-daemon.log"),
-            operatorConfig.Spec.LogConfig.MaxSizeMB,
-            operatorConfig.Spec.LogConfig.MaxFiles,
-            operatorConfig.Spec.LogConfig.MaxAgeDays,
-            operatorConfig.Spec.LogConfig.Compress,
+            filepath.Join("/host", hostPath, "config-daemon.log"),
+            maxSizeMB,
+            maxFiles,
+            maxAgeDays,
+            compress,
         )
     }
 }
 ```
 
-### 5. Log format for files
+### 5. Log format and level for files
 
 File logs will use JSON format for structured logging, making them easy to parse with standard log analysis tools. Console logs will continue using the existing human-readable format.
+
+Both file and console loggers will respect the same log level configuration (set via the `--v` verbosity flag or other existing mechanisms). This ensures:
+- Consistency between console and file output
+- Predictable disk usage based on the configured verbosity
+- No unexpected verbose logging to files when the operator is configured for minimal console logging
 
 ### 6. Disk space considerations
 
