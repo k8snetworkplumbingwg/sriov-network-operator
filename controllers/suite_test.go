@@ -150,8 +150,6 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	err = os.Setenv("METRICS_EXPORTER_PORT", "9110")
 	Expect(err).NotTo(HaveOccurred())
-	err = os.Setenv("METRICS_EXPORTER_KUBE_RBAC_PROXY_IMAGE", "mock-image")
-	Expect(err).NotTo(HaveOccurred())
 	err = os.Setenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_SERVICE_ACCOUNT", "k8s-prometheus")
 	Expect(err).NotTo(HaveOccurred())
 	err = os.Setenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_NAMESPACE", "default")

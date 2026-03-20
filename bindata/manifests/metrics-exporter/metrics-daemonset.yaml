@@ -25,7 +25,11 @@ spec:
       containers:
       - name: metrics-exporter
         args:
-        - --web.listen-address=127.0.0.1:{{.MetricsExporterPort}}
+        - --web.listen-address=[$(HOST_IP)]:{{.MetricsExporterPort}}
+        - --tls-cert-file=/etc/metrics/tls.crt
+        - --tls-private-key-file=/etc/metrics/tls.key
+        - --tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+        - --authentication-and-authorization
         - --path.kubecgroup=/sys/fs/cgroup
         - --path.sysbuspci=/host/sys/bus/pci/devices/
         - --path.sysclassnet=/host/sys/class/net/
@@ -35,6 +39,14 @@ spec:
         - --collector.vfstatspriority=netlink,sysfs
         image: {{.Image}}
         imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: {{.MetricsExporterPort}}
+            name: https-metrics
+        env:
+          - name: HOST_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.hostIP
         resources:
           requests:
             memory: 100Mi
@@ -42,7 +54,7 @@ spec:
         securityContext:
           capabilities:
             drop:
-              - ALL      
+              - ALL
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
         volumeMounts:
@@ -60,35 +72,9 @@ spec:
         - mountPath: /host/cpu_manager_state
           name: cpucheckpoint
           readOnly: true
-      - name: kube-rbac-proxy
-        image: '{{.MetricsExporterKubeRbacProxyImage}}'
-        imagePullPolicy: IfNotPresent
-        args:
-          - --logtostderr
-          - --secure-listen-address=[$(HOST_IP)]:{{.MetricsExporterPort}}
-          - --tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_RSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
-          - --upstream=http://127.0.0.1:{{.MetricsExporterPort}}/
-          - --tls-private-key-file=/etc/metrics/tls.key
-          - --tls-cert-file=/etc/metrics/tls.crt
-        ports:
-          - containerPort: {{.MetricsExporterPort}}
-            name: https-metrics
-        env:
-          - name: HOST_IP
-            valueFrom:
-              fieldRef:
-                fieldPath: status.hostIP
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-        resources:
-          requests:
-            cpu: 10m
-            memory: 20Mi
-        volumeMounts:
-          - name: metrics-certs
-            mountPath: /etc/metrics
-            readOnly: true
+        - name: metrics-certs
+          mountPath: /etc/metrics
+          readOnly: true
       nodeSelector:
         {{- range $key, $value := .NodeSelectorField }}
           {{ $key }}: "{{ $value }}"
