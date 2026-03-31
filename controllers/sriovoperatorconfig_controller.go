@@ -254,8 +254,6 @@ func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context,
 	data.Data["ImagePullSecrets"] = GetImagePullSecrets()
 	data.Data["MetricsExporterSecretName"] = os.Getenv("METRICS_EXPORTER_SECRET_NAME")
 	data.Data["MetricsExporterPort"] = os.Getenv("METRICS_EXPORTER_PORT")
-	data.Data["MetricsExporterKubeRbacProxyImage"] = os.Getenv("METRICS_EXPORTER_KUBE_RBAC_PROXY_IMAGE")
-
 	data.Data["IsOpenshift"] = r.Orchestrator.ClusterType() == consts.ClusterTypeOpenshift
 
 	data.Data["IsPrometheusOperatorInstalled"] = strings.ToLower(os.Getenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_ENABLED")) == trueString

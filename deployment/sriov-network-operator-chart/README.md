@@ -157,7 +157,6 @@ Upon chart deletion, those files are not cleaned up. For cases where this is not
 | `images.resourcesInjector` | Resources Injector image |
 | `images.webhook` | Operator Webhook image |
 | `images.metricsExporter` | Network Metrics Exporter image |
-| `images.metricsExporterKubeRbacProxy` | Kube RBAC Proxy image used for metrics exporter |
 
 ### Extra objects parameters
 
