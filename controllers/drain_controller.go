@@ -143,9 +143,13 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		// this cover the case the node is on idle
 
 		// node request to be on idle and the currect state is idle
-		// we don't do anything
+		// ensure drain conditions are set to idle state
 		if nodeStateDrainAnnotationCurrent == constants.DrainIdle {
-			reqLogger.Info("node and nodeState are on idle nothing todo")
+			reqLogger.Info("node and nodeState are on idle, ensuring drain conditions are set")
+			if err := dr.updateDrainConditions(ctx, nodeNetworkState, sriovnetworkv1.DrainStateIdle, ""); err != nil {
+				reqLogger.Error(err, "failed to update drain conditions to idle state")
+				return reconcile.Result{}, err
+			}
 			return reconcile.Result{}, nil
 		}
 
