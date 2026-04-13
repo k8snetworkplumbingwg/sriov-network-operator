@@ -50,6 +50,7 @@ const (
 	OperatorWebHookName                = "sriov-operator-webhook-config"
 	DeprecatedOperatorWebHookName      = "operator-webhook-config"
 	PluginPath                         = "./bindata/manifests/plugins"
+	DRADriverPath                      = "./bindata/manifests/dra-driver"
 	DaemonPath                         = "./bindata/manifests/daemon"
 	DefaultPolicyName                  = "default"
 	ConfigMapName                      = "device-plugin-config"
@@ -201,6 +202,9 @@ const (
 
 	// MellanoxFirmwareResetFeatureGate: enables the firmware reset via mstfwreset before a reboot
 	MellanoxFirmwareResetFeatureGate = "mellanoxFirmwareReset"
+
+	// DynamicResourceAllocationFeatureGate: enables DRA driver instead of device plugin
+	DynamicResourceAllocationFeatureGate = "dynamicResourceAllocation"
 
 	// The path to the file on the host filesystem that contains the IB GUID distribution for IB VFs
 	InfinibandGUIDConfigFilePath = SriovConfBasePath + "/infiniband/guids"
