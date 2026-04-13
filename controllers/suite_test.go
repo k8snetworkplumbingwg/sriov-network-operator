@@ -238,3 +238,13 @@ func TestAPIs(t *testing.T) {
 
 	RunSpecs(t, "Controller Suite", reporterConfig)
 }
+
+// findCondition is a helper function to find a condition by type in a list of conditions
+func findCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == conditionType {
+			return &conditions[i]
+		}
+	}
+	return nil
+}

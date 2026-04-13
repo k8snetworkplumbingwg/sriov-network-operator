@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/kubectl/pkg/drain"
 
@@ -32,8 +31,12 @@ func (w writer) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
+// DrainErrorCallback is a callback function that is called when a drain error occurs.
+// This allows the caller to be notified of errors immediately as they happen.
+type DrainErrorCallback func(err error)
+
 type DrainInterface interface {
-	DrainNode(context.Context, *corev1.Node, bool, bool) (bool, error)
+	DrainNode(context.Context, *corev1.Node, bool, bool, DrainErrorCallback) (bool, error)
 	CompleteDrainNode(context.Context, *corev1.Node) (bool, error)
 }
 
@@ -57,13 +60,17 @@ func NewDrainer(orchestrator orchestrator.Interface) (DrainInterface, error) {
 // DrainNode the function cordon a node and drain pods from it
 // if fullNodeDrain true all the pods on the system will get drained
 // for openshift system we also pause the machine config pool this machine is part of it
-func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrain, singleNode bool) (bool, error) {
+// onError callback is called immediately when drain errors occur (e.g., pod eviction failures)
+func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrain, singleNode bool, onError DrainErrorCallback) (bool, error) {
 	reqLogger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("drainNode")
 	reqLogger.Info("Node drain requested")
 
 	completed, err := d.orchestrator.BeforeDrainNode(ctx, node)
 	if err != nil {
 		reqLogger.Error(err, fmt.Sprintf("failed to run BeforeDrainNode for orchestrator %s", d.orchestrator.ClusterType()))
+		if onError != nil {
+			onError(err)
+		}
 		return false, err
 	}
 
@@ -77,38 +84,25 @@ func (d *Drainer) DrainNode(ctx context.Context, node *corev1.Node, fullNodeDrai
 		return true, nil
 	}
 
-	drainHelper := createDrainHelper(d.kubeClient, ctx, fullNodeDrain)
-	backoff := wait.Backoff{
-		Steps:    3,
-		Duration: 2 * time.Second,
-		Factor:   2,
-	}
-	var lastErr error
+	drainHelper := createDrainHelper(d.kubeClient, ctx, fullNodeDrain, onError)
 
 	reqLogger.Info("drainNode(): Start draining")
-	if err = wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		nodeCopy := node.DeepCopy()
-		err := drain.RunCordonOrUncordon(drainHelper, node, true)
-		if err != nil {
-			lastErr = err
-			node = nodeCopy
-			reqLogger.Info("drainNode(): Cordon failed, retrying", "error", err)
-			return false, nil
+
+	// Cordon the node first
+	if err = drain.RunCordonOrUncordon(drainHelper, node, true); err != nil {
+		reqLogger.Error(err, "drainNode(): Cordon failed")
+		if onError != nil {
+			onError(err)
 		}
-		err = drain.RunNodeDrain(drainHelper, node.Name)
-		if err == nil {
-			return true, nil
-		}
-		lastErr = err
-		reqLogger.Info("drainNode(): Draining failed, retrying", "error", err)
-		return false, nil
-	}); err != nil {
-		if wait.Interrupted(err) {
-			reqLogger.Info("drainNode(): failed to drain node", "steps", backoff.Steps, "error", lastErr)
-		}
-		reqLogger.Info("drainNode(): failed to drain node", "error", err)
 		return false, err
 	}
+
+	// Run the drain - RunNodeDrain has its own 90 second timeout for retrying evictions
+	if err = drain.RunNodeDrain(drainHelper, node.Name); err != nil {
+		reqLogger.Error(err, "drainNode(): Drain failed")
+		return false, err
+	}
+
 	reqLogger.Info("drainNode(): Drain completed")
 	return true, nil
 }
@@ -120,8 +114,8 @@ func (d *Drainer) CompleteDrainNode(ctx context.Context, node *corev1.Node) (boo
 	logger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("CompleteDrainNode")
 
 	// Create drain helper object
-	// full drain is not important here
-	drainHelper := createDrainHelper(d.kubeClient, ctx, false)
+	// full drain is not important here, onError callback not needed for uncordon
+	drainHelper := createDrainHelper(d.kubeClient, ctx, false, nil)
 
 	// run the un cordon function on the node
 	if err := drain.RunCordonOrUncordon(drainHelper, node, false); err != nil {
@@ -144,7 +138,8 @@ func (d *Drainer) CompleteDrainNode(ctx context.Context, node *corev1.Node) (boo
 // createDrainHelper function to create a drain helper
 // if fullDrain is false we only remove pods that have the resourcePrefix
 // if not we remove all the pods in the node
-func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, fullDrain bool) *drain.Helper {
+// onError callback is called immediately when pod eviction/deletion errors occur
+func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, fullDrain bool, onError DrainErrorCallback) *drain.Helper {
 	logger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("createDrainHelper")
 
 	drainer := &drain.Helper{
@@ -155,6 +150,7 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 		GracePeriodSeconds:  -1,
 		Timeout:             DrainTimeOut,
 		OnPodDeletionOrEvictionFinished: func(pod *corev1.Pod, usingEviction bool, err error) {
+			logger.Info("DEBUG: OnPodDeletionOrEvictionFinished", "pod", pod.Name, "usingEviction", usingEviction, "err", err)
 			if err != nil {
 				verbStr := constants.DrainDelete
 				if usingEviction {
@@ -169,9 +165,19 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 			}
 			logger.Info(fmt.Sprintf("%s pod %s/%s from node", verbStr, pod.Namespace, pod.Name))
 		},
-		Ctx:    ctx,
-		Out:    writer{func(msg string, kv ...interface{}) { logger.Info(strings.ReplaceAll(msg, "\n", "")) }},
-		ErrOut: writer{func(msg string, kv ...interface{}) { logger.Error(nil, strings.ReplaceAll(msg, "\n", ""), kv...) }},
+		Ctx: ctx,
+		Out: writer{func(msg string, kv ...interface{}) { logger.Info(strings.ReplaceAll(msg, "\n", "")) }},
+		// ErrOut captures errors from the drain library, including retry errors.
+		// We call the onError callback here to report eviction failures immediately,
+		// before the drain timeout is reached.
+		ErrOut: writer{func(msg string, kv ...interface{}) {
+			cleanMsg := strings.ReplaceAll(msg, "\n", "")
+			logger.Error(nil, cleanMsg, kv...)
+			// Call the error callback for eviction/deletion errors
+			if onError != nil && strings.Contains(cleanMsg, "error when") {
+				onError(fmt.Errorf("%s", cleanMsg))
+			}
+		}},
 	}
 
 	// when we just want to drain and not reboot we can only remove the pods using sriov devices
