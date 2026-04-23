@@ -33,12 +33,11 @@ const (
 	extHostPf   = "EXT_HOST_PF"
 	embeddedCPU = "EMBEDDED_CPU"
 
+	devlinkMultiportParamName   = "esw_multiport"
+	devlinkMultiportEnableValue = "true"
+
 	disabled = "DISABLED"
 	enabled  = "ENABLED"
-
-	VendorMellanox = "15b3"
-	DeviceBF2      = "a2d6"
-	DeviceBF3      = "a2dc"
 
 	PreconfiguredLinkType = "Preconfigured"
 	UnknownLinkType       = "Unknown"
@@ -46,6 +45,7 @@ const (
 	EnableSriov           = "SRIOV_EN"
 	LinkTypeP1            = "LINK_TYPE_P1"
 	LinkTypeP2            = "LINK_TYPE_P2"
+	LagResourceAllocation = "LAG_RESOURCE_ALLOCATION"
 	MellanoxVendorID      = "15b3"
 )
 
@@ -54,6 +54,7 @@ type MlxNic struct {
 	TotalVfs    int
 	LinkTypeP1  string
 	LinkTypeP2  string
+	Multiport   int
 }
 
 //go:generate ../../../bin/mockgen -destination mock/mock_mellanox.go -source mellanox.go
@@ -207,6 +208,10 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 			cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%s", LinkTypeP2, fwArgs.LinkTypeP2))
 		}
 
+		if fwArgs.Multiport != -1 {
+			cmdArgs = append(cmdArgs, fmt.Sprintf("%s=%d", LagResourceAllocation, fwArgs.Multiport))
+		}
+
 		log.Log.V(2).Info("mellanox-plugin: configFW()", "cmd-args", cmdArgs)
 		if len(cmdArgs) <= 4 {
 			continue
@@ -222,7 +227,7 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 
 func (m *mellanoxHelper) GetMlxNicFwData(pciAddress string) (current, next *MlxNic, err error) {
 	log.Log.Info("mellanox-plugin getMlnxNicFwData()", "device", pciAddress)
-	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2}
+	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2, LagResourceAllocation}
 
 	out, stderr, err := m.MstConfigReadData(pciAddress)
 	if err != nil {
@@ -376,9 +381,56 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 	return needReboot, nil
 }
 
+// HandleESwitchParams check if eswitch params should be changes
+func HandleESwitchParams(pciPrefix string, attr *MlxNic, fwCurrent *MlxNic,
+	mellanoxNicsSpec map[string]sriovnetworkv1.Interface,
+	mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) bool {
+	needReboot := false
+
+	pciAddress := pciPrefix + "0"
+	if firstPortSpec, ok := mellanoxNicsSpec[pciAddress]; ok {
+		ifaceStatus := getIfaceStatus(pciAddress, mellanoxNicsStatus)
+		needChange, devlinkParam := isESwitchParamsRequireChange(firstPortSpec, ifaceStatus)
+		if needChange {
+			desiredMultiport := 1
+			if devlinkParam != nil {
+				if devlinkParam.Value == devlinkMultiportEnableValue {
+					desiredMultiport = 1
+				} else {
+					desiredMultiport = 0
+				}
+			}
+
+			if fwCurrent.Multiport == -1 {
+				log.Log.V(2).Info("LagResourceAllocation not supported in firmware, skipping firmware change",
+					"device", ifaceStatus.PciAddress)
+				attr.Multiport = -1
+				return false
+			}
+
+			if fwCurrent.Multiport == desiredMultiport {
+				log.Log.V(2).Info("Eswitch params (multiport) already set in firmware, skipping reboot",
+					"device", ifaceStatus.PciAddress)
+				attr.Multiport = -1
+				return false
+			}
+
+			log.Log.V(2).Info("Changing eswitch params (multiport), needs reboot",
+				"device", ifaceStatus.PciAddress)
+			attr.Multiport = desiredMultiport
+			needReboot = true
+		} else {
+			attr.Multiport = -1
+		}
+	} else {
+		attr.Multiport = -1
+	}
+	return needReboot
+}
+
 func mlnxNicFromMap(mstData map[string]string) (*MlxNic, error) {
 	log.Log.Info("mellanox-plugin mlnxNicFromMap()", "data", mstData)
-	fwData := &MlxNic{}
+	fwData := &MlxNic{Multiport: -1}
 	if strings.Contains(mstData[EnableSriov], "True") {
 		fwData.EnableSriov = true
 	}
@@ -393,7 +445,41 @@ func mlnxNicFromMap(mstData map[string]string) (*MlxNic, error) {
 		fwData.LinkTypeP2 = getLinkType(linkTypeP2)
 	}
 
+	if val, ok := mstData[LagResourceAllocation]; ok {
+		if strings.Contains(val, "(1)") {
+			fwData.Multiport = 1
+		} else if strings.Contains(val, "(0)") {
+			fwData.Multiport = 0
+		}
+	}
+
 	return fwData, nil
+}
+
+func isESwitchParamsRequireChange(iface sriovnetworkv1.Interface, ifaceStatus sriovnetworkv1.InterfaceExt) (bool, *sriovnetworkv1.DevlinkParam) {
+	log.Log.Info("mellanox-plugin isESwitchParamsRequireChange()", "device", iface.PciAddress)
+
+	requsted, found := false, false
+	for _, devlinkParam := range iface.DevlinkParams.Params {
+		if devlinkParam.Name != devlinkMultiportParamName {
+			continue
+		}
+		requsted = true
+
+		for _, devlinkParamStatus := range ifaceStatus.DevlinkParams.Params {
+			if devlinkParamStatus.Name == devlinkMultiportParamName {
+				found = true
+				if iface.Name == ifaceStatus.Name && devlinkParam.Value != devlinkParamStatus.Value {
+					return true, &devlinkParam
+				}
+			}
+		}
+	}
+	if requsted && !found {
+		// esw_multiport devlink parameter not found and not configured
+		return true, nil
+	}
+	return false, nil
 }
 
 func getLinkType(linkType string) string {

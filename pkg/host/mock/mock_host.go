@@ -416,6 +416,21 @@ func (mr *MockHostManagerInterfaceMockRecorder) GetDevlinkDeviceParam(pciAddr, p
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevlinkDeviceParam", reflect.TypeOf((*MockHostManagerInterface)(nil).GetDevlinkDeviceParam), pciAddr, paramName)
 }
 
+// GetDevlinkDeviceParams mocks base method.
+func (m *MockHostManagerInterface) GetDevlinkDeviceParams(pciAddr string) ([]v1.DevlinkParam, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDevlinkDeviceParams", pciAddr)
+	ret0, _ := ret[0].([]v1.DevlinkParam)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetDevlinkDeviceParams indicates an expected call of GetDevlinkDeviceParams.
+func (mr *MockHostManagerInterfaceMockRecorder) GetDevlinkDeviceParams(pciAddr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevlinkDeviceParams", reflect.TypeOf((*MockHostManagerInterface)(nil).GetDevlinkDeviceParams), pciAddr)
+}
+
 // GetDriverByBusAndDevice mocks base method.
 func (m *MockHostManagerInterface) GetDriverByBusAndDevice(bus, device string) (string, error) {
 	m.ctrl.T.Helper()
