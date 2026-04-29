@@ -2,6 +2,7 @@ package kubernetes_test
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -59,6 +60,68 @@ var _ = Describe("Kubernetes Platform", func() {
 			shouldContinue, err := k8s.AfterCompleteDrainNode(context.Background(), node)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(shouldContinue).To(BeTrue())
+		})
+	})
+
+	Context("TLS Configuration", Ordered, func() {
+		BeforeAll(func() {
+			origCipherSuites, hasCipherSuites := os.LookupEnv("TLS_CIPHER_SUITES")
+			origMinVersion, hasMinVersion := os.LookupEnv("TLS_MIN_VERSION")
+
+			DeferCleanup(func() {
+				if hasCipherSuites {
+					os.Setenv("TLS_CIPHER_SUITES", origCipherSuites)
+				} else {
+					os.Unsetenv("TLS_CIPHER_SUITES")
+				}
+				if hasMinVersion {
+					os.Setenv("TLS_MIN_VERSION", origMinVersion)
+				} else {
+					os.Unsetenv("TLS_MIN_VERSION")
+				}
+			})
+		})
+
+		BeforeEach(func() {
+			os.Unsetenv("TLS_CIPHER_SUITES")
+			os.Unsetenv("TLS_MIN_VERSION")
+		})
+
+		It("should return nil when no TLS environment variables are set", func() {
+			tlsConfig, err := k8s.GetTLSConfig(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tlsConfig).To(BeNil())
+		})
+
+		It("should return TLSConfig with all values when all env vars are set", func() {
+			os.Setenv("TLS_CIPHER_SUITES", "ECDHE-RSA-AES128-GCM-SHA256,ECDHE-RSA-AES256-GCM-SHA384")
+			os.Setenv("TLS_MIN_VERSION", "VersionTLS12")
+
+			tlsConfig, err := k8s.GetTLSConfig(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tlsConfig).NotTo(BeNil())
+			Expect(tlsConfig.CipherSuites).To(Equal("ECDHE-RSA-AES128-GCM-SHA256,ECDHE-RSA-AES256-GCM-SHA384"))
+			Expect(tlsConfig.MinTLSVersion).To(Equal("VersionTLS12"))
+		})
+
+		It("should return TLSConfig with only cipher suites when only that env var is set", func() {
+			os.Setenv("TLS_CIPHER_SUITES", "TLS_AES_128_GCM_SHA256")
+
+			tlsConfig, err := k8s.GetTLSConfig(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tlsConfig).NotTo(BeNil())
+			Expect(tlsConfig.CipherSuites).To(Equal("TLS_AES_128_GCM_SHA256"))
+			Expect(tlsConfig.MinTLSVersion).To(BeEmpty())
+		})
+
+		It("should return TLSConfig with only min version when only that env var is set", func() {
+			os.Setenv("TLS_MIN_VERSION", "VersionTLS13")
+
+			tlsConfig, err := k8s.GetTLSConfig(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(tlsConfig).NotTo(BeNil())
+			Expect(tlsConfig.CipherSuites).To(BeEmpty())
+			Expect(tlsConfig.MinTLSVersion).To(Equal("VersionTLS13"))
 		})
 	})
 })

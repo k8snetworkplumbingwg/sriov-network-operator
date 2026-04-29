@@ -41,7 +41,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/go-logr/logr"
+	configv1 "github.com/openshift/api/config/v1"
 	machinev1 "github.com/openshift/api/machineconfiguration/v1"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/apply"
@@ -62,9 +64,35 @@ type SriovOperatorConfigReconciler struct {
 	UncachedAPIReader client.Reader
 }
 
+// getTLSTemplateData retrieves TLS configuration data for manifest rendering.
+// For OpenShift clusters, reads the cluster-wide TLS security profile from the APIServer resource.
+// For Kubernetes clusters, reads from environment variables (TLS_CIPHER_SUITES, TLS_MIN_VERSION).
+// Empty strings are returned when no configuration is set, which means components use their defaults.
+func (r *SriovOperatorConfigReconciler) getTLSTemplateData(ctx context.Context) map[string]string {
+	result := map[string]string{
+		"TLSCipherSuites": "",
+		"TLSMinVersion":   "",
+	}
+
+	tlsConfig, err := r.Orchestrator.GetTLSConfig(ctx)
+	if err != nil {
+		log.Log.WithName("getTLSTemplateData").Error(err, "Failed to get TLS config, using defaults")
+		return result
+	}
+
+	if tlsConfig != nil {
+		result["TLSCipherSuites"] = tlsConfig.CipherSuites
+		result["TLSMinVersion"] = tlsConfig.MinTLSVersion
+	}
+
+	log.Log.WithName("getTLSTemplateData").V(2).Info("TLS config", "TLSCipherSuites", result["TLSCipherSuites"], "TLSMinVersion", result["TLSMinVersion"])
+	return result
+}
+
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=config.openshift.io,resources=apiservers;infrastructures,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -175,11 +203,45 @@ func defaultConfigPredicate() predicate.Predicate {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *SriovOperatorConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovOperatorConfig{}, ctrl_builder.WithPredicates(defaultConfigPredicate())).
 		Owns(&appsv1.DaemonSet{}).
-		Owns(&corev1.ConfigMap{}).
-		Complete(r)
+		Owns(&corev1.ConfigMap{})
+
+	// Watch for APIServer changes on OpenShift to react to TLS profile changes.
+	// Only add the watch if the APIServer CRD is available in the cluster.
+	if r.Orchestrator.ClusterType() == consts.ClusterTypeOpenshift && r.isAPIServerCRDAvailable(mgr) {
+		log.Log.WithName("SetupWithManager").V(2).Info("Watching for OpenShift APIServer changes to react to TLS profile changes")
+		builder = builder.Watches(
+			&configv1.APIServer{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: vars.Namespace,
+					Name:      consts.DefaultConfigName,
+				}}}
+			}),
+		)
+	}
+
+	return builder.Complete(r)
+}
+
+// isAPIServerCRDAvailable checks if the OpenShift APIServer CRD is available in the cluster.
+func (r *SriovOperatorConfigReconciler) isAPIServerCRDAvailable(mgr ctrl.Manager) bool {
+	log.Log.WithName("isAPIServerCRDAvailable").V(2).Info("Checking if OpenShift APIServer CRD is available")
+	gvk := schema.GroupVersionKind{
+		Group:   "config.openshift.io",
+		Version: "v1",
+		Kind:    "APIServer",
+	}
+
+	_, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		log.Log.V(2).Info("APIServer CRD not available, skipping watch", "error", err.Error())
+		return false
+	}
+	log.Log.WithName("isAPIServerCRDAvailable").V(2).Info("OpenShift APIServer CRD is available")
+	return true
 }
 
 func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
@@ -247,6 +309,7 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
 	logger := log.Log.WithName("syncMetricsExporter")
 	logger.V(1).Info("Start to sync metrics exporter")
+	tlsData := r.getTLSTemplateData(ctx)
 
 	data := render.MakeRenderData()
 	data.Data["Image"] = os.Getenv("METRICS_EXPORTER_IMAGE")
@@ -262,6 +325,8 @@ func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context,
 	data.Data["PrometheusOperatorDeployRules"] = strings.ToLower(os.Getenv("METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES")) == trueString
 	data.Data["PrometheusOperatorServiceAccount"] = os.Getenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_SERVICE_ACCOUNT")
 	data.Data["PrometheusOperatorNamespace"] = os.Getenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_NAMESPACE")
+	data.Data["TLSCipherSuites"] = tlsData["TLSCipherSuites"]
+	data.Data["TLSMinVersion"] = tlsData["TLSMinVersion"]
 
 	data.Data["NodeSelectorField"] = GetDefaultNodeSelector()
 	if dc.Spec.ConfigDaemonNodeSelector != nil {
@@ -297,6 +362,9 @@ func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context,
 func (r *SriovOperatorConfigReconciler) syncWebhookObjs(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
 	logger := log.Log.WithName("syncWebhookObjs")
 	logger.V(1).Info("Start to sync webhook objects")
+
+	// Get TLS configuration data
+	tlsData := r.getTLSTemplateData(ctx)
 
 	for name, path := range webhooks {
 		// Render Webhook manifests
@@ -335,6 +403,10 @@ func (r *SriovOperatorConfigReconciler) syncWebhookObjs(ctx context.Context, dc 
 
 		// check for ResourceInjectorMatchConditionFeatureGate feature gate
 		data.Data[consts.ResourceInjectorMatchConditionFeatureGate] = r.FeatureGate.IsEnabled(consts.ResourceInjectorMatchConditionFeatureGate)
+
+		// TLS configuration data
+		data.Data["TLSCipherSuites"] = tlsData["TLSCipherSuites"]
+		data.Data["TLSMinVersion"] = tlsData["TLSMinVersion"]
 
 		objs, err := render.RenderDir(path, &data)
 		if err != nil {

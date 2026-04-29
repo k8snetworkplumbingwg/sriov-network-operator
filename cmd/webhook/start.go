@@ -19,10 +19,12 @@ import (
 )
 
 var (
-	certFile    string
-	keyFile     string
-	port        int
-	enableHTTP2 bool
+	certFile        string
+	keyFile         string
+	port            int
+	enableHTTP2     bool
+	tlsCipherSuites string
+	tlsMinVersion   string
 )
 
 var startCmd = &cobra.Command{
@@ -50,6 +52,10 @@ func init() {
 	startCmd.Flags().IntVar(&port, "port", 443,
 		"Secure port that the webhook listens on")
 	startCmd.Flags().BoolVar(&enableHTTP2, "enable-http2", false, "If HTTP/2 should be enabled for the metrics and webhook servers.")
+	startCmd.Flags().StringVar(&tlsCipherSuites, "tls-cipher-suites", "",
+		"Comma-separated list of TLS 1.2 and earlier cipher suites (OpenSSL or IANA names). Insecure cipher suites are rejected. If empty, uses Go defaults.")
+	startCmd.Flags().StringVar(&tlsMinVersion, "tls-min-version", "",
+		"Minimum TLS version (VersionTLS12, VersionTLS13). Values below VersionTLS12 are rejected. If empty, defaults to VersionTLS12.")
 }
 
 // serve handles the http portion of a request prior to handing to an admit
@@ -154,6 +160,25 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 		panic(err)
 	}
 
+	// Parse TLS cipher suites
+	cipherSuites, err := webhook.ParseCipherSuitesFlag(tlsCipherSuites)
+	if err != nil {
+		setupLog.Error(err, "invalid tls-cipher-suites flag")
+		panic(err)
+	}
+
+	// Parse minimum TLS version
+	minVersion, err := webhook.TLSVersionToGo(tlsMinVersion)
+	if err != nil {
+		setupLog.Error(err, "invalid tls-min-version flag")
+		panic(err)
+	}
+
+	// Log effective TLS configuration
+	setupLog.Info("TLS configuration",
+		"cipherSuites", tlsCipherSuites,
+		"minVersion", tlsMinVersion)
+
 	http.HandleFunc("/mutating-custom-resource", serveMutateCustomResource)
 	http.HandleFunc("/validating-custom-resource", serveValidateCustomResource)
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, req *http.Request) { w.Write([]byte("ok")) })
@@ -164,6 +189,8 @@ func runStartCmd(cmd *cobra.Command, args []string) {
 			Addr: fmt.Sprintf(":%d", port),
 			TLSConfig: &tls.Config{
 				GetCertificate: keyPair.GetCertificateFunc(),
+				CipherSuites:   cipherSuites,
+				MinVersion:     minVersion,
 			},
 			// CVE-2023-39325 https://github.com/golang/go/issues/63417
 			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
