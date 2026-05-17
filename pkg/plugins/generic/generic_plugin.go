@@ -239,6 +239,8 @@ func (p *GenericPlugin) Apply() error {
 		if err := p.helpers.ConfigureBridges(p.DesireState.Spec.Bridges, p.DesireState.Status.Bridges); err != nil {
 			return err
 		}
+		// Note: Bridge grouping for "all" policy is now handled in the controller (ApplyBridgeConfig)
+		// where a single bridge with all uplinks is created in the spec.
 	}
 
 	return nil
