@@ -17,6 +17,7 @@ var DefaultFeatureStates = map[string]bool{
 	consts.ManageSoftwareBridgesFeatureGate:            false,
 	consts.BlockDevicePluginUntilConfiguredFeatureGate: true,
 	consts.MellanoxFirmwareResetFeatureGate:            false,
+	consts.DynamicResourceAllocationFeatureGate:        false, // Default: use device plugin
 }
 
 // FeatureGate provides methods to check state of the feature
