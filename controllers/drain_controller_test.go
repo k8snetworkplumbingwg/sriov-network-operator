@@ -394,6 +394,9 @@ func ExpectDrainCompleteNodesHaveIsNotSchedule(nodesState ...*sriovnetworkv1.Sri
 	}
 }
 
+// expectFirstDrainedNode waits until exactly one of the two nodes completes draining,
+// then returns the drained node first and the waiting node second. This accounts for
+// non-deterministic goroutine scheduling in the concurrent reconcile loops.
 func expectFirstDrainedNode(
 	node1 *corev1.Node,
 	nodeState1 *sriovnetworkv1.SriovNetworkNodeState,
