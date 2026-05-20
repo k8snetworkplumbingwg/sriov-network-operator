@@ -21,12 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -50,6 +50,7 @@ import (
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -60,6 +61,7 @@ type SriovOperatorConfigReconciler struct {
 	Orchestrator      orchestrator.Interface
 	FeatureGate       featuregate.FeatureGate
 	UncachedAPIReader client.Reader
+	StatusPatcher     status.Interface
 }
 
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovoperatorconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -101,6 +103,9 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	if err = r.syncOperatorConfigFinalizers(ctx, defaultConfig, logger); err != nil {
+		if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+			logger.Error(updateErr, "Failed to update conditions")
+		}
 		return reconcile.Result{}, err
 	}
 
@@ -115,34 +120,33 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		logger.Info("SR-IOV Network Operator Webhook is disabled.")
 	}
 
-	// Fetch the SriovNetworkNodePolicyList
-	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
-	err = r.List(ctx, policyList, &client.ListOptions{})
-	if err != nil {
-		// Error reading the object - requeue the request.
-		return reconcile.Result{}, err
-	}
-	// Sort the policies with priority, higher priority ones is applied later
-	// We need to use the sort so we always get the policies in the same order
-	// That is needed so when we create the node Affinity for the sriov-device plugin
-	// it will remain in the same order and not trigger a pod recreation
-	sort.Sort(sriovnetworkv1.ByPriority(policyList.Items))
-
 	// Render and sync webhook objects
 	if err = r.syncWebhookObjs(ctx, defaultConfig); err != nil {
+		if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+			logger.Error(updateErr, "Failed to update conditions")
+		}
 		return reconcile.Result{}, err
 	}
 
 	// Sync SriovNetworkConfigDaemon objects
 	if err = r.syncConfigDaemonSet(ctx, defaultConfig); err != nil {
+		if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+			logger.Error(updateErr, "Failed to update conditions")
+		}
 		return reconcile.Result{}, err
 	}
 
 	if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate); err != nil {
+		if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+			logger.Error(updateErr, "Failed to update conditions")
+		}
 		return reconcile.Result{}, err
 	}
 
 	if err = r.syncMetricsExporter(ctx, defaultConfig); err != nil {
+		if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+			logger.Error(updateErr, "Failed to update conditions")
+		}
 		return reconcile.Result{}, err
 	}
 
@@ -150,15 +154,29 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 	if r.Orchestrator.ClusterType() == consts.ClusterTypeOpenshift {
 		// TODO: add support for hypershift as today there is no MCO on hypershift clusters
 		if r.Orchestrator.Flavor() == consts.ClusterFlavorHypershift {
-			return ctrl.Result{}, fmt.Errorf("systemd mode is not supported on hypershift")
+			hypershiftErr := fmt.Errorf("systemd mode is not supported on hypershift")
+			if updateErr := r.updateConditions(ctx, defaultConfig, hypershiftErr); updateErr != nil {
+				logger.Error(updateErr, "Failed to update conditions")
+			}
+			return ctrl.Result{}, hypershiftErr
 		}
 
 		if err = r.syncOpenShiftSystemdService(ctx, defaultConfig); err != nil {
+			if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+				logger.Error(updateErr, "Failed to update conditions")
+			}
 			return reconcile.Result{}, err
 		}
 	}
 
 	logger.Info("Reconcile SriovOperatorConfig completed successfully")
+
+	// Update conditions to reflect successful reconciliation
+	if err = r.updateConditions(ctx, defaultConfig, nil); err != nil {
+		logger.Error(err, "Failed to update conditions")
+		return reconcile.Result{}, err
+	}
+
 	return reconcile.Result{RequeueAfter: consts.ResyncPeriod}, nil
 }
 
@@ -486,23 +504,33 @@ func (r SriovOperatorConfigReconciler) syncOperatorConfigFinalizers(ctx context.
 
 func (r *SriovOperatorConfigReconciler) handleSriovOperatorConfigDeletion(ctx context.Context,
 	defaultConfig *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger) (ctrl.Result, error) {
-	var err error
 	if sriovnetworkv1.StringInArray(sriovnetworkv1.OPERATORCONFIGFINALIZERNAME, defaultConfig.ObjectMeta.Finalizers) {
 		// our finalizer is present, so lets handle any external dependency
 		logger.Info("delete SriovOperatorConfig CR", "Namespace", defaultConfig.Namespace, "Name", defaultConfig.Name)
 		// make sure webhooks objects are deleted prior of removing finalizer
-		err = r.deleteAllWebhooks(ctx)
-		if err != nil {
+		if err := r.deleteAllWebhooks(ctx); err != nil {
+			if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+				logger.Error(updateErr, "Failed to update conditions")
+			}
 			return reconcile.Result{}, err
 		}
 		// remove our finalizer from the list and update it.
 		defaultConfig.ObjectMeta.Finalizers, _ = sriovnetworkv1.RemoveString(sriovnetworkv1.OPERATORCONFIGFINALIZERNAME, defaultConfig.ObjectMeta.Finalizers)
 		if err := r.Update(ctx, defaultConfig); err != nil {
+			// If the object is not found, it's already been deleted - no need to return error
+			if apierrors.IsNotFound(err) {
+				return reconcile.Result{}, nil
+			}
+			if updateErr := r.updateConditions(ctx, defaultConfig, err); updateErr != nil {
+				logger.Error(updateErr, "Failed to update conditions")
+			}
 			return reconcile.Result{}, err
 		}
+		// Finalizer removed successfully - object will be deleted by Kubernetes.
+		// Don't try to update conditions since the object is being deleted.
 	}
 
-	return reconcile.Result{}, err
+	return reconcile.Result{}, nil
 }
 
 func (r SriovOperatorConfigReconciler) setLabelInsideObject(ctx context.Context, cr *sriovnetworkv1.SriovOperatorConfig, objs []*uns.Unstructured) error {
@@ -557,4 +585,53 @@ func (r SriovOperatorConfigReconciler) deleteAllWebhooks(ctx context.Context) er
 	)
 
 	return err
+}
+
+// updateConditions updates the conditions in the SriovOperatorConfig status
+func (r *SriovOperatorConfigReconciler) updateConditions(ctx context.Context, config *sriovnetworkv1.SriovOperatorConfig, reconcileErr error) error {
+	// get the latest object to avoid race conditions
+	updatedObj := &sriovnetworkv1.SriovOperatorConfig{}
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: config.Namespace, Name: config.Name}, updatedObj)
+	if getErr != nil {
+		// If the object is not found, skip updating conditions
+		if apierrors.IsNotFound(getErr) {
+			return nil
+		}
+		return getErr
+	}
+	oldConditions := updatedObj.Status.Conditions
+	newConditions := make([]metav1.Condition, len(oldConditions))
+	copy(newConditions, oldConditions)
+
+	if reconcileErr != nil {
+		// Operator components are having issues
+		r.StatusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionFalse,
+			sriovnetworkv1.ReasonOperatorComponentsNotHealthy, fmt.Sprintf("Operator reconciliation failed: %v", reconcileErr),
+			config.GetGeneration())
+		r.StatusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionTrue,
+			sriovnetworkv1.ReasonOperatorComponentsNotHealthy, fmt.Sprintf("Operator components failed to reconcile: %v", reconcileErr),
+			config.GetGeneration())
+	} else {
+		// Operator is ready and healthy
+		r.StatusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionReady, metav1.ConditionTrue,
+			sriovnetworkv1.ReasonOperatorReady, "Operator components are running and healthy",
+			config.GetGeneration())
+		r.StatusPatcher.SetCondition(&newConditions, sriovnetworkv1.ConditionDegraded, metav1.ConditionFalse,
+			sriovnetworkv1.ReasonNotDegraded, "Operator is functioning correctly",
+			config.GetGeneration())
+	}
+
+	// Only update if conditions changed
+	if !sriovnetworkv1.ConditionsEqual(oldConditions, newConditions) {
+		// Use the StatusPatcher to update status with automatic retry and event emission
+		err := r.StatusPatcher.UpdateStatusWithEvents(ctx, updatedObj, oldConditions, newConditions, func() error {
+			updatedObj.Status.Conditions = newConditions
+			return nil
+		})
+		if err != nil {
+			log.FromContext(ctx).Error(err, "Failed to update conditions")
+		}
+		return err
+	}
+	return nil
 }
