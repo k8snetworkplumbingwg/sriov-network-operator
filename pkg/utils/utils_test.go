@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sys/unix"
+
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 func TestValidateOvsConfig(t *testing.T) {
@@ -189,4 +191,15 @@ func TestWriteFileWithTimeout_Timeout(t *testing.T) {
 	// The elapsed time should be close to the specified timeout, indicating that the function properly timed out.
 	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond, "function returned too quickly, timeout may not have triggered")
 	assert.Less(t, elapsed, 5*time.Second, "function took too long, timeout did not fire in time")
+}
+
+func TestChroot_RunsBeforeChrootHook(t *testing.T) {
+	called := false
+	vars.SetBeforeChroot(func() { called = true })
+	t.Cleanup(func() { vars.SetBeforeChroot(nil) })
+
+	_, err := New().Chroot("/nonexistent-sriov-chroot-test-dir")
+	assert.Error(t, err)
+	assert.True(t, called, "before-chroot hook should run even when chroot fails")
+	assert.False(t, vars.InChroot.Load(), "InChroot must remain false after failed chroot")
 }
