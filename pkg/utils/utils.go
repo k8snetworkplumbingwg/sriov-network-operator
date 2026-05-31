@@ -42,18 +42,26 @@ func (u *utilsHelper) Chroot(path string) (func() error, error) {
 		return nil, err
 	}
 
+	// Flush async file logs (and any other registered work) before HostFSLock /
+	// InChroot so rotation and path resolution stay outside the chroot window.
+	vars.RunBeforeChroot()
+
+	vars.HostFSLock.Lock()
 	if err := syscall.Chroot(path); err != nil {
+		vars.HostFSLock.Unlock()
 		root.Close()
 		return nil, err
 	}
-	vars.InChroot = true
+	vars.InChroot.Store(true)
 
 	return func() error {
+		defer vars.HostFSLock.Unlock()
 		defer root.Close()
 		if err := root.Chdir(); err != nil {
+			vars.InChroot.Store(false)
 			return err
 		}
-		vars.InChroot = false
+		vars.InChroot.Store(false)
 		return syscall.Chroot(".")
 	}, nil
 }
@@ -112,7 +120,7 @@ func IsCommandNotFound(err error) bool {
 }
 
 func GetHostExtension() string {
-	if vars.InChroot {
+	if vars.InChroot.Load() {
 		return vars.FilesystemRoot
 	}
 	return filepath.Join(vars.FilesystemRoot, consts.Host)
@@ -123,7 +131,7 @@ func GetHostExtensionPath(path string) string {
 }
 
 func GetChrootExtension() string {
-	if vars.InChroot {
+	if vars.InChroot.Load() {
 		return vars.FilesystemRoot
 	}
 	return fmt.Sprintf("chroot %s%s", vars.FilesystemRoot, consts.Host)

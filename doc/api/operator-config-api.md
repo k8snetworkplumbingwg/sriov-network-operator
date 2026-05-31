@@ -13,7 +13,7 @@ The `SriovOperatorConfig` Custom Resource configures global settings for the SR-
 ## Purpose
 
 The `SriovOperatorConfig` resource allows administrators to:
-- Configure global operator behavior and logging
+- Configure global operator behavior and logging (verbosity and config-daemon host file logs)
 - Enable or disable operator components (webhooks, injector)
 - Control node selection for configuration management
 - Enable experimental features through feature gates
@@ -33,6 +33,10 @@ spec:
   # Global operator settings
   logLevel: 2
   disableDrain: false
+
+  # Config-daemon host file logging (optional; defaults apply when omitted)
+  # logConfig:
+  #   enabled: true
   
   # Component control
   enableInjector: true
@@ -64,12 +68,14 @@ spec:
 | `enableInjector` | bool | `true` | Deploy network resource injector webhook |
 | `enableOperatorWebhook` | bool | `true` | Deploy operator admission controller webhook |
 | `logLevel` | int | `2` | Log verbosity level (0=basic, 2=detailed) |
+| `logConfig` | object | defaults (enabled) | Config-daemon host file logging (see [LogConfig](#logconfig)) |
 | `disableDrain` | bool | `false` | Disable node drain during configuration |
 | `enableOvsOffload` | bool | `false` | Enable OVS hardware offload support |
 | `configurationMode` | string | `daemon` | Configuration mode: "daemon" or "systemd" |
 | `useCDI` | bool | `false` | Use Container Device Interface for device plugin |
 | `disablePlugins` | []string | `[]` | List of plugins to disable |
 | `featureGates` | map[string]bool | `{}` | Experimental feature toggles |
+| `configDaemonEnvVars` | map[string]string | `{}` | Extra env vars for sriov-network-config-daemon |
 
 ### Status Fields
 
@@ -93,6 +99,44 @@ spec:
   # Verbose logging (includes debug messages)
   logLevel: 2
 ```
+
+### LogConfig
+
+Persistent host logs for `sriov-network-config-daemon` (survive pod restart and node reboot).
+When `logConfig` is omitted, logging is **enabled** with the defaults below. Stdout/`oc logs` are unchanged.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Write rotating logs on the host |
+| `maxSizeMB` | int | `100` | Rotate after this many MiB (1–1024) |
+| `maxFiles` | int | `5` | Max rotated backups to keep (1–20) |
+| `maxAgeDays` | int | `30` | Max age of backups in days; `0` = no age limit (max 365) |
+| `compress` | bool | `true` | Gzip rotated files |
+| `hostPath` | string | `/var/log/sriov-network-config-daemon` | Host directory: folder name under `/var/log` or absolute path under `/var/log` |
+
+Active file: `<hostPath>/config-daemon.log`.
+
+```yaml
+spec:
+  logConfig:
+    enabled: true
+    maxSizeMB: 100
+    maxFiles: 5
+    maxAgeDays: 30
+    compress: true
+    hostPath: /var/log/sriov-network-config-daemon
+
+  # Opt out of host file logging
+  logConfig:
+    enabled: false
+
+  # Custom directory under /var/log (folder name form)
+  logConfig:
+    enabled: true
+    hostPath: sriov-daemon-logs
+```
+
+Design notes: [Persistent Log Storage for Config Daemon](../design/sriov-persistent-logging.md).
 
 ### Node Selection
 

@@ -2083,6 +2083,39 @@ func getOperatorConfigLogLevel() int {
 	return cfg.Spec.LogLevel
 }
 
+func getOperatorConfigLogConfig() *sriovv1.LogConfig {
+	cfg := sriovv1.SriovOperatorConfig{}
+	err := clients.Get(context.TODO(), runtimeclient.ObjectKey{
+		Name:      "default",
+		Namespace: operatorNamespace,
+	}, &cfg)
+	Expect(err).ToNot(HaveOccurred())
+	if cfg.Spec.LogConfig == nil {
+		return nil
+	}
+	return cfg.Spec.LogConfig.DeepCopy()
+}
+
+func setOperatorConfigLogConfig(lc *sriovv1.LogConfig) {
+	Eventually(func(g Gomega) {
+		cfg := sriovv1.SriovOperatorConfig{}
+		err := clients.Get(context.TODO(), runtimeclient.ObjectKey{
+			Name:      "default",
+			Namespace: operatorNamespace,
+		}, &cfg)
+		g.Expect(err).ToNot(HaveOccurred())
+
+		if lc == nil {
+			cfg.Spec.LogConfig = nil
+		} else {
+			cfg.Spec.LogConfig = lc.DeepCopy()
+		}
+
+		err = clients.Update(context.TODO(), &cfg)
+		g.Expect(err).ToNot(HaveOccurred())
+	}, 1*time.Minute, 5*time.Second).Should(Succeed())
+}
+
 func isFeatureFlagEnabled(featureFlag string) bool {
 	cfg := sriovv1.SriovOperatorConfig{}
 	err := clients.Get(context.TODO(), runtimeclient.ObjectKey{

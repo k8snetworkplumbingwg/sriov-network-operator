@@ -39,6 +39,51 @@ func (pns PluginNameSlice) ToStringSlice() []string {
 	return ss
 }
 
+// LogConfig configures sriov-network-config-daemon log persistence on the host.
+// Logs are written under HostPath (default /var/log/sriov-network-config-daemon)
+// as config-daemon.log with lumberjack rotation. Unset LogConfig uses defaults
+// (enabled=true). Stdout/stderr logging is unchanged.
+type LogConfig struct {
+	// Enabled turns host file logging on or off. Defaults to true when unset.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MaxSizeMB is the maximum size in megabytes of a log file before rotation.
+	// Defaults to 100. Minimum 1; maximum 1024.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1024
+	// +optional
+	MaxSizeMB *int `json:"maxSizeMB,omitempty"`
+
+	// MaxFiles is the maximum number of old log files to retain after rotation.
+	// Defaults to 5. Minimum 1; maximum 20.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +optional
+	MaxFiles *int `json:"maxFiles,omitempty"`
+
+	// MaxAgeDays is the maximum number of days to retain old log files.
+	// Defaults to 30. Set to 0 to disable age-based cleanup (bounded only by MaxFiles).
+	// Maximum 365.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=365
+	// +optional
+	MaxAgeDays *int `json:"maxAgeDays,omitempty"`
+
+	// Compress controls whether rotated log files are compressed using gzip.
+	// Defaults to true.
+	// +optional
+	Compress *bool `json:"compress,omitempty"`
+
+	// HostPath is the host log directory.
+	// Default: "/var/log/sriov-network-config-daemon".
+	// Accepts a folder name ("my-logs" → /var/log/my-logs) or an absolute path
+	// under /var/log. Rejects "..", "~", paths outside /var/log, and symlink escapes.
+	// /var/log itself is allowed.
+	// +optional
+	HostPath *string `json:"hostPath,omitempty"`
+}
+
 // SriovOperatorConfigSpec defines the desired state of SriovOperatorConfig
 type SriovOperatorConfigSpec struct {
 	// NodeSelector selects the nodes to be configured
@@ -68,6 +113,10 @@ type SriovOperatorConfigSpec struct {
 	// ConfigDaemonEnvVars allows to specify custom environment variables
 	// for the sriov-network-config-daemon
 	ConfigDaemonEnvVars map[string]string `json:"configDaemonEnvVars,omitempty"`
+	// LogConfig contains configuration for config daemon log persistence.
+	// When unset, persistent logging is enabled with default values.
+	// +optional
+	LogConfig *LogConfig `json:"logConfig,omitempty"`
 }
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig

@@ -283,11 +283,22 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// init log level
 	if err := initLogLevel(operatorConfig); err != nil {
 		setupLog.Error(err, "failed to initialize log level")
 		return err
 	}
+
+	// file logging (host path under /var/log)
+	logCfg, logCfgErr := sriovnetworkv1.GetEffectiveLogConfig(operatorConfig.Spec.LogConfig)
+	if logCfgErr != nil {
+		setupLog.Error(logCfgErr, "invalid log configuration, using defaults")
+		logCfg = vars.DefaultLogCfg()
+	}
+	vars.SetLogCfg(logCfg)
+	if err := snolog.InitLogWithFile(); err != nil {
+		setupLog.Error(err, "failed to initialize file logging, continuing with console only")
+	}
+	defer snolog.CloseFileLogger()
 
 	// init disable drain
 	vars.DisableDrain = operatorConfig.Spec.DisableDrain

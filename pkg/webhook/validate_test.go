@@ -218,6 +218,33 @@ func TestValidateSriovOperatorConfigDisableDrain(t *testing.T) {
 	g.Expect(ok).To(Equal(true))
 }
 
+func TestValidateSriovOperatorConfigLogConfig(t *testing.T) {
+	g := NewGomegaWithT(t)
+	client = fake.NewClientBuilder().WithScheme(vars.Scheme).Build()
+
+	folderName := "custom-sriov-network-operator"
+	fullPath := "/var/log/custom-sriov-network-operator/first_rotation_logs/"
+	outsidePath := "/tmp/logs"
+
+	config := newDefaultOperatorConfig()
+	config.Spec.DisableDrain = false
+	config.Spec.LogConfig = &LogConfig{HostPath: &folderName}
+	ok, _, err := validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	config.Spec.LogConfig = &LogConfig{HostPath: &fullPath}
+	ok, _, err = validateSriovOperatorConfig(config, "UPDATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	config.Spec.LogConfig = &LogConfig{HostPath: &outsidePath}
+	ok, _, err = validateSriovOperatorConfig(config, "UPDATE")
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("invalid LogConfig"))
+	g.Expect(ok).To(Equal(false))
+}
+
 func TestValidateSriovNetworkPoolConfigWithDefault(t *testing.T) {
 	g := NewGomegaWithT(t)
 

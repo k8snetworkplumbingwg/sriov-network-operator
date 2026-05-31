@@ -185,6 +185,8 @@ spec:
         volumeMounts:
           - name: host
             mountPath: /host
+          - name: sriov-logs
+            mountPath: /host/var/log/sriov-network-config-daemon
           - name: tmp
             mountPath: /tmp
         lifecycle:
@@ -195,6 +197,10 @@ spec:
       - name: host
         hostPath:
           path: /
+      - name: sriov-logs
+        hostPath:
+          path: /var/log/sriov-network-config-daemon
+          type: DirectoryOrCreate
       - name: cnibin
         hostPath:
           path: {{.CNIBinPath}}
