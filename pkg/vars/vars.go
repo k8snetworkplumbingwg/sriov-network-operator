@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -47,7 +48,7 @@ var (
 	DpdkDrivers = []string{"igb_uio", "vfio-pci", "uio_pci_generic"}
 
 	// InChroot global variable to mark that the config-daemon code is inside chroot on the host file system
-	InChroot = false
+	InChroot atomic.Bool
 
 	// UsingSystemdMode global variable to mark the config-daemon is running on systemd mode
 	UsingSystemdMode = false
@@ -89,7 +90,34 @@ var (
 	// UseExternalDrainer controls if SRIOV operator will use an external drainer
 	// for draining nodes or its internal drain controller (default)
 	UseExternalDrainer bool
+
+	// LogCfg holds the effective log-file persistence configuration.
+	LogCfg = defaultLogCfg()
 )
+
+// LogFileSettings holds log persistence settings used by the daemon container.
+type LogFileSettings struct {
+	Enabled    bool
+	MaxSizeMB  int
+	MaxFiles   int
+	MaxAgeDays int
+	Compress   bool
+	HostPath   string
+}
+
+// DefaultLogCfg returns a fresh LogFileSettings populated with canonical defaults.
+func DefaultLogCfg() LogFileSettings {
+	return LogFileSettings{
+		Enabled:    true,
+		MaxSizeMB:  100,
+		MaxFiles:   5,
+		MaxAgeDays: 30,
+		Compress:   true,
+		HostPath:   "/var/log/sriov-network-config-daemon",
+	}
+}
+
+func defaultLogCfg() LogFileSettings { return DefaultLogCfg() }
 
 func init() {
 	Namespace = os.Getenv("NAMESPACE")

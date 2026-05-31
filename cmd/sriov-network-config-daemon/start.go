@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	ocpconfigapi "github.com/openshift/api/config/v1"
@@ -46,6 +47,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -196,6 +198,46 @@ func initLogLevel(defaultConfig *sriovnetworkv1.SriovOperatorConfig) error {
 	return nil
 }
 
+func initLogFile(operatorConfig *sriovnetworkv1.SriovOperatorConfig) {
+	fnLogger := log.Log.WithName("initLogFile")
+
+	cfg := vars.LogCfg
+
+	lc := operatorConfig.Spec.LogConfig
+	if lc != nil {
+		if lc.Enabled != nil && !*lc.Enabled {
+			fnLogger.V(1).Info("persistent file logging disabled via LogConfig")
+			cfg.Enabled = false
+			vars.LogCfg = cfg
+			return
+		}
+		if lc.MaxSizeMB != nil {
+			cfg.MaxSizeMB = *lc.MaxSizeMB
+		}
+		if lc.MaxFiles != nil {
+			cfg.MaxFiles = *lc.MaxFiles
+		}
+		if lc.MaxAgeDays != nil {
+			cfg.MaxAgeDays = *lc.MaxAgeDays
+		}
+		if lc.Compress != nil {
+			cfg.Compress = *lc.Compress
+		}
+		if lc.HostPath != nil && *lc.HostPath != "" {
+			cfg.HostPath = *lc.HostPath
+		}
+	}
+	vars.LogCfg = cfg
+
+	logFilePath := utils.GetHostExtensionPath(filepath.Join(cfg.HostPath, "config-daemon.log"))
+	if err := snolog.InitLogWithFile(logFilePath, cfg.MaxSizeMB, cfg.MaxFiles, cfg.MaxAgeDays, cfg.Compress); err != nil {
+		fnLogger.Error(err, "failed to initialize file logging, continuing with console only")
+		return
+	}
+	fnLogger.Info("persistent file logging enabled (async-buffered, entries are flushed before chroot windows)",
+		"path", logFilePath, "maxSizeMB", cfg.MaxSizeMB, "maxFiles", cfg.MaxFiles, "maxAgeDays", cfg.MaxAgeDays)
+}
+
 func runStartCmd(cmd *cobra.Command, args []string) error {
 	setupLog := log.Log.WithName("sriov-network-config-daemon")
 	stopSignalCh := ctrl.SetupSignalHandler()
@@ -288,6 +330,10 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 		setupLog.Error(err, "failed to initialize log level")
 		return err
 	}
+
+	// init persistent file logging
+	initLogFile(operatorConfig)
+	defer snolog.CloseFileLogger()
 
 	// init disable drain
 	vars.DisableDrain = operatorConfig.Spec.DisableDrain
