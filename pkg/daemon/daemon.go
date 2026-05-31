@@ -21,6 +21,7 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper"
 	hosttypes "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
+	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
@@ -728,6 +729,10 @@ func (dn *NodeReconciler) waitForDevicePluginPodAndTryUnblock(ctx context.Contex
 func (dn *NodeReconciler) rebootNode() error {
 	funcLog := log.Log.WithName("rebootNode")
 	funcLog.Info("trigger node reboot")
+
+	funcLog.Info("flushing async file-log buffer to disk before entering chroot window")
+	snolog.SyncFileLogger()
+
 	exit, err := dn.hostHelpers.Chroot(consts.Host)
 	if err != nil {
 		funcLog.Error(err, "chroot command failed")

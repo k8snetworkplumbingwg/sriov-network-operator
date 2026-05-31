@@ -90,6 +90,49 @@ spec:
                   type: boolean
                 description: FeatureGates to enable experimental features
                 type: object
+              logConfig:
+                description: |-
+                  LogConfig contains configuration for config daemon log persistence.
+                  When unset, persistent logging is enabled with default values.
+                properties:
+                  compress:
+                    description: |-
+                      Compress controls whether rotated log files are compressed using gzip.
+                      Defaults to true.
+                    type: boolean
+                  enabled:
+                    description: |-
+                      Enabled controls whether persistent log storage is active.
+                      Defaults to true.
+                    type: boolean
+                  hostPath:
+                    description: |-
+                      HostPath is the directory on the host where log files are stored.
+                      Defaults to "/var/log/sriov-network-config-daemon".
+                    type: string
+                  maxAgeDays:
+                    description: |-
+                      MaxAgeDays is the maximum number of days to retain old log files.
+                      Defaults to 30. Set to 0 to disable age-based cleanup (files are then
+                      bounded only by MaxFiles). Maximum 365.
+                    maximum: 365
+                    minimum: 0
+                    type: integer
+                  maxFiles:
+                    description: |-
+                      MaxFiles is the maximum number of old log files to retain after rotation.
+                      Defaults to 5. Minimum 1; maximum 20.
+                    maximum: 20
+                    minimum: 1
+                    type: integer
+                  maxSizeMB:
+                    description: |-
+                      MaxSizeMB is the maximum size in megabytes of a log file before rotation.
+                      Defaults to 100. Minimum 1 MB; maximum 1024 MB (1 GB).
+                    maximum: 1024
+                    minimum: 1
+                    type: integer
+                type: object
               logLevel:
                 description: Flag to control the log verbose level of the operator.
                   Set to '0' to show only the basic logs. And set to '2' to show all

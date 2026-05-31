@@ -187,6 +187,8 @@ spec:
             mountPath: /host
           - name: tmp
             mountPath: /tmp
+          - name: sriov-logs
+            mountPath: /host/var/log/sriov-network-config-daemon
         lifecycle:
           preStop:
             exec:
@@ -204,3 +206,7 @@ spec:
           type: File
       - name: tmp
         emptyDir: {}
+      - name: sriov-logs
+        hostPath:
+          path: /var/log/sriov-network-config-daemon
+          type: DirectoryOrCreate
