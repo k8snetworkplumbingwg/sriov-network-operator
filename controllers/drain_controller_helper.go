@@ -46,10 +46,13 @@ func (dr *DrainReconcile) handleNodeIdleNodeStateDrainingOrCompleted(ctx context
 		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
 	}
 
-	// move the node state back to idle
-	err = utils.AnnotateObject(ctx, nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainIdle, dr.Client)
+	// clear drain-action and move current-state back to idle in a single patch
+	err = utils.AnnotateObjectMultiple(ctx, nodeNetworkState, map[string]string{
+		constants.NodeStateDrainActionAnnotation:  "",
+		constants.NodeStateDrainAnnotationCurrent: constants.DrainIdle,
+	}, dr.Client)
 	if err != nil {
-		reqLogger.Error(err, "failed to annotate node with annotation", "annotation", constants.DrainIdle)
+		reqLogger.Error(err, "failed to clear drain-action and set current-state to idle")
 		return ctrl.Result{}, err
 	}
 
@@ -64,19 +67,30 @@ func (dr *DrainReconcile) handleNodeIdleNodeStateDrainingOrCompleted(ctx context
 
 func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	node *corev1.Node,
-	nodeNetworkState *sriovnetworkv1.SriovNetworkNodeState,
-	nodeDrainAnnotation,
-	nodeStateDrainAnnotationCurrent string) (ctrl.Result, error) {
+	nodeNetworkState *sriovnetworkv1.SriovNetworkNodeState) (ctrl.Result, error) {
 	reqLogger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("handleNodeDrainOrReboot")
-	// nothing to do here we need to wait for the node to move back to idle
+
+	// get the relevant annotations
+	desiredDrainState := nodeNetworkState.GetAnnotations()[constants.NodeStateDrainAnnotation]
+	nodeStateDrainAnnotationCurrent := nodeNetworkState.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+	drainAction := nodeNetworkState.GetAnnotations()[constants.NodeStateDrainActionAnnotation]
+
+	// if the node state is on drain complete we need to check if the drain action satisfies the desired drain type
 	if nodeStateDrainAnnotationCurrent == constants.DrainComplete {
+		escalated, err := dr.handleDrainEscalation(ctx, nodeNetworkState, drainAction, desiredDrainState)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if escalated {
+			return reconcile.Result{Requeue: true}, nil
+		}
 		reqLogger.Info("node requested a drain and nodeState is on drain completed nothing todo")
 		return ctrl.Result{}, nil
 	}
 
 	// we need to start the drain, but first we need to check that we can drain the node
 	if nodeStateDrainAnnotationCurrent == constants.DrainIdle {
-		result, err := dr.tryDrainNode(ctx, node)
+		result, err := dr.tryDrainNode(ctx, node, desiredDrainState)
 		if err != nil {
 			reqLogger.Error(err, "failed to check if we can drain the node")
 			return ctrl.Result{}, err
@@ -89,7 +103,7 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	}
 
 	// Check if we are on a single node, and we require a reboot/full-drain we just return
-	fullNodeDrain := nodeDrainAnnotation == constants.RebootRequired
+	fullNodeDrain := desiredDrainState == constants.RebootRequired
 	singleNode := false
 	if fullNodeDrain {
 		nodeList := &corev1.NodeList{}
@@ -127,15 +141,34 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
 	}
 
-	// if we manage to drain we label the node state with drain completed and finish
-	err = utils.AnnotateObject(ctx, nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainComplete, dr.Client)
+	// After drain succeeds, re-read the NodeState to get the latest version.
+	// The drain process can take minutes, so the original nodeNetworkState is likely stale.
+	updatedNodeState := &sriovnetworkv1.SriovNetworkNodeState{}
+	if err := dr.Client.Get(ctx, client.ObjectKeyFromObject(nodeNetworkState), updatedNodeState); err != nil {
+		reqLogger.Error(err, "failed to re-read nodeState after drain")
+		return ctrl.Result{}, err
+	}
+	currentDesiredState := updatedNodeState.GetAnnotations()[constants.NodeStateDrainAnnotation]
+	escalated, err := dr.handleDrainEscalation(ctx, updatedNodeState, desiredDrainState, currentDesiredState)
 	if err != nil {
-		reqLogger.Error(err, "failed to annotate node with annotation", "annotation", constants.DrainComplete)
+		return ctrl.Result{}, err
+	}
+	if escalated {
+		return reconcile.Result{Requeue: true}, nil
+	}
+
+	// if we manage to drain we set drain completed and ensure drain-action reflects what was performed
+	err = utils.AnnotateObjectMultiple(ctx, updatedNodeState, map[string]string{
+		constants.NodeStateDrainAnnotationCurrent: constants.DrainComplete,
+		constants.NodeStateDrainActionAnnotation:  desiredDrainState,
+	}, dr.Client)
+	if err != nil {
+		reqLogger.Error(err, "failed to set DrainComplete and drain-action annotations")
 		return ctrl.Result{}, err
 	}
 
 	reqLogger.Info("node drained successfully")
-	dr.recorder.Eventf(nodeNetworkState, nil,
+	dr.recorder.Eventf(updatedNodeState, nil,
 		corev1.EventTypeWarning,
 		"DrainController",
 		"DrainNode",
@@ -143,7 +176,34 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 	return ctrl.Result{}, nil
 }
 
-func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node) (*reconcile.Result, error) {
+// handleDrainEscalation checks if the current desired drain state requires a stronger drain than what was performed.
+// Returns true if escalation was detected and re-drain is needed, false if no escalation.
+func (dr *DrainReconcile) handleDrainEscalation(ctx context.Context,
+	nodeNetworkState *sriovnetworkv1.SriovNetworkNodeState,
+	performedAction, currentDesiredState string) (bool, error) {
+	reqLogger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("handleDrainEscalation")
+
+	if sriovnetworkv1.DrainActionSatisfiesDesired(performedAction, currentDesiredState) {
+		return false, nil
+	}
+
+	reqLogger.Info("drain escalation detected, re-draining",
+		"performedAction", performedAction, "currentDesired", currentDesiredState)
+	if err := utils.AnnotateObjectMultiple(ctx, nodeNetworkState, map[string]string{
+		constants.NodeStateDrainActionAnnotation:  currentDesiredState,
+		constants.NodeStateDrainAnnotationCurrent: constants.Draining,
+	}, dr.Client); err != nil {
+		return false, err
+	}
+	dr.recorder.Eventf(nodeNetworkState, nil,
+		corev1.EventTypeWarning,
+		"DrainController",
+		"DrainEscalated",
+		fmt.Sprintf("drain escalated from %s to %s, re-draining", performedAction, currentDesiredState))
+	return true, nil
+}
+
+func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node, desiredDrainState string) (*reconcile.Result, error) {
 	reqLogger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("tryDrainNode")
 
 	//critical section we need to check if we can start the draining
@@ -204,9 +264,13 @@ func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node) (
 		return nil, fmt.Errorf("failed to find sriov network node state for requested node")
 	}
 
-	err = utils.AnnotateObject(ctx, currentSnns, constants.NodeStateDrainAnnotationCurrent, constants.Draining, dr.Client)
+	// Set current-state=Draining and drain-action atomically in the same critical section
+	err = utils.AnnotateObjectMultiple(ctx, currentSnns, map[string]string{
+		constants.NodeStateDrainAnnotationCurrent: constants.Draining,
+		constants.NodeStateDrainActionAnnotation:  desiredDrainState,
+	}, dr.Client)
 	if err != nil {
-		reqLogger.Error(err, "failed to annotate node with annotation", "annotation", constants.Draining)
+		reqLogger.Error(err, "failed to set draining and drain-action annotations")
 		return nil, err
 	}
 

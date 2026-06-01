@@ -59,6 +59,43 @@ func AnnotateObject(ctx context.Context, obj client.Object, key, value string, c
 	return nil
 }
 
+// AnnotateObjectMultiple sets multiple annotations on a kubernetes object in a single API call.
+func AnnotateObjectMultiple(ctx context.Context, obj client.Object, annotations map[string]string, c client.Client) error {
+	original := obj.DeepCopyObject().(client.Object)
+	annos := obj.GetAnnotations()
+	if annos == nil {
+		annos = make(map[string]string)
+		obj.SetAnnotations(annos)
+	}
+
+	changed := false
+	for key, value := range annotations {
+		existing, exists := annos[key]
+		if !exists || existing != value {
+			annos[key] = value
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	logger, ok := ctx.Value(constants.LoggerContextKey).(logr.Logger)
+	if !ok {
+		log.Log.Info("Annotate object multiple", "name", obj.GetName(), "annotations", annotations)
+	} else {
+		logger.Info("Annotate object multiple", "name", obj.GetName(), "annotations", annotations)
+	}
+
+	patch := client.MergeFrom(original)
+	if err := c.Patch(ctx, obj, patch); err != nil {
+		log.Log.Error(err, "AnnotateObjectMultiple(): Failed to patch object")
+		return err
+	}
+	return nil
+}
+
 // AnnotateNode add annotation to a node
 func AnnotateNode(ctx context.Context, nodeName string, key, value string, c client.Client) error {
 	node := &corev1.Node{}

@@ -688,6 +688,7 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 			}, waitTime, retryTime).Should(Succeed())
 		})
 	})
+
 })
 
 var _ = Describe("Daemon CheckSystemdStatus", func() {
@@ -818,6 +819,7 @@ func ensureEmptyNodeState(nodeName string) *sriovnetworkv1.SriovNetworkNodeState
 			Annotations: map[string]string{
 				constants.NodeStateDrainAnnotation:        constants.DrainIdle,
 				constants.NodeStateDrainAnnotationCurrent: constants.DrainIdle,
+				constants.NodeStateDrainActionAnnotation:  "",
 			},
 		},
 	}

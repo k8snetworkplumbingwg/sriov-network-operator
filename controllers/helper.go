@@ -71,10 +71,13 @@ const (
 	trueString                            = "true"
 )
 
+// DrainAnnotationPredicate filters Node events, triggering reconciliation only when
+// the drain annotation (sriovnetwork.openshift.io/state) on the Node object changes.
 type DrainAnnotationPredicate struct {
 	predicate.Funcs
 }
 
+// Create returns true if the Node has the drain annotation present.
 func (DrainAnnotationPredicate) Create(e event.CreateEvent) bool {
 	if e.Object == nil {
 		return false
@@ -86,6 +89,7 @@ func (DrainAnnotationPredicate) Create(e event.CreateEvent) bool {
 	return false
 }
 
+// Update returns true if the drain annotation value changed between old and new objects.
 func (DrainAnnotationPredicate) Update(e event.UpdateEvent) bool {
 	if e.ObjectOld == nil {
 		return false
@@ -104,14 +108,18 @@ func (DrainAnnotationPredicate) Update(e event.UpdateEvent) bool {
 	return oldAnno != newAnno
 }
 
+// DrainStateAnnotationPredicate filters SriovNetworkNodeState events, triggering reconciliation
+// when the current-state or desired-state drain annotations change.
 type DrainStateAnnotationPredicate struct {
 	predicate.Funcs
 }
 
+// Create returns true for any non-nil object creation.
 func (DrainStateAnnotationPredicate) Create(e event.CreateEvent) bool {
 	return e.Object != nil
 }
 
+// Update returns true if either the current-state or desired-state annotation changed.
 func (DrainStateAnnotationPredicate) Update(e event.UpdateEvent) bool {
 	if e.ObjectOld == nil {
 		return false
@@ -120,16 +128,23 @@ func (DrainStateAnnotationPredicate) Update(e event.UpdateEvent) bool {
 		return false
 	}
 
-	oldAnno, hasOldAnno := e.ObjectOld.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
-	newAnno, hasNewAnno := e.ObjectNew.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+	oldCurrent, hasOldCurrent := e.ObjectOld.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
+	newCurrent, hasNewCurrent := e.ObjectNew.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent]
 
-	if !hasOldAnno || !hasNewAnno {
+	if !hasOldCurrent || !hasNewCurrent {
+		return true
+	}
+	if oldCurrent != newCurrent {
 		return true
 	}
 
-	return oldAnno != newAnno
+	oldDesired := e.ObjectOld.GetAnnotations()[constants.NodeStateDrainAnnotation]
+	newDesired := e.ObjectNew.GetAnnotations()[constants.NodeStateDrainAnnotation]
+
+	return oldDesired != newDesired
 }
 
+// GetImagePullSecrets returns the list of image pull secret names from the IMAGE_PULL_SECRETS environment variable.
 func GetImagePullSecrets() []string {
 	imagePullSecrets := os.Getenv("IMAGE_PULL_SECRETS")
 	if imagePullSecrets != "" {

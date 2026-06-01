@@ -1010,6 +1010,27 @@ func OwnerRefToString(cr client.Object) string {
 	return cr.GetObjectKind().GroupVersionKind().GroupKind().String() + "/" + cr.GetNamespace() + "/" + cr.GetName()
 }
 
+// DrainActionSatisfiesDesired returns true if the performed drain action
+// is sufficient for the desired drain type.
+// An empty performedAction means the drain controller hasn't set it yet (backward compat) — treated as satisfied.
+// A desiredAction of Idle means no drain is needed — any performed action satisfies this.
+// Reboot_Required (full drain) satisfies Drain_Required (partial drain).
+func DrainActionSatisfiesDesired(performedAction, desiredAction string) bool {
+	if performedAction == "" {
+		return true
+	}
+	if desiredAction == consts.DrainIdle || desiredAction == "" {
+		return true
+	}
+	if performedAction == desiredAction {
+		return true
+	}
+	if performedAction == consts.RebootRequired && desiredAction == consts.DrainRequired {
+		return true
+	}
+	return false
+}
+
 // ResolveInterfaceName resolves an interface name that might be an alternative name
 // to the actual interface name using the nodeState. If the name is an alternative name,
 // it returns the actual interface name. Otherwise, it returns the name as-is.

@@ -164,7 +164,8 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// Check the object as the drain controller annotations
 	// if not just wait for the drain controller to add them before we start taking care of the nodeState
 	if !utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainAnnotationCurrent) ||
-		!utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainAnnotation) {
+		!utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainAnnotation) ||
+		!utils.ObjectHasAnnotationKey(desiredNodeState, consts.NodeStateDrainActionAnnotation) {
 		reqLogger.V(2).Info("NodeState doesn't have the current drain annotation")
 		return ctrl.Result{}, nil
 	}
@@ -281,7 +282,7 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	// if we finish the drain we should run apply here
-	if dn.isDrainCompleted(reqDrain, desiredNodeState) {
+	if dn.isDrainCompleted(reqDrain, reqReboot, desiredNodeState) {
 		return dn.apply(ctx, desiredNodeState, reqReboot, sriovResult)
 	}
 
@@ -571,14 +572,25 @@ func (dn *NodeReconciler) writeSystemdConfigFile(desiredNodeState *sriovnetworkv
 // returns true if we need to finish the reconcile loop and wait for a new object
 func (dn *NodeReconciler) handleDrain(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, reqReboot bool) (bool, error) {
 	funcLog := log.Log.WithName("handleDrain")
-	// done with the drain we can continue with the configuration
+
 	if utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainComplete) {
+		drainAction, desiredAnnotation := drainActionAndDesired(desiredNodeState, reqReboot)
+
+		if !sriovnetworkv1.DrainActionSatisfiesDesired(drainAction, desiredAnnotation) {
+			funcLog.Info("drain completed but action does not satisfy current requirement, escalating",
+				"drainAction", drainAction, "required", desiredAnnotation)
+			return true, dn.annotate(ctx, desiredNodeState, desiredAnnotation)
+		}
+
 		funcLog.Info("the node complete the draining")
 		return false, nil
 	}
 
-	// the operator is still draining the node so we reconcile
 	if utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.Draining) {
+		if reqReboot && !utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotation, consts.RebootRequired) {
+			funcLog.Info("drain in progress but requirements escalated to reboot, updating desired-state")
+			return true, dn.annotate(ctx, desiredNodeState, consts.RebootRequired)
+		}
 		funcLog.Info("the node is still draining")
 		return true, nil
 	}
@@ -752,14 +764,19 @@ func (dn *NodeReconciler) rebootNode() error {
 }
 
 // isDrainCompleted returns true if the current-state annotation is drain completed
-func (dn *NodeReconciler) isDrainCompleted(reqDrain bool, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) bool {
+// and the drain-action matches or satisfies the current desired-state.
+func (dn *NodeReconciler) isDrainCompleted(reqDrain bool, reqReboot bool, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) bool {
 	if vars.DisableDrain {
 		return true
 	}
 
 	// if we need to drain check the drain status
 	if reqDrain {
-		return utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainComplete)
+		if !utils.ObjectHasAnnotation(desiredNodeState, consts.NodeStateDrainAnnotationCurrent, consts.DrainComplete) {
+			return false
+		}
+		drainAction, desiredAnnotation := drainActionAndDesired(desiredNodeState, reqReboot)
+		return sriovnetworkv1.DrainActionSatisfiesDesired(drainAction, desiredAnnotation)
 	}
 
 	// check in case a reboot was requested and the second run doesn't require a drain
@@ -769,6 +786,17 @@ func (dn *NodeReconciler) isDrainCompleted(reqDrain bool, desiredNodeState *srio
 
 	// if we don't need to drain at all just return true so we can apply the configuration
 	return true
+}
+
+// drainActionAndDesired returns the performed drain action from the node state annotations
+// and the desired drain action based on whether a reboot is required.
+func drainActionAndDesired(nodeState *sriovnetworkv1.SriovNetworkNodeState, reqReboot bool) (performedAction, desiredAction string) {
+	performedAction = nodeState.GetAnnotations()[consts.NodeStateDrainActionAnnotation]
+	desiredAction = consts.DrainRequired
+	if reqReboot {
+		desiredAction = consts.RebootRequired
+	}
+	return
 }
 
 // annotate annotates the nodeState object with specified annotation.

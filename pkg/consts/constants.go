@@ -77,16 +77,37 @@ const (
 	SriovDevicePluginLabelEnabled  = "Enabled"
 	SriovDevicePluginLabelDisabled = "Disabled"
 
-	NodeDrainAnnotation                = "sriovnetwork.openshift.io/state"
-	NodeStateDrainAnnotation           = "sriovnetwork.openshift.io/desired-state"
-	NodeStateDrainAnnotationCurrent    = "sriovnetwork.openshift.io/current-state"
+	// NodeDrainAnnotation is set on the Node object by the config-daemon to request a drain operation.
+	// Values: Idle, Drain_Required, Reboot_Required. Owned by config-daemon, read by drain controller.
+	// TODO: deprecate this annotation in favor of NodeStateDrainAnnotation and NodeStateDrainAnnotationCurrent.
+	NodeDrainAnnotation = "sriovnetwork.openshift.io/state"
+
+	// NodeStateDrainAnnotation is set on SriovNetworkNodeState by the config-daemon to mirror the desired drain state.
+	// Values: Idle, Drain_Required, Reboot_Required. Owned by config-daemon, read by drain controller.
+	NodeStateDrainAnnotation = "sriovnetwork.openshift.io/desired-state"
+
+	// NodeStateDrainAnnotationCurrent is set on SriovNetworkNodeState by the drain controller to report drain progress.
+	// Values: Idle, Draining, DrainComplete. Owned by drain controller, read by config-daemon.
+	NodeStateDrainAnnotationCurrent = "sriovnetwork.openshift.io/current-state"
+
+	// NodeStateDrainActionAnnotation is set on SriovNetworkNodeState by the drain controller to record the drain type
+	// that was actually performed. Used to prevent the daemon from proceeding after a partial drain when a full drain
+	// (reboot) is now required. Values: "", Drain_Required, Reboot_Required. Owned by drain controller, read by config-daemon.
+	NodeStateDrainActionAnnotation = "sriovnetwork.openshift.io/drain-action"
+
+	// NodeStateExternalDrainerAnnotation is set on SriovNetworkNodeState by the config-daemon when USE_EXTERNAL_DRAINER
+	// is enabled. When set to "true", the drain controller skips internal drain and expects an external system to manage it.
 	NodeStateExternalDrainerAnnotation = "sriovnetwork.openshift.io/use-external-drainer"
-	DesiredMachineConfigAnnotation     = "machineconfiguration.openshift.io/desiredConfig"
-	DrainIdle                          = "Idle"
-	DrainRequired                      = "Drain_Required"
-	RebootRequired                     = "Reboot_Required"
-	Draining                           = "Draining"
-	DrainComplete                      = "DrainComplete"
+
+	// DesiredMachineConfigAnnotation is read from the Node by the OpenShift orchestrator to determine
+	// which MachineConfig the node should be running. Used to detect if MCP is mid-update.
+	DesiredMachineConfigAnnotation = "machineconfiguration.openshift.io/desiredConfig"
+
+	DrainIdle      = "Idle"
+	DrainRequired  = "Drain_Required"
+	RebootRequired = "Reboot_Required"
+	Draining       = "Draining"
+	DrainComplete  = "DrainComplete"
 
 	SyncStatusSucceeded  = "Succeeded"
 	SyncStatusFailed     = "Failed"

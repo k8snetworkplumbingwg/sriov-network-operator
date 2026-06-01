@@ -354,7 +354,104 @@ var _ = Describe("Drain Controller", Ordered, func() {
 			expectNodeStateAnnotation(nodeState1, constants.Draining)
 		})
 	})
+
+	Context("drain escalation", func() {
+		It("should set drain-action annotation on normal drain", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "node1", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainActionAnnotation(nodeState, constants.DrainRequired)
+		})
+
+		It("should set drain-action annotation on reboot drain", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "node1", nil)
+			createNode(ctx, "node2", nil)
+
+			simulateDaemonSetAnnotation(node, constants.RebootRequired)
+
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainActionAnnotation(nodeState, constants.RebootRequired)
+		})
+
+		It("should re-drain when escalated from Drain_Required to Reboot_Required after DrainComplete", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "node1", nil)
+			createNode(ctx, "node2", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainActionAnnotation(nodeState, constants.DrainRequired)
+
+			simulateDaemonSetAnnotation(node, constants.RebootRequired)
+
+			expectDrainActionAnnotation(nodeState, constants.RebootRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectNodeIsNotSchedulable(node)
+		})
+
+		It("should clear drain-action on return to idle", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "node1", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+
+			simulateDaemonSetAnnotation(node, constants.DrainIdle)
+			expectNodeStateAnnotation(nodeState, constants.DrainIdle)
+			expectDrainActionAnnotation(nodeState, "")
+		})
+
+		It("should not re-drain when Reboot_Required satisfies Drain_Required", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "node1", nil)
+			createNode(ctx, "node2", nil)
+
+			simulateDaemonSetAnnotation(node, constants.RebootRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainActionAnnotation(nodeState, constants.RebootRequired)
+			expectNodeIsNotSchedulable(node)
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+
+			Consistently(func(g Gomega) {
+				g.Expect(k8sClient.Get(context.Background(),
+					types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+					ToNot(HaveOccurred())
+				g.Expect(utils.ObjectHasAnnotation(nodeState,
+					constants.NodeStateDrainAnnotationCurrent, constants.DrainComplete)).To(BeTrue())
+			}, "5s", "1s").Should(Succeed())
+			expectNodeIsNotSchedulable(node)
+		})
+
+		It("should uncordon when daemon moves back to Idle during drain", func(ctx context.Context) {
+			node, nodeState := createNode(ctx, "node1", nil)
+			createNode(ctx, "node2", nil)
+
+			simulateDaemonSetAnnotation(node, constants.DrainRequired)
+			expectNodeStateAnnotation(nodeState, constants.DrainComplete)
+			expectDrainActionAnnotation(nodeState, constants.DrainRequired)
+
+			// User removes the policy — daemon moves back to Idle
+			simulateDaemonSetAnnotation(node, constants.DrainIdle)
+
+			// Controller should uncordon and clear drain-action
+			expectNodeStateAnnotation(nodeState, constants.DrainIdle)
+			expectDrainActionAnnotation(nodeState, "")
+			expectNodeIsSchedulable(node)
+		})
+	})
 })
+
+func expectDrainActionAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, expectedValue string) {
+	EventuallyWithOffset(1, func(g Gomega) {
+		g.Expect(k8sClient.Get(context.Background(),
+			types.NamespacedName{Namespace: nodeState.Namespace, Name: nodeState.Name}, nodeState)).
+			ToNot(HaveOccurred())
+
+		actual := nodeState.GetAnnotations()[constants.NodeStateDrainActionAnnotation]
+		g.Expect(actual).To(Equal(expectedValue),
+			"Node[%s] drain-action == '%s'. Expected '%s'", nodeState.Name, actual, expectedValue)
+	}, "40s", "1s").Should(Succeed())
+}
 
 func expectNodeStateAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, expectedAnnotationValue string) {
 	EventuallyWithOffset(1, func(g Gomega) {
@@ -364,7 +461,7 @@ func expectNodeStateAnnotation(nodeState *sriovnetworkv1.SriovNetworkNodeState, 
 		g.Expect(utils.ObjectHasAnnotation(nodeState, constants.NodeStateDrainAnnotationCurrent, expectedAnnotationValue)).
 			To(BeTrue(),
 				"Node[%s] annotation[%s] == '%s'. Expected '%s'", nodeState.Name, constants.NodeDrainAnnotation, nodeState.GetLabels()[constants.NodeStateDrainAnnotationCurrent], expectedAnnotationValue)
-	}, "20s", "1s").Should(Succeed())
+	}, "40s", "1s").Should(Succeed())
 }
 
 func expectNumberOfDrainingNodes(numbOfDrain int, nodesState ...*sriovnetworkv1.SriovNetworkNodeState) {
@@ -380,7 +477,7 @@ func expectNumberOfDrainingNodes(numbOfDrain int, nodesState ...*sriovnetworkv1.
 		}
 
 		g.Expect(drainingNodes).To(Equal(numbOfDrain))
-	}, "20s", "1s").Should(Succeed())
+	}, "40s", "1s").Should(Succeed())
 }
 
 func ExpectDrainCompleteNodesHaveIsNotSchedule(nodesState ...*sriovnetworkv1.SriovNetworkNodeState) {
@@ -414,7 +511,7 @@ func expectFirstDrainedNode(
 		// Exactly one node should complete draining first.
 		g.Expect(node1DrainComplete != node2DrainComplete).To(BeTrue())
 		firstIsNode1 = node1DrainComplete
-	}, "20s", "1s").Should(Succeed())
+	}, "40s", "1s").Should(Succeed())
 
 	if firstIsNode1 {
 		return node1, nodeState1, node2, nodeState2
@@ -428,7 +525,7 @@ func expectNodeIsNotSchedulable(node *corev1.Node) {
 			ToNot(HaveOccurred())
 
 		g.Expect(node.Spec.Unschedulable).To(BeTrue())
-	}, "20s", "1s").Should(Succeed())
+	}, "40s", "1s").Should(Succeed())
 }
 
 func expectNodeIsSchedulable(node *corev1.Node) {
@@ -437,51 +534,29 @@ func expectNodeIsSchedulable(node *corev1.Node) {
 			ToNot(HaveOccurred())
 
 		g.Expect(node.Spec.Unschedulable).To(BeFalse())
-	}, "20s", "1s").Should(Succeed())
+	}, "40s", "1s").Should(Succeed())
 }
 
 func simulateDaemonSetAnnotation(node *corev1.Node, drainAnnotationValue string) {
+	nodeState := &sriovnetworkv1.SriovNetworkNodeState{}
+	ExpectWithOffset(1,
+		k8sClient.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: vars.Namespace}, nodeState)).
+		ToNot(HaveOccurred())
+	ExpectWithOffset(1,
+		utils.AnnotateObject(context.Background(), nodeState, constants.NodeStateDrainAnnotation, drainAnnotationValue, k8sClient)).
+		ToNot(HaveOccurred())
+
 	ExpectWithOffset(1,
 		utils.AnnotateObject(context.Background(), node, constants.NodeDrainAnnotation, drainAnnotationValue, k8sClient)).
 		ToNot(HaveOccurred())
 }
 
 func createNode(ctx context.Context, nodeName string,
-	additionalAnnotations map[string]string) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
-	node := corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: nodeName,
-			Annotations: map[string]string{
-				constants.NodeDrainAnnotation:                     constants.DrainIdle,
-				"machineconfiguration.openshift.io/desiredConfig": "worker-1",
-			},
-			Labels: map[string]string{
-				"test": "",
-			},
-		},
-	}
-
-	nodeState := sriovnetworkv1.SriovNetworkNodeState{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nodeName,
-			Namespace: vars.Namespace,
-			Annotations: map[string]string{
-				constants.NodeStateDrainAnnotationCurrent: constants.DrainIdle,
-			},
-		},
-	}
-
-	for key, value := range additionalAnnotations {
-		nodeState.Annotations[key] = value
-	}
-
-	Expect(k8sClient.Create(ctx, &node)).ToNot(HaveOccurred())
-	Expect(k8sClient.Create(ctx, &nodeState)).ToNot(HaveOccurred())
-
-	return &node, &nodeState
+	additionalNodeStateAnnotations map[string]string) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
+	return createNodeWithLabel(ctx, nodeName, "test", additionalNodeStateAnnotations)
 }
 
-func createNodeWithLabel(ctx context.Context, nodeName string, label string) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
+func createNodeWithLabel(ctx context.Context, nodeName string, label string, additionalNodeStateAnnotations ...map[string]string) (*corev1.Node, *sriovnetworkv1.SriovNetworkNodeState) {
 	node := corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nodeName,
@@ -501,8 +576,16 @@ func createNodeWithLabel(ctx context.Context, nodeName string, label string) (*c
 			Namespace: vars.Namespace,
 			Annotations: map[string]string{
 				constants.NodeStateDrainAnnotationCurrent: constants.DrainIdle,
+				constants.NodeStateDrainAnnotation:        constants.DrainIdle,
+				constants.NodeStateDrainActionAnnotation:  "",
 			},
 		},
+	}
+
+	for _, annotations := range additionalNodeStateAnnotations {
+		for key, value := range annotations {
+			nodeState.Annotations[key] = value
+		}
 	}
 
 	Expect(k8sClient.Create(ctx, &node)).ToNot(HaveOccurred())

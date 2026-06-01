@@ -113,27 +113,40 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, nil
 	}
 
-	// create the drain state annotation if it doesn't exist in the sriovNetworkNodeState object
-	nodeStateDrainAnnotationCurrent, currentNodeStateExist, err := dr.ensureAnnotationExists(ctx, nodeNetworkState, constants.NodeStateDrainAnnotationCurrent)
-	if err != nil {
-		reqLogger.Error(err, "failed to ensure nodeStateDrainAnnotationCurrent")
-		return ctrl.Result{}, err
+	// create the drain state annotations if they don't exist in the sriovNetworkNodeState object
+	nodeStateAnnotations := nodeNetworkState.GetAnnotations()
+	annotationsToSet := make(map[string]string)
+
+	nodeStateDrainAnnotationCurrent, currentExists := nodeStateAnnotations[constants.NodeStateDrainAnnotationCurrent]
+	if !currentExists {
+		nodeStateDrainAnnotationCurrent = constants.DrainIdle
+		annotationsToSet[constants.NodeStateDrainAnnotationCurrent] = constants.DrainIdle
 	}
-	_, desireNodeStateExist, err := dr.ensureAnnotationExists(ctx, nodeNetworkState, constants.NodeStateDrainAnnotation)
-	if err != nil {
-		reqLogger.Error(err, "failed to ensure nodeStateDrainAnnotation")
-		return ctrl.Result{}, err
+
+	if _, desiredExists := nodeStateAnnotations[constants.NodeStateDrainAnnotation]; !desiredExists {
+		annotationsToSet[constants.NodeStateDrainAnnotation] = constants.DrainIdle
+	}
+
+	if _, actionExists := nodeStateAnnotations[constants.NodeStateDrainActionAnnotation]; !actionExists {
+		annotationsToSet[constants.NodeStateDrainActionAnnotation] = ""
+	}
+
+	if len(annotationsToSet) > 0 {
+		if err := utils.AnnotateObjectMultiple(ctx, nodeNetworkState, annotationsToSet, dr.Client); err != nil {
+			reqLogger.Error(err, "failed to set default annotations on nodeNetworkState")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// create the drain state annotation if it doesn't exist in the node object
-	nodeDrainAnnotation, nodeExist, err := dr.ensureAnnotationExists(ctx, node, constants.NodeDrainAnnotation)
+	nodeDrainAnnotation, nodeExist, err := dr.ensureAnnotationExistsWithDefault(ctx, node, constants.NodeDrainAnnotation, constants.DrainIdle)
 	if err != nil {
-		reqLogger.Error(err, "failed to ensure nodeStateDrainAnnotation")
+		reqLogger.Error(err, "failed to ensure node drain annotation")
 		return ctrl.Result{}, err
 	}
 
-	// requeue the request if we needed to add any of the annotations
-	if !nodeExist || !currentNodeStateExist || !desireNodeStateExist {
+	if !nodeExist {
 		return ctrl.Result{Requeue: true}, nil
 	}
 	reqLogger.V(2).Info("Drain annotations", "nodeAnnotation", nodeDrainAnnotation, "nodeStateAnnotation", nodeStateDrainAnnotationCurrent)
@@ -164,7 +177,7 @@ func (dr *DrainReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// this cover the case a node request to drain or reboot
 	if nodeDrainAnnotation == constants.DrainRequired ||
 		nodeDrainAnnotation == constants.RebootRequired {
-		return dr.handleNodeDrainOrReboot(ctx, node, nodeNetworkState, nodeDrainAnnotation, nodeStateDrainAnnotationCurrent)
+		return dr.handleNodeDrainOrReboot(ctx, node, nodeNetworkState)
 	}
 
 	reqLogger.Error(nil, "unexpected node drain annotation")
@@ -182,14 +195,14 @@ func (dr *DrainReconcile) getObject(ctx context.Context, req ctrl.Request, objec
 	return true, nil
 }
 
-func (dr *DrainReconcile) ensureAnnotationExists(ctx context.Context, object client.Object, key string) (string, bool, error) {
+func (dr *DrainReconcile) ensureAnnotationExistsWithDefault(ctx context.Context, object client.Object, key, defaultValue string) (string, bool, error) {
 	value, exist := object.GetAnnotations()[key]
 	if !exist {
-		err := utils.AnnotateObject(ctx, object, key, constants.DrainIdle, dr.Client)
+		err := utils.AnnotateObject(ctx, object, key, defaultValue, dr.Client)
 		if err != nil {
 			return "", false, err
 		}
-		return constants.DrainIdle, false, nil
+		return defaultValue, false, nil
 	}
 
 	return value, true, nil
