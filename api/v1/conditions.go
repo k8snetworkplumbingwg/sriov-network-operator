@@ -28,13 +28,20 @@ const (
 
 // Common condition reasons used across SR-IOV Network Operator CRDs
 const (
-	// Reasons for Ready condition
+	// Reasons for Network Ready condition
 	ReasonNetworkReady = "NetworkReady"
 
 	// Reasons for Network NotReady conditions
 	ReasonNetworkAttachmentDefNotFound = "NetworkAttachmentDefinitionNotFound"
 	ReasonNetworkAttachmentDefInvalid  = "NetworkAttachmentDefinitionInvalid"
 	ReasonNamespaceNotFound            = "NamespaceNotFound"
+
+	// Reasons for Operator Config Ready condition
+	ReasonOperatorConfigReady = "OperatorConfigReady"
+
+	// Reasons for Operator Config NotReady conditions
+	ReasonOperatorConfigSyncFailed = "OperatorConfigSyncFailed"
+	ReasonUnsupportedConfiguration = "UnsupportedConfiguration"
 )
 
 // NetworkStatus defines the common observed state for network-type CRDs

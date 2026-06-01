@@ -60,6 +60,11 @@ var (
 		MaxUnavailable: &oneNode,
 		NodeSelector:   &metav1.LabelSelector{},
 		RdmaMode:       ""}}
+
+	// define defaults so we can mock them in tests
+	renderDir    = render.RenderDir
+	applyObject  = apply.ApplyObject
+	deleteObject = apply.DeleteObject
 )
 
 const (
@@ -216,7 +221,7 @@ func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.
 		if err := controllerutil.SetControllerReference(dc, obj, scheme); err != nil {
 			return err
 		}
-		if err := apply.ApplyObject(ctx, client, obj); err != nil {
+		if err := applyObject(ctx, client, obj); err != nil {
 			logger.Error(err, "Fail to sync", "Kind", kind)
 			return err
 		}
@@ -241,7 +246,7 @@ func renderDsForCR(path string, data *render.RenderData) ([]*uns.Unstructured, e
 	logger := log.Log.WithName("renderDsForCR")
 	logger.V(1).Info("Start to render objects")
 
-	objs, err := render.RenderDir(path, data)
+	objs, err := renderDir(path, data)
 	if err != nil {
 		return nil, errs.Wrap(err, "failed to render SR-IOV Network Operator manifests")
 	}
