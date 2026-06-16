@@ -45,6 +45,14 @@ Devlink parameters are configured on OS level by `GenericPlugin`. Since vendor h
 prior to devlink (e.g. `esw_multiport` requires `LAG_RESOURCE_ALLOCATION=1` firmware flag to be set for NVIDIA NICs)
 vendor plugin will go over `DevlinkParams` list to configure firmware if needed.
 
+The generic plugin applies parameters according to `ApplyOn`. When a PF-targeted value is missing or differs from the
+discovered PF value, the operator removes the existing VFs, moves the PF to the requested eSwitch mode, applies PF
+parameters, and then recreates and configures the VFs. VF-targeted parameters are applied after VF configuration and do
+not by themselves rebuild the PF. `flow_steering_mode` is an exception: after VF removal, it is applied while the PF is in
+legacy mode before the PF moves to switchdev. When multiple PFs have changed PF-targeted values, the operator first moves
+every participating PF to its requested eSwitch mode, then applies all changed PF parameters, and only then recreates any
+VFs. This batch-wide barrier lets multi-PF parameters such as `esw_multiport` see every participating PF in switchdev mode.
+
 #### Webhook changes
 TBD
 

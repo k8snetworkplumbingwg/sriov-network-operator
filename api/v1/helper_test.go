@@ -1125,6 +1125,45 @@ func TestNeedToUpdateSriov(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "VF devlink parameter already configured",
+			args: args{
+				ifaceSpec: &v1.Interface{
+					NumVfs: 1,
+					DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+						{Name: "test", Value: "1", ApplyOn: "VF"},
+					}},
+				},
+				ifaceStatus: &v1.InterfaceExt{
+					NumVfs: 1,
+					VFs: []v1.VirtualFunction{{
+						DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+							{Name: "test", Value: "1", ApplyOn: "VF"},
+						}},
+					}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "VF devlink parameter missing",
+			args: args{
+				ifaceSpec: &v1.Interface{
+					NumVfs: 1,
+					DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+						{Name: "test", Value: "1", ApplyOn: "VF"},
+					}},
+				},
+				ifaceStatus: &v1.InterfaceExt{
+					NumVfs: 1,
+					DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+						{Name: "test", Value: "1", ApplyOn: "PF"},
+					}},
+					VFs: []v1.VirtualFunction{{}},
+				},
+			},
+			want: true,
+		},
+		{
 			name: "vfio-pci VF is not configured for any group",
 			args: args{
 				ifaceSpec: &v1.Interface{
@@ -1246,6 +1285,72 @@ func TestNeedToUpdateSriov(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := v1.NeedToUpdateSriov(tt.args.ifaceSpec, tt.args.ifaceStatus); got != tt.want {
 				t.Errorf("NeedToUpdateSriov() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNeedToUpdateDevlinkParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		desired v1.DevlinkParams
+		current v1.DevlinkParams
+		want    bool
+	}{
+		{
+			name: "empty target and cmode use PF runtime defaults",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "PF", Cmode: "runtime"},
+			}},
+			want: false,
+		},
+		{
+			name: "target comparison is case insensitive",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "vf"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "VF"},
+			}},
+			want: false,
+		},
+		{
+			name: "value changed",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "2", ApplyOn: "PF"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1"},
+			}},
+			want: true,
+		},
+		{
+			name: "target changed",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "VF"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "PF"},
+			}},
+			want: true,
+		},
+		{
+			name: "desired parameter missing from status",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "PF"},
+			}},
+			current: v1.DevlinkParams{},
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := v1.NeedToUpdateDevlinkParams(&tt.desired, &tt.current); got != tt.want {
+				t.Errorf("NeedToUpdateDevlinkParams() = %v, want %v", got, tt.want)
 			}
 		})
 	}

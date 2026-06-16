@@ -191,15 +191,24 @@ func GetEswitchModeFromStatus(ifaceStatus *InterfaceExt) string {
 	return ifaceStatus.EswitchMode
 }
 
+func normalizedDevlinkApplyOn(applyOn string) string {
+	if applyOn == "" {
+		return consts.DevlinkParamApplyOnPf
+	}
+	return strings.ToUpper(applyOn)
+}
+
 func NeedToUpdateDevlinkParams(desired *DevlinkParams, current *DevlinkParams) bool {
 	for _, dParam := range desired.Params {
 		found := false
 		for _, cParam := range current.Params {
-			if dParam.Name == cParam.Name {
+			if dParam.Name == cParam.Name &&
+				normalizedDevlinkApplyOn(dParam.ApplyOn) == normalizedDevlinkApplyOn(cParam.ApplyOn) {
 				found = true
 				if dParam.Value != cParam.Value {
 					log.V(0).Info("NeedToUpdateDevlinkParams(): DevlinkParam needs update",
-						"name", dParam.Name, "desired", dParam.Value, "current", cParam.Value)
+						"name", dParam.Name, "applyOn", normalizedDevlinkApplyOn(dParam.ApplyOn),
+						"desired", dParam.Value, "current", cParam.Value)
 					return true
 				}
 				break
@@ -212,6 +221,16 @@ func NeedToUpdateDevlinkParams(desired *DevlinkParams, current *DevlinkParams) b
 		}
 	}
 	return false
+}
+
+func devlinkParamsForTarget(params *DevlinkParams, target string) DevlinkParams {
+	filtered := DevlinkParams{Params: make([]DevlinkParam, 0)}
+	for _, param := range params.Params {
+		if normalizedDevlinkApplyOn(param.ApplyOn) == target {
+			filtered.Params = append(filtered.Params, param)
+		}
+	}
+	return filtered
 }
 
 func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
@@ -305,8 +324,20 @@ func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
 		}
 	}
 
-	if NeedToUpdateDevlinkParams(&ifaceSpec.DevlinkParams, &ifaceStatus.DevlinkParams) {
+	desiredPFParams := devlinkParamsForTarget(&ifaceSpec.DevlinkParams, consts.DevlinkParamApplyOnPf)
+	if NeedToUpdateDevlinkParams(&desiredPFParams, &ifaceStatus.DevlinkParams) {
 		return true
+	}
+	desiredVFParams := devlinkParamsForTarget(&ifaceSpec.DevlinkParams, consts.DevlinkParamApplyOnVf)
+	if len(desiredVFParams.Params) > 0 {
+		if len(ifaceStatus.VFs) < ifaceSpec.NumVfs {
+			return true
+		}
+		for i := range ifaceStatus.VFs {
+			if NeedToUpdateDevlinkParams(&desiredVFParams, &ifaceStatus.VFs[i].DevlinkParams) {
+				return true
+			}
+		}
 	}
 
 	return false
