@@ -752,6 +752,21 @@ func (mr *MockHostManagerInterfaceMockRecorder) PrepareVFRepUdevRule() *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrepareVFRepUdevRule", reflect.TypeOf((*MockHostManagerInterface)(nil).PrepareVFRepUdevRule))
 }
 
+// ReadBootID mocks base method.
+func (m *MockHostManagerInterface) ReadBootID() (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReadBootID")
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReadBootID indicates an expected call of ReadBootID.
+func (mr *MockHostManagerInterfaceMockRecorder) ReadBootID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadBootID", reflect.TypeOf((*MockHostManagerInterface)(nil).ReadBootID))
+}
+
 // ReadConfFile mocks base method.
 func (m *MockHostManagerInterface) ReadConfFile() (*types.SriovConfig, error) {
 	m.ctrl.T.Helper()
@@ -765,6 +780,21 @@ func (m *MockHostManagerInterface) ReadConfFile() (*types.SriovConfig, error) {
 func (mr *MockHostManagerInterfaceMockRecorder) ReadConfFile() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadConfFile", reflect.TypeOf((*MockHostManagerInterface)(nil).ReadConfFile))
+}
+
+// ReadRebootTracker mocks base method.
+func (m *MockHostManagerInterface) ReadRebootTracker() (*types.RebootTrackerFile, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReadRebootTracker")
+	ret0, _ := ret[0].(*types.RebootTrackerFile)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReadRebootTracker indicates an expected call of ReadRebootTracker.
+func (mr *MockHostManagerInterfaceMockRecorder) ReadRebootTracker() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReadRebootTracker", reflect.TypeOf((*MockHostManagerInterface)(nil).ReadRebootTracker))
 }
 
 // ReadService mocks base method.
@@ -1160,6 +1190,20 @@ func (m *MockHostManagerInterface) WriteConfFile(newState *v1.SriovNetworkNodeSt
 func (mr *MockHostManagerInterfaceMockRecorder) WriteConfFile(newState any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteConfFile", reflect.TypeOf((*MockHostManagerInterface)(nil).WriteConfFile), newState)
+}
+
+// WriteRebootTracker mocks base method.
+func (m *MockHostManagerInterface) WriteRebootTracker(tracker *types.RebootTrackerFile) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WriteRebootTracker", tracker)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// WriteRebootTracker indicates an expected call of WriteRebootTracker.
+func (mr *MockHostManagerInterfaceMockRecorder) WriteRebootTracker(tracker any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteRebootTracker", reflect.TypeOf((*MockHostManagerInterface)(nil).WriteRebootTracker), tracker)
 }
 
 // WriteSriovResult mocks base method.

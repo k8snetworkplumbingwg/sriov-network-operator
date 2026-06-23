@@ -208,6 +208,8 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		hostHelper.EXPECT().IsKernelArgsSet("", constants.KernelArgRdmaShared).Return(false).AnyTimes()
 		hostHelper.EXPECT().SetRDMASubsystem("").Return(nil).AnyTimes()
 
+		hostHelper.EXPECT().WriteRebootTracker(gomock.Any()).Return(nil).AnyTimes()
+
 		hostHelper.EXPECT().ConfigSriovInterfaces(gomock.Any(), gomock.Any(), gomock.Any(), false).Do(
 			func(_, _, _, _ any) { discoverSriovReturn.ReplaceOriginalWithAfter() }).AnyTimes()
 		// k8s plugin for k8s cluster type

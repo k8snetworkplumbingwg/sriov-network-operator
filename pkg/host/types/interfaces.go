@@ -223,3 +223,9 @@ type SystemdInterface interface {
 	ReadSriovSupportedNics() ([]string, error)
 	CleanSriovFilesFromHost(isOpenShift bool) error
 }
+
+type RebootTrackerInterface interface {
+	ReadRebootTracker() (*RebootTrackerFile, error)
+	WriteRebootTracker(tracker *RebootTrackerFile) error
+	ReadBootID() (string, error)
+}

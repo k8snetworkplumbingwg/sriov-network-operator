@@ -405,7 +405,31 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 	}
 
 	if reqReboot {
+		rebootsCount, err := dn.readRebootCountFromDisk(desiredNodeState.Generation)
+		if err != nil {
+			reqLogger.Error(err, "failed to read reboot count from disk")
+			return ctrl.Result{}, err
+		}
+		if rebootsCount >= consts.MaxRebootsPerGeneration {
+			reqLogger.Info("maximum reboot retries reached, setting sync status to failed")
+			err = dn.updateSyncState(ctx, desiredNodeState, consts.SyncStatusFailed,
+				fmt.Sprintf("reached maximum number of allowed reboots (%d) while trying to configure node", consts.MaxRebootsPerGeneration))
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+
 		reqLogger.Info("reboot node")
+		incremented, err := dn.incrementRebootCounter(desiredNodeState.Generation)
+		if err != nil {
+			reqLogger.Error(err, "failed to increment reboot counter")
+			return ctrl.Result{}, err
+		}
+		if !incremented {
+			reqLogger.Info("reboot already requested this boot, waiting for reboot to complete")
+			return ctrl.Result{RequeueAfter: consts.DaemonRequeueTime}, nil
+		}
 		dn.eventRecorder.SendEvent(ctx, "RebootNode", "Reboot node has been initiated")
 		return ctrl.Result{}, dn.rebootNode()
 	}
@@ -455,10 +479,62 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 		return ctrl.Result{}, err
 	}
 
+	if err := dn.resetRebootCounter(desiredNodeState.Generation); err != nil {
+		reqLogger.Error(err, "failed to reset reboot counter")
+		return ctrl.Result{}, err
+	}
+
 	// update the lastAppliedGeneration
 	dn.lastAppliedGeneration = desiredNodeState.Generation
 
 	return ctrl.Result{RequeueAfter: consts.DaemonRequeueTime}, nil
+}
+
+func (dn *NodeReconciler) readRebootCountFromDisk(generation int64) (int, error) {
+	tracker, err := dn.hostHelpers.ReadRebootTracker()
+	if err != nil {
+		return 0, err
+	}
+	if tracker == nil {
+		return 0, nil
+	}
+	if tracker.Generation != generation {
+		return 0, nil
+	}
+	return tracker.RebootCount, nil
+}
+
+func (dn *NodeReconciler) incrementRebootCounter(generation int64) (bool, error) {
+	bootID, err := dn.hostHelpers.ReadBootID()
+	if err != nil {
+		return false, err
+	}
+
+	tracker, err := dn.hostHelpers.ReadRebootTracker()
+	if err != nil {
+		return false, err
+	}
+
+	if tracker != nil && tracker.Generation == generation && tracker.BootID == bootID {
+		return false, nil
+	}
+
+	if tracker == nil || tracker.Generation != generation {
+		tracker = &hosttypes.RebootTrackerFile{
+			Generation:  generation,
+			RebootCount: 0,
+		}
+	}
+	tracker.RebootCount++
+	tracker.BootID = bootID
+	return true, dn.hostHelpers.WriteRebootTracker(tracker)
+}
+
+func (dn *NodeReconciler) resetRebootCounter(generation int64) error {
+	return dn.hostHelpers.WriteRebootTracker(&hosttypes.RebootTrackerFile{
+		Generation:  generation,
+		RebootCount: 0,
+	})
 }
 
 // tryUnblockDevicePlugin checks if the device plugin can be unblocked
