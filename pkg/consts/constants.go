@@ -15,6 +15,8 @@ const (
 type DrainState string
 
 const (
+	SriovNetworkOperatorIdentifier = "sriov-network-operator"
+
 	Chroot = "/host"
 	Host   = "/host"
 

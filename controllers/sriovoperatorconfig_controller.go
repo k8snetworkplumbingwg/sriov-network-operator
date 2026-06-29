@@ -27,6 +27,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -44,14 +45,16 @@ import (
 	machinev1 "github.com/openshift/api/machineconfiguration/v1"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/apply"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
+
+var errSystemdModeOnHypershift = errors.New("systemd mode is not supported on hypershift")
 
 // SriovOperatorConfigReconciler reconciles a SriovOperatorConfig object
 type SriovOperatorConfigReconciler struct {
@@ -59,6 +62,7 @@ type SriovOperatorConfigReconciler struct {
 	Scheme            *runtime.Scheme
 	Orchestrator      orchestrator.Interface
 	FeatureGate       featuregate.FeatureGate
+	StatusPatcher     status.Interface
 	UncachedAPIReader client.Reader
 }
 
@@ -75,13 +79,13 @@ type SriovOperatorConfigReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.8.3/pkg/reconcile
-func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
 	logger := log.FromContext(ctx).WithValues("sriovoperatorconfig", req.NamespacedName)
 	logger.Info("Reconciling SriovOperatorConfig")
 
 	// Note: in SetupWithManager we setup manager to enqueue only default config obj
 	defaultConfig := &sriovnetworkv1.SriovOperatorConfig{}
-	err := r.Get(ctx, req.NamespacedName, defaultConfig)
+	err = r.Get(ctx, req.NamespacedName, defaultConfig)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("default SriovOperatorConfig object not found. waiting for creation.")
@@ -99,6 +103,16 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		// The object is being deleted
 		return r.handleSriovOperatorConfigDeletion(ctx, defaultConfig, logger)
 	}
+
+	defer func() {
+		conditionErr := r.applyReadyCondition(ctx, defaultConfig, err)
+		if conditionErr == nil {
+			return
+		}
+
+		logger.Error(conditionErr, "Failed to apply Ready condition")
+		err = errors.Join(err, conditionErr)
+	}()
 
 	if err = r.syncOperatorConfigFinalizers(ctx, defaultConfig, logger); err != nil {
 		return reconcile.Result{}, err
@@ -150,7 +164,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 	if r.Orchestrator.ClusterType() == consts.ClusterTypeOpenshift {
 		// TODO: add support for hypershift as today there is no MCO on hypershift clusters
 		if r.Orchestrator.Flavor() == consts.ClusterFlavorHypershift {
-			return ctrl.Result{}, fmt.Errorf("systemd mode is not supported on hypershift")
+			return ctrl.Result{}, errSystemdModeOnHypershift
 		}
 
 		if err = r.syncOpenShiftSystemdService(ctx, defaultConfig); err != nil {
@@ -160,6 +174,31 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	logger.Info("Reconcile SriovOperatorConfig completed successfully")
 	return reconcile.Result{RequeueAfter: consts.ResyncPeriod}, nil
+}
+
+// applyReadyCondition updates the shared Ready condition for SriovOperatorConfig
+// using the shared SSA status patcher.
+func (r *SriovOperatorConfigReconciler) applyReadyCondition(ctx context.Context, config *sriovnetworkv1.SriovOperatorConfig, reconcileErr error) error {
+	if r.StatusPatcher == nil || config == nil {
+		return nil
+	}
+
+	conditionStatus := metav1.ConditionTrue
+	reason := sriovnetworkv1.ReasonOperatorConfigReady
+	message := "SriovOperatorConfig reconciled successfully"
+
+	if reconcileErr != nil {
+		conditionStatus = metav1.ConditionFalse
+		message = reconcileErr.Error()
+		if errors.Is(reconcileErr, errSystemdModeOnHypershift) {
+			reason = sriovnetworkv1.ReasonUnsupportedConfiguration
+		} else {
+			reason = sriovnetworkv1.ReasonOperatorConfigSyncFailed
+		}
+	}
+
+	return r.StatusPatcher.ApplyCondition(ctx, config,
+		status.NewCondition(sriovnetworkv1.ConditionReady, conditionStatus, reason, message, config.GetGeneration()))
 }
 
 // defaultConfigPredicate creates a predicate.Predicate that will return true
@@ -221,7 +260,7 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 
 	data.Data["ConfigDaemonEnvVars"] = dc.Spec.ConfigDaemonEnvVars
 
-	objs, err := render.RenderDir(consts.ConfigDaemonPath, &data)
+	objs, err := renderDir(consts.ConfigDaemonPath, &data)
 	if err != nil {
 		logger.Error(err, "Fail to render config daemon manifests")
 		return err
@@ -268,7 +307,7 @@ func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context,
 		data.Data["NodeSelectorField"] = dc.Spec.ConfigDaemonNodeSelector
 	}
 
-	objs, err := render.RenderDir(consts.MetricsExporterPath, &data)
+	objs, err := renderDir(consts.MetricsExporterPath, &data)
 	if err != nil {
 		logger.Error(err, "Fail to render metrics exporter manifests")
 		return err
@@ -336,7 +375,7 @@ func (r *SriovOperatorConfigReconciler) syncWebhookObjs(ctx context.Context, dc 
 		// check for ResourceInjectorMatchConditionFeatureGate feature gate
 		data.Data[consts.ResourceInjectorMatchConditionFeatureGate] = r.FeatureGate.IsEnabled(consts.ResourceInjectorMatchConditionFeatureGate)
 
-		objs, err := render.RenderDir(path, &data)
+		objs, err := renderDir(path, &data)
 		if err != nil {
 			logger.Error(err, "Fail to render webhook manifests")
 			return err
@@ -390,7 +429,7 @@ func (r *SriovOperatorConfigReconciler) deleteWebhookObject(ctx context.Context,
 }
 
 func (r *SriovOperatorConfigReconciler) deleteK8sResource(ctx context.Context, in *uns.Unstructured) error {
-	if err := apply.DeleteObject(ctx, r.Client, in); err != nil {
+	if err := deleteObject(ctx, r.Client, in); err != nil {
 		return fmt.Errorf("failed to delete object %v with err: %v", in, err)
 	}
 	return nil
@@ -415,7 +454,7 @@ func (r *SriovOperatorConfigReconciler) syncK8sResource(ctx context.Context, cr 
 			return err
 		}
 	}
-	if err := apply.ApplyObject(ctx, r.Client, in); err != nil {
+	if err := applyObject(ctx, r.Client, in); err != nil {
 		return fmt.Errorf("failed to apply object %v with err: %v", in, err)
 	}
 	return nil
@@ -451,7 +490,7 @@ func (r *SriovOperatorConfigReconciler) syncOpenShiftSystemdService(ctx context.
 	logger.Info("Start to sync config systemd machine config for openshift")
 	data := render.MakeRenderData()
 	data.Data["LogLevel"] = cr.Spec.LogLevel
-	objs, err := render.RenderDir(consts.SystemdServiceOcpPath, &data)
+	objs, err := renderDir(consts.SystemdServiceOcpPath, &data)
 	if err != nil {
 		logger.Error(err, "Fail to render config daemon manifests")
 		return err
