@@ -188,10 +188,10 @@ type BridgeInterface interface {
 	DiscoverBridges() (sriovnetworkv1.Bridges, error)
 	// ConfigureBridge configure managed bridges for the host
 	ConfigureBridges(bridgesSpec sriovnetworkv1.Bridges, bridgesStatus sriovnetworkv1.Bridges) error
-	// DetachInterfaceFromManagedBridge detach interface from a managed bridge,
-	// this step is required before applying some configurations to PF, e.g. changing of eSwitch mode.
-	// The function detach interface from managed bridges only.
-	DetachInterfaceFromManagedBridge(pciAddr string) error
+	// DetachInterfaceFromManagedBridge detach PF uplink and stale VF representor interfaces
+	// from a managed bridge. Representor names are constructed as {pfName}_{vfIndex}
+	// for indices 0 to numVfs-1. The function detach interface from managed bridges only.
+	DetachInterfaceFromManagedBridge(pciAddr string, pfName string, numVfs int) error
 }
 
 type InfinibandInterface interface {

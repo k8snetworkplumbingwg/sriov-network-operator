@@ -84,13 +84,13 @@ var _ = Describe("Bridge", func() {
 
 	Context("DetachInterfaceFromManagedBridge", func() {
 		It("succeed", func() {
-			ovsMock.EXPECT().RemoveInterfaceFromOVSBridge(gomock.Any(), "0000:d8:00.0").Return(nil)
-			err := br.DetachInterfaceFromManagedBridge("0000:d8:00.0")
+			ovsMock.EXPECT().RemoveInterfaceFromOVSBridge(gomock.Any(), "0000:d8:00.0", "enp216s0f0np0", 4).Return(nil)
+			err := br.DetachInterfaceFromManagedBridge("0000:d8:00.0", "enp216s0f0np0", 4)
 			Expect(err).NotTo(HaveOccurred())
 		})
 		It("error", func() {
-			ovsMock.EXPECT().RemoveInterfaceFromOVSBridge(gomock.Any(), "0000:d8:00.0").Return(testErr)
-			err := br.DetachInterfaceFromManagedBridge("0000:d8:00.0")
+			ovsMock.EXPECT().RemoveInterfaceFromOVSBridge(gomock.Any(), "0000:d8:00.0", "enp216s0f0np0", 4).Return(testErr)
+			err := br.DetachInterfaceFromManagedBridge("0000:d8:00.0", "enp216s0f0np0", 4)
 			Expect(err).To(MatchError(testErr))
 		})
 	})

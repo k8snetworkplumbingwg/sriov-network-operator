@@ -286,17 +286,17 @@ func (mr *MockHostHelpersInterfaceMockRecorder) DeleteVDPADevice(pciAddr any) *g
 }
 
 // DetachInterfaceFromManagedBridge mocks base method.
-func (m *MockHostHelpersInterface) DetachInterfaceFromManagedBridge(pciAddr string) error {
+func (m *MockHostHelpersInterface) DetachInterfaceFromManagedBridge(pciAddr, pfName string, numVfs int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DetachInterfaceFromManagedBridge", pciAddr)
+	ret := m.ctrl.Call(m, "DetachInterfaceFromManagedBridge", pciAddr, pfName, numVfs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DetachInterfaceFromManagedBridge indicates an expected call of DetachInterfaceFromManagedBridge.
-func (mr *MockHostHelpersInterfaceMockRecorder) DetachInterfaceFromManagedBridge(pciAddr any) *gomock.Call {
+func (mr *MockHostHelpersInterfaceMockRecorder) DetachInterfaceFromManagedBridge(pciAddr, pfName, numVfs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachInterfaceFromManagedBridge", reflect.TypeOf((*MockHostHelpersInterface)(nil).DetachInterfaceFromManagedBridge), pciAddr)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetachInterfaceFromManagedBridge", reflect.TypeOf((*MockHostHelpersInterface)(nil).DetachInterfaceFromManagedBridge), pciAddr, pfName, numVfs)
 }
 
 // DiscoverBridges mocks base method.

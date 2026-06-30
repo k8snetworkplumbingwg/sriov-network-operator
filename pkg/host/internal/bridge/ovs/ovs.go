@@ -47,8 +47,10 @@ type Interface interface {
 	GetOVSBridges(ctx context.Context) ([]sriovnetworkv1.OVSConfigExt, error)
 	// RemoveOVSBridge removes managed OVS bridge by name
 	RemoveOVSBridge(ctx context.Context, bridgeName string) error
-	// RemoveInterfaceFromOVSBridge interface from the managed OVS bridge
-	RemoveInterfaceFromOVSBridge(ctx context.Context, ifaceAddr string) error
+	// RemoveInterfaceFromOVSBridge removes PF uplink and stale VF representor interfaces
+	// from the managed OVS bridge. Representor names are constructed as {pfName}_{vfIndex}
+	// for indices 0 to numVfs-1.
+	RemoveInterfaceFromOVSBridge(ctx context.Context, pciAddress string, pfName string, numVfs int) error
 }
 
 // New creates new instance of the OVS interface
@@ -298,31 +300,37 @@ func (o *ovs) RemoveOVSBridge(ctx context.Context, bridgeName string) error {
 	return nil
 }
 
-// RemoveInterfaceFromOVSBridge removes interface from the managed OVS bridge
-func (o *ovs) RemoveInterfaceFromOVSBridge(ctx context.Context, pciAddress string) error {
+// RemoveInterfaceFromOVSBridge removes PF uplink and stale VF representor interfaces
+// from the managed OVS bridge identified by the PF's PCI address.
+func (o *ovs) RemoveInterfaceFromOVSBridge(ctx context.Context, pciAddress string, pfName string, numVfs int) error {
 	ctx, cancel := setDefaultTimeout(ctx)
 	defer cancel()
-	funcLog := log.Log.WithValues("pciAddress", pciAddress)
+	funcLog := log.Log.WithValues("pciAddress", pciAddress, "pfName", pfName, "numVfs", numVfs)
 	funcLog.V(1).Info("RemoveInterfaceFromOVSBridge(): remove interface from managed bridge")
 	knownConfigs, err := o.store.GetManagedOVSBridges()
 	if err != nil {
 		funcLog.Error(err, "RemoveInterfaceFromOVSBridge(): failed to read data from store")
 		return fmt.Errorf("failed to read data from store: %v", err)
 	}
-	var relatedBridges []*sriovnetworkv1.OVSConfigExt
+	// iterate all uplinks in each bridge config to find the bridge that contains
+	// the PF with the given PCI address; a bridge may have multiple uplinks and
+	// the target PF is not necessarily at index 0
+	var brConf *sriovnetworkv1.OVSConfigExt
 	for _, kc := range knownConfigs {
-		if len(kc.Uplinks) > 0 && kc.Uplinks[0].PciAddress == pciAddress && kc.Uplinks[0].Name != "" {
-			relatedBridges = append(relatedBridges, kc)
+		for _, uplink := range kc.Uplinks {
+			if uplink.PciAddress == pciAddress && uplink.Name != "" {
+				brConf = kc
+				break
+			}
+		}
+		if brConf != nil {
+			break
 		}
 	}
-	if len(relatedBridges) == 0 {
+	if brConf == nil {
 		funcLog.V(2).Info("RemoveInterfaceFromOVSBridge(): can't find related managed OVS bridge in the store")
 		return nil
 	}
-	if len(relatedBridges) > 1 {
-		funcLog.Info("RemoveInterfaceFromOVSBridge(): WARNING: uplink match more then one managed OVS bridge in the store, use first match")
-	}
-	brConf := relatedBridges[0]
 
 	dbClient, err := getClient(ctx)
 	if err != nil {
@@ -346,8 +354,22 @@ func (o *ovs) RemoveInterfaceFromOVSBridge(ctx context.Context, pciAddress strin
 		return nil
 	}
 
-	funcLog.V(2).Info("RemoveInterfaceFromOVSBridge(): remove interface from the bridge")
-	if err := o.deleteInterfaceByName(ctx, dbClient, brConf.Uplinks[0].Name); err != nil {
+	// Remove stale VF representor interfaces for indices 0..numVfs-1.
+	// Representor names follow the udev naming convention used by the operator: {pfName}_{vfIndex}.
+	// We only clean representors up to the currently configured numVfs. If previously more VFs
+	// were configured, leftover representors at higher indices don't conflict with the current
+	// configuration and will be cleaned when numVfs is changed to cover those indices again.
+	for i := 0; i < numVfs; i++ {
+		repName := fmt.Sprintf("%s_%d", pfName, i)
+		if err := o.deleteInterfaceByName(ctx, dbClient, repName); err != nil {
+			funcLog.Error(err, "RemoveInterfaceFromOVSBridge(): failed to remove representor interface", "interface", repName, "bridge", brConf.Name)
+			return err
+		}
+	}
+
+	// Remove PF uplink interface
+	funcLog.V(2).Info("RemoveInterfaceFromOVSBridge(): remove PF uplink interface from the bridge", "interface", pfName)
+	if err := o.deleteInterfaceByName(ctx, dbClient, pfName); err != nil {
 		funcLog.Error(err, "RemoveInterfaceFromOVSBridge(): failed to remove interface from the bridge", "bridge", brConf.Name)
 		return err
 	}
