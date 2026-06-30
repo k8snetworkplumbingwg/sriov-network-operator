@@ -20,6 +20,7 @@ import (
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -160,6 +161,9 @@ func (r *SriovNetworkPoolConfigReconciler) syncOvsHardwareOffloadMachineConfigs(
 	}
 
 	data := render.MakeRenderData()
+	externalIds, otherOvsConfig := utils.RenderOtherOvsConfigOption(nc.Spec.OvsHardwareOffloadConfig.OvsConfig)
+	data.Data["OtherOvsConfig"] = otherOvsConfig
+	data.Data["ExternalIds"] = externalIds
 	mc, err := render.GenerateMachineConfig("bindata/manifests/switchdev-config", mcName, mcpName, true, &data)
 	if err != nil {
 		return err
