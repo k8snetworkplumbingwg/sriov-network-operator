@@ -23,6 +23,7 @@ import (
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
+	sriovdrav1alpha1 "github.com/k8snetworkplumbingwg/dra-driver-sriov/pkg/api/sriovdra/v1alpha1"
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	openshiftconfigv1 "github.com/openshift/api/config/v1"
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
@@ -65,6 +66,9 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(sriovnetworkv1.AddToScheme(scheme))
+
+	// Register DRA driver types for SriovResourcePolicy and DeviceAttributes CRs
+	utilruntime.Must(sriovdrav1alpha1.AddToScheme(scheme))
 	utilruntime.Must(netattdefv1.AddToScheme(scheme))
 	utilruntime.Must(mcfgv1.AddToScheme(scheme))
 	utilruntime.Must(openshiftconfigv1.AddToScheme(scheme))
