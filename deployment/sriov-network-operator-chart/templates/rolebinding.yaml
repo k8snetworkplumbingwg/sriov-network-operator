@@ -29,3 +29,21 @@ roleRef:
   kind: Role
   name: sriov-network-config-daemon
   apiGroup: rbac.authorization.k8s.io
+{{- if .Values.operator.admissionControllers.enabled }}
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: operator-webhook-sa
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: operator-webhook-sa
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: operator-webhook-sa
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
