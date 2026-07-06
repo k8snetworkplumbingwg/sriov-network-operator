@@ -5,6 +5,7 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: sriov-network-operator
+  namespace: $NAMESPACE
 roleRef:
   kind: Role
   name: sriov-network-operator

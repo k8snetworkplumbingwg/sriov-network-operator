@@ -18,13 +18,10 @@ rules:
     resources: ["daemonsets"]
     verbs: ["get"]
   - apiGroups: [""]
-    resources: ["namespaces", "serviceaccounts"]
+    resources: ["namespaces"]
     verbs: ["*"]
   - apiGroups: ["k8s.cni.cncf.io"]
     resources: ["network-attachment-definitions"]
-    verbs: ["*"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: [clusterroles, clusterrolebindings]
     verbs: ["*"]
   - apiGroups: ["admissionregistration.k8s.io"]
     resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
@@ -38,17 +35,3 @@ rules:
   - apiGroups: ["config.openshift.io"]
     resources: ["infrastructures", "apiservers"]
     verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: sriov-network-config-daemon
-  labels:
-  {{- include "sriov-network-operator.labels" . | nindent 4 }}
-rules:
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list", "watch", "patch", "update"]
-  - apiGroups: [ "config.openshift.io" ]
-    resources: [ "infrastructures" ]
-    verbs: [ "get", "list", "watch" ]
