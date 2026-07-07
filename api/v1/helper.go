@@ -55,6 +55,23 @@ var NicIDMap = []string{}
 
 var InitialState SriovNetworkNodeState
 
+func sanitizeJSON(raw string) (string, error) {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return "", err
+	}
+	safe, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(safe), nil
+}
+
+func escapeJSONStringValue(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b[1 : len(b)-1])
+}
+
 const (
 	SupportedNicIDConfigmap = "supported-nic-ids"
 )
@@ -670,21 +687,32 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	if cr.Spec.Capabilities == "" {
 		data.Data["CapabilitiesConfigured"] = false
 	} else {
+		safe, err := sanitizeJSON(cr.Spec.Capabilities)
+		if err != nil {
+			return nil, fmt.Errorf("invalid capabilities JSON: %w", err)
+		}
 		data.Data["CapabilitiesConfigured"] = true
-		data.Data["SriovCniCapabilities"] = cr.Spec.Capabilities
+		data.Data["SriovCniCapabilities"] = safe
 	}
 
 	if cr.Spec.IPAM != "" {
-		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
+		safe, err := sanitizeJSON(cr.Spec.IPAM)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ipam JSON: %w", err)
+		}
+		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + safe
 	} else {
 		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
 	}
 
-	// metaplugins for the infiniband cni
 	data.Data["MetaPluginsConfigured"] = false
 	if cr.Spec.MetaPluginsConfig != "" {
+		safe, err := sanitizeJSON(cr.Spec.MetaPluginsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metaPlugins JSON: %w", err)
+		}
 		data.Data["MetaPluginsConfigured"] = true
-		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
+		data.Data["MetaPlugins"] = safe
 	}
 
 	// logLevel and logFile are currently not supports by the ip-sriov-cni -> hardcode them to false.
@@ -746,8 +774,12 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	if cr.Spec.Capabilities == "" {
 		data.Data["CapabilitiesConfigured"] = false
 	} else {
+		safe, err := sanitizeJSON(cr.Spec.Capabilities)
+		if err != nil {
+			return nil, fmt.Errorf("invalid capabilities JSON: %w", err)
+		}
 		data.Data["CapabilitiesConfigured"] = true
-		data.Data["SriovCniCapabilities"] = cr.Spec.Capabilities
+		data.Data["SriovCniCapabilities"] = safe
 	}
 
 	data.Data["SpoofChkConfigured"] = true
@@ -799,21 +831,29 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	}
 
 	if cr.Spec.IPAM != "" {
-		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
+		safe, err := sanitizeJSON(cr.Spec.IPAM)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ipam JSON: %w", err)
+		}
+		data.Data["SriovCniIpam"] = SriovCniIpam + ":" + safe
 	} else {
 		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
 	}
 
 	data.Data["MetaPluginsConfigured"] = false
 	if cr.Spec.MetaPluginsConfig != "" {
+		safe, err := sanitizeJSON(cr.Spec.MetaPluginsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metaPlugins JSON: %w", err)
+		}
 		data.Data["MetaPluginsConfigured"] = true
-		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
+		data.Data["MetaPlugins"] = safe
 	}
 
 	data.Data["LogLevelConfigured"] = (cr.Spec.LogLevel != "")
 	data.Data["LogLevel"] = cr.Spec.LogLevel
 	data.Data["LogFileConfigured"] = (cr.Spec.LogFile != "")
-	data.Data["LogFile"] = cr.Spec.LogFile
+	data.Data["LogFile"] = escapeJSONStringValue(cr.Spec.LogFile)
 
 	objs, err := render.RenderDir(filepath.Join(ManifestsPath, "sriov"), &data)
 	if err != nil {
@@ -856,11 +896,15 @@ func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	if cr.Spec.Capabilities == "" {
 		data.Data["CapabilitiesConfigured"] = false
 	} else {
+		safe, err := sanitizeJSON(cr.Spec.Capabilities)
+		if err != nil {
+			return nil, fmt.Errorf("invalid capabilities JSON: %w", err)
+		}
 		data.Data["CapabilitiesConfigured"] = true
-		data.Data["CniCapabilities"] = cr.Spec.Capabilities
+		data.Data["CniCapabilities"] = safe
 	}
 
-	data.Data["Bridge"] = cr.Spec.Bridge
+	data.Data["Bridge"] = escapeJSONStringValue(cr.Spec.Bridge)
 	data.Data["VlanTag"] = cr.Spec.Vlan
 	data.Data["MTU"] = cr.Spec.MTU
 	if len(cr.Spec.Trunk) > 0 {
@@ -869,18 +913,26 @@ func (cr *OVSNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	} else {
 		data.Data["Trunk"] = ""
 	}
-	data.Data["InterfaceType"] = cr.Spec.InterfaceType
+	data.Data["InterfaceType"] = escapeJSONStringValue(cr.Spec.InterfaceType)
 
 	if cr.Spec.IPAM != "" {
-		data.Data["CniIpam"] = SriovCniIpam + ":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
+		safe, err := sanitizeJSON(cr.Spec.IPAM)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ipam JSON: %w", err)
+		}
+		data.Data["CniIpam"] = SriovCniIpam + ":" + safe
 	} else {
 		data.Data["CniIpam"] = SriovCniIpamEmpty
 	}
 
 	data.Data["MetaPluginsConfigured"] = false
 	if cr.Spec.MetaPluginsConfig != "" {
+		safe, err := sanitizeJSON(cr.Spec.MetaPluginsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metaPlugins JSON: %w", err)
+		}
 		data.Data["MetaPluginsConfigured"] = true
-		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
+		data.Data["MetaPlugins"] = safe
 	}
 
 	objs, err := render.RenderDir(filepath.Join(ManifestsPath, "ovs"), &data)
