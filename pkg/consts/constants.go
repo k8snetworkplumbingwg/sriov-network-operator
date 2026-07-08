@@ -1,7 +1,13 @@
 package consts
 
 import (
+	"os"
 	"time"
+)
+
+const (
+	sriovConfBasePathEnvVar  = "SRIOV_CONF_BASE_PATH"
+	defaultSriovConfBasePath = "/etc/sriov-operator"
 )
 
 // ContextKey is a custom type for context keys to avoid collisions
@@ -80,12 +86,6 @@ const (
 
 	RdmaSubsystemModeShared    = "shared"
 	RdmaSubsystemModeExclusive = "exclusive"
-
-	SriovConfBasePath          = "/etc/sriov-operator"
-	PfAppliedConfig            = SriovConfBasePath + "/pci"
-	SriovSwitchDevConfPath     = SriovConfBasePath + "/sriov_config.json"
-	SriovHostSwitchDevConfPath = Host + SriovSwitchDevConfPath
-	ManagedOVSBridgesPath      = SriovConfBasePath + "/managed-ovs-bridges.json"
 
 	MachineConfigPoolPausedAnnotation       = "sriovnetwork.openshift.io/state"
 	MachineConfigPoolPausedAnnotationIdle   = "Idle"
@@ -175,9 +175,6 @@ const (
 	KernelArgRdmaExclusive = "ib_core.netns_mode=0"
 
 	// Systemd consts
-	SriovSystemdConfigPath        = SriovConfBasePath + "/sriov-interface-config.yaml"
-	SriovSystemdResultPath        = SriovConfBasePath + "/sriov-interface-result.yaml"
-	SriovSystemdSupportedNicPath  = SriovConfBasePath + "/sriov-supported-nics-ids.yaml"
 	SriovSystemdServiceBinaryPath = "/var/lib/sriov/sriov-network-config-daemon"
 
 	SriovServiceBasePath        = "/etc/systemd/system"
@@ -203,7 +200,29 @@ const (
 
 	// MellanoxFirmwareResetFeatureGate: enables the firmware reset via mstfwreset before a reboot
 	MellanoxFirmwareResetFeatureGate = "mellanoxFirmwareReset"
+)
+
+var (
+	// SriovConfBasePath is the base path for operator config on the host.
+	// It can be overridden at runtime via the SRIOV_CONF_BASE_PATH environment variable.
+	SriovConfBasePath          = getSriovConfBasePath()
+	PfAppliedConfig            = SriovConfBasePath + "/pci"
+	SriovSwitchDevConfPath     = SriovConfBasePath + "/sriov_config.json"
+	SriovHostSwitchDevConfPath = Host + SriovSwitchDevConfPath
+	ManagedOVSBridgesPath      = SriovConfBasePath + "/managed-ovs-bridges.json"
+
+	SriovSystemdConfigPath       = SriovConfBasePath + "/sriov-interface-config.yaml"
+	SriovSystemdResultPath       = SriovConfBasePath + "/sriov-interface-result.yaml"
+	SriovSystemdSupportedNicPath = SriovConfBasePath + "/sriov-supported-nics-ids.yaml"
 
 	// The path to the file on the host filesystem that contains the IB GUID distribution for IB VFs
 	InfinibandGUIDConfigFilePath = SriovConfBasePath + "/infiniband/guids"
 )
+
+func getSriovConfBasePath() string {
+	if value := os.Getenv(sriovConfBasePathEnvVar); value != "" {
+		return value
+	}
+
+	return defaultSriovConfBasePath
+}

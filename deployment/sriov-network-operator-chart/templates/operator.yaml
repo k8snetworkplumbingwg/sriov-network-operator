@@ -125,6 +125,8 @@ spec:
               value: {{ .Values.operator.clusterType }}
             - name: STALE_NODE_STATE_CLEANUP_DELAY_MINUTES
               value: "{{ .Values.operator.staleNodeStateCleanupDelayMinutes }}"
+            - name: SRIOV_CONF_BASE_PATH
+              value: {{ .Values.sriovConfBasePath | quote }}
             {{- range $k, $v := .Values.operator.extraEnv }}
             - name: {{ $k }}
               value: {{ $v | toString | quote }}
