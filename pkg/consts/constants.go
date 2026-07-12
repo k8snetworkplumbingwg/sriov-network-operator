@@ -1,6 +1,7 @@
 package consts
 
 import (
+	"fmt"
 	"os"
 	"time"
 )
@@ -147,26 +148,10 @@ const (
 	BusPci                = "pci"
 	BusVdpa               = "vdpa"
 
-	UdevFolder          = "/etc/udev"
-	HostUdevFolder      = Host + UdevFolder
-	UdevRulesFolder     = UdevFolder + "/rules.d"
-	HostUdevRulesFolder = Host + UdevRulesFolder
-	UdevDisableNM       = "/bindata/scripts/udev-find-sriov-pf.sh"
-	UdevRepName         = "/bindata/scripts/switchdev-vf-link-name.sh"
+	UdevDisableNM = "/bindata/scripts/udev-find-sriov-pf.sh"
+	UdevRepName   = "/bindata/scripts/switchdev-vf-link-name.sh"
 	// nolint:goconst
 	PFNameUdevRule = `SUBSYSTEM=="net", ACTION=="add", DRIVERS=="?*", KERNELS=="%s", NAME="%s"`
-	// nolint:goconst
-	NMUdevRule = `SUBSYSTEM=="net", ` +
-		`ACTION=="add|change|move", ` +
-		`ATTRS{device}=="%s", ` +
-		`IMPORT{program}="/etc/udev/disable-nm-sriov.sh $env{INTERFACE} %s"`
-	// nolint:goconst
-	SwitchdevUdevRule = `SUBSYSTEM=="net", ` +
-		`ACTION=="add|move", ` +
-		`ATTRS{phys_switch_id}=="%s", ` +
-		`ATTR{phys_port_name}=="pf%svf*", ` +
-		`IMPORT{program}="/etc/udev/switchdev-vf-link-name.sh $attr{phys_port_name}", ` +
-		`NAME="%s_$env{NUMBER}"`
 
 	KernelArgPciRealloc    = "pci=realloc"
 	KernelArgIntelIommu    = "intel_iommu=on"
@@ -200,6 +185,9 @@ const (
 
 	// MellanoxFirmwareResetFeatureGate: enables the firmware reset via mstfwreset before a reboot
 	MellanoxFirmwareResetFeatureGate = "mellanoxFirmwareReset"
+
+	udevBasePathEnvVar  = "UDEV_BASE_PATH"
+	defaultUdevBasePath = "/etc/udev"
 )
 
 var (
@@ -217,6 +205,13 @@ var (
 
 	// The path to the file on the host filesystem that contains the IB GUID distribution for IB VFs
 	InfinibandGUIDConfigFilePath = SriovConfBasePath + "/infiniband/guids"
+
+	// UdevFolder is the base path for udev rules on the host.
+	// It can be overridden at runtime via the UDEV_BASE_PATH environment variable.
+	UdevFolder          = getUdevBasePath()
+	HostUdevFolder      = Host + UdevFolder
+	UdevRulesFolder     = UdevFolder + "/rules.d"
+	HostUdevRulesFolder = Host + UdevRulesFolder
 )
 
 func getSriovConfBasePath() string {
@@ -225,4 +220,34 @@ func getSriovConfBasePath() string {
 	}
 
 	return defaultSriovConfBasePath
+}
+
+func getUdevBasePath() string {
+	if value := os.Getenv(udevBasePathEnvVar); value != "" {
+		return value
+	}
+
+	return defaultUdevBasePath
+}
+
+// NMUdevRuleContent returns the udev rule template for disabling NetworkManager on SR-IOV VFs.
+// The returned template has %%s placeholders for the VF ID list and PCI address.
+func NMUdevRuleContent() string {
+	return fmt.Sprintf(`SUBSYSTEM=="net", `+
+		`ACTION=="add|change|move", `+
+		`ATTRS{device}=="%%s", `+
+		`IMPORT{program}="%s/disable-nm-sriov.sh $env{INTERFACE} %%s"`,
+		UdevFolder)
+}
+
+// SwitchdevUdevRuleContent returns the udev rule template for renaming VF representors.
+// The returned template has %%s placeholders for the switch ID, port name, and PF name.
+func SwitchdevUdevRuleContent() string {
+	return fmt.Sprintf(`SUBSYSTEM=="net", `+
+		`ACTION=="add|move", `+
+		`ATTRS{phys_switch_id}=="%%s", `+
+		`ATTR{phys_port_name}=="pf%%svf*", `+
+		`IMPORT{program}="%s/switchdev-vf-link-name.sh $attr{phys_port_name}", `+
+		`NAME="%%s_$env{NUMBER}"`,
+		UdevFolder)
 }

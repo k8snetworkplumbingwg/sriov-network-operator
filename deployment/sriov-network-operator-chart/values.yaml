@@ -134,6 +134,10 @@ sriovOperatorConfig:
 # Base path for SR-IOV config files on host. Can be overridden via env SRIOV_CONF_BASE_PATH
 sriovConfBasePath: "/etc/sriov-operator"
 
+# Base path for udev rules on host. Set to /run/udev on Talos Linux where /etc is read-only.
+# Can be overridden via env UDEV_BASE_PATH
+udevBasePath: "/etc/udev"
+
 # Example for supportedExtraNICs values ['MyNIC: "8086 1521 1520"']
 supportedExtraNICs: []
 

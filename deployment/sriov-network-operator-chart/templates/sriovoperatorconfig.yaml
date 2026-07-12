@@ -26,9 +26,10 @@ spec:
   {{- end }}
   configDaemonEnvVars:
     SRIOV_CONF_BASE_PATH: {{ .Values.sriovConfBasePath | quote }}
+    UDEV_BASE_PATH: {{ .Values.udevBasePath | quote }}
     {{- with .Values.sriovOperatorConfig.configDaemonEnvVars }}
     {{- range $k, $v := .}}
-    {{- if ne $k "SRIOV_CONF_BASE_PATH" }}{{ printf "%s: %s" $k ($v | toString | quote) | nindent 4 }}{{ end }}
+    {{- if and (ne $k "SRIOV_CONF_BASE_PATH") (ne $k "UDEV_BASE_PATH") }}{{ printf "%s: %s" $k ($v | toString | quote) | nindent 4 }}{{ end }}
     {{- end }}
     {{- end }}
 {{ end }}

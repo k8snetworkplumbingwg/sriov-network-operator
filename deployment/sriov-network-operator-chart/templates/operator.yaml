@@ -127,6 +127,8 @@ spec:
               value: "{{ .Values.operator.staleNodeStateCleanupDelayMinutes }}"
             - name: SRIOV_CONF_BASE_PATH
               value: {{ .Values.sriovConfBasePath | quote }}
+            - name: UDEV_BASE_PATH
+              value: {{ .Values.udevBasePath | quote }}
             {{- range $k, $v := .Values.operator.extraEnv }}
             - name: {{ $k }}
               value: {{ $v | toString | quote }}
