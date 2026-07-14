@@ -20,7 +20,15 @@ load_manifest() {
       
       envsubst< namespace.yaml | ${OPERATOR_EXEC} apply -f -
     fi
-    files="service_account.yaml role.yaml role_binding.yaml clusterrole.yaml clusterrolebinding.yaml configmap.yaml sriovoperatorconfig.yaml operator.yaml"
+    files="service_account.yaml operands_service_account.yaml role.yaml operands_role.yaml role_binding.yaml operands_role_binding.yaml clusterrole.yaml operands_clusterrole.yaml clusterrolebinding.yaml operands_clusterrolebinding.yaml configmap.yaml"
+    case "${METRICS_EXPORTER_PROMETHEUS_OPERATOR_ENABLED:-}" in
+      [Tt][Rr][Uu][Ee])
+        : "${METRICS_EXPORTER_PROMETHEUS_OPERATOR_SERVICE_ACCOUNT:?must be set when Prometheus Operator integration is enabled}"
+        : "${METRICS_EXPORTER_PROMETHEUS_OPERATOR_NAMESPACE:?must be set when Prometheus Operator integration is enabled}"
+        files="${files} operands_prometheus_role.yaml operands_prometheus_role_binding.yaml"
+        ;;
+    esac
+    files="${files} sriovoperatorconfig.yaml operator.yaml"
     for m in ${files}; do
       if [ "$(echo "${EXCLUSIONS[@]}" | grep -o ${m} | wc -w | xargs)" == "0" ] ; then
         envsubst< ${m} | ${OPERATOR_EXEC} apply ${namespace:-} --validate=false -f -
