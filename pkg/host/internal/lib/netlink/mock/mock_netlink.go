@@ -138,6 +138,21 @@ func (mr *MockNetlinkLibMockRecorder) DevlinkGetDeviceParamByName(bus, device, p
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DevlinkGetDeviceParamByName", reflect.TypeOf((*MockNetlinkLib)(nil).DevlinkGetDeviceParamByName), bus, device, param)
 }
 
+// DevlinkGetDeviceParams mocks base method.
+func (m *MockNetlinkLib) DevlinkGetDeviceParams(bus, device string) ([]*netlink0.DevlinkParam, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DevlinkGetDeviceParams", bus, device)
+	ret0, _ := ret[0].([]*netlink0.DevlinkParam)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DevlinkGetDeviceParams indicates an expected call of DevlinkGetDeviceParams.
+func (mr *MockNetlinkLibMockRecorder) DevlinkGetDeviceParams(bus, device any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DevlinkGetDeviceParams", reflect.TypeOf((*MockNetlinkLib)(nil).DevlinkGetDeviceParams), bus, device)
+}
+
 // DevlinkSetDeviceParam mocks base method.
 func (m *MockNetlinkLib) DevlinkSetDeviceParam(bus, device, param string, cmode uint8, value any) error {
 	m.ctrl.T.Helper()

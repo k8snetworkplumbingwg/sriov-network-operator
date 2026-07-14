@@ -41,6 +41,20 @@ func (m *MockInterface) EXPECT() *MockInterfaceMockRecorder {
 	return m.recorder
 }
 
+// AddInterfaceToOVSBridge mocks base method.
+func (m *MockInterface) AddInterfaceToOVSBridge(ctx context.Context, bridgeName, ifaceName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddInterfaceToOVSBridge", ctx, bridgeName, ifaceName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AddInterfaceToOVSBridge indicates an expected call of AddInterfaceToOVSBridge.
+func (mr *MockInterfaceMockRecorder) AddInterfaceToOVSBridge(ctx, bridgeName, ifaceName any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddInterfaceToOVSBridge", reflect.TypeOf((*MockInterface)(nil).AddInterfaceToOVSBridge), ctx, bridgeName, ifaceName)
+}
+
 // CreateOVSBridge mocks base method.
 func (m *MockInterface) CreateOVSBridge(ctx context.Context, conf *v1.OVSConfigExt) error {
 	m.ctrl.T.Helper()
