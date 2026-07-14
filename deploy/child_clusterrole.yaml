@@ -1,0 +1,62 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: network-resources-injector
+rules:
+- apiGroups:
+    - k8s.cni.cncf.io
+  resources:
+    - network-attachment-definitions
+  verbs:
+    - watch
+    - list
+    - get
+- apiGroups:
+    - ""
+  resources:
+    - configmaps
+  verbs:
+    - watch
+    - list
+    - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: operator-webhook
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - nodes
+    - configmaps
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - sriovnetwork.openshift.io
+  resources:
+    - "*"
+  verbs:
+    - get
+    - list
+    - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sriov-metrics-kube-rbac-role
+rules:
+- apiGroups:
+    - authentication.k8s.io
+  resources:
+    - tokenreviews
+  verbs:
+    - create
+- apiGroups:
+    - authorization.k8s.io
+  resources:
+    - subjectaccessreviews
+  verbs:
+    - create
