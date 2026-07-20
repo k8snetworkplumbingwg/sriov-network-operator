@@ -405,7 +405,28 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 	}
 
 	if reqReboot {
+		rebootsCount, err := dn.hostHelpers.GetRebootCount(desiredNodeState.Generation)
+		if err != nil {
+			reqLogger.Error(err, "failed to read reboot count from disk")
+			return ctrl.Result{}, err
+		}
+		if rebootsCount >= consts.MaxRebootsPerGeneration {
+			reqLogger.Info("maximum reboot retries reached, setting sync status to failed")
+			dn.eventRecorder.SendEvent(ctx, "RebootLimitReached",
+				fmt.Sprintf("reached maximum number of allowed reboots (%d) while trying to configure node", consts.MaxRebootsPerGeneration))
+			err = dn.updateSyncState(ctx, desiredNodeState, consts.SyncStatusFailed,
+				fmt.Sprintf("reached maximum number of allowed reboots (%d) while trying to configure node", consts.MaxRebootsPerGeneration))
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+
 		reqLogger.Info("reboot node")
+		if err := dn.hostHelpers.IncrementRebootCounter(desiredNodeState.Generation); err != nil {
+			reqLogger.Error(err, "failed to increment reboot counter")
+			return ctrl.Result{}, err
+		}
 		dn.eventRecorder.SendEvent(ctx, "RebootNode", "Reboot node has been initiated")
 		return ctrl.Result{}, dn.rebootNode()
 	}
@@ -452,6 +473,11 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 	err = dn.updateSyncState(ctx, desiredNodeState, syncStatus, lastSyncError)
 	if err != nil {
 		reqLogger.Error(err, "failed to update sync status")
+		return ctrl.Result{}, err
+	}
+
+	if err := dn.hostHelpers.ResetRebootCounter(desiredNodeState.Generation); err != nil {
+		reqLogger.Error(err, "failed to reset reboot counter")
 		return ctrl.Result{}, err
 	}
 
