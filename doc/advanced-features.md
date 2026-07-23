@@ -119,6 +119,35 @@ spec:
 
 **Warning**: This feature may extend reboot times and should be tested thoroughly.
 
+#### 6. Dynamic Resource Allocation (`dynamicResourceAllocation`)
+
+**Description**: Enables the Dynamic Resource Allocation (DRA) driver instead of the traditional SR-IOV device plugin. When enabled, the operator deploys the DRA driver DaemonSet and creates SriovResourcePolicy and DeviceAttributes resources so SR-IOV VFs are advertised via Kubernetes ResourceSlices and ResourceClaims instead of extended resources on the node.
+
+**Default**: Disabled (operator uses the SR-IOV device plugin)
+
+**Use Case**: Clusters that want to use the DRA API for SR-IOV device allocation (e.g. ResourceClaimTemplate in pods) or that rely on DRA for scheduling and lifecycle.
+
+```yaml
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovOperatorConfig
+metadata:
+  name: default
+  namespace: sriov-network-operator
+spec:
+  featureGates:
+    dynamicResourceAllocation: true
+```
+
+**When enabled**:
+- The SR-IOV device plugin is not deployed; the DRA driver runs on the same nodes instead.
+- The operator creates per-node SriovResourcePolicy and per-resource-pool DeviceAttributes from SriovNetworkNodePolicy.
+- DeviceClasses are created so workloads can request SR-IOV resources via ResourceClaimTemplate.
+- Config daemon coordinates with the DRA driver (wait-for-config init) so the driver starts after SR-IOV configuration is applied.
+
+If the Kubernetes **DRAExtendedResource** feature gate is enabled on the cluster, the same DeviceClass can be used to request SR-IOV resources via pod `resources.limits` (extended resource name) in addition to ResourceClaimTemplate.
+
+**Requirements**: Kubernetes cluster with DRA support; DRA driver image configured (e.g. `images.sriovDraDriver` in Helm).
+
 ### Feature Gate Best Practices
 
 1. **Test in Development**: Always test feature gates in non-production environments

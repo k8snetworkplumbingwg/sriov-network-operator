@@ -18,6 +18,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/jaypipes/ghw v0.24.0
 	github.com/jaypipes/pcidb v1.1.1
+	github.com/k8snetworkplumbingwg/dra-driver-sriov v0.0.0-20260421084301-bd582cc5be05
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
 	github.com/k8snetworkplumbingwg/sriov-network-device-plugin v0.0.0-20221127172732-a5a7395122e3
 	github.com/k8snetworkplumbingwg/sriovnet v1.2.0
@@ -158,17 +159,18 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251222181119-0a764e51fe1b // indirect
-	google.golang.org/grpc v1.79.3 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
+	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9 // indirect
 	k8s.io/apiserver v0.35.2 // indirect
 	k8s.io/cli-runtime v0.35.2 // indirect
+	k8s.io/dynamic-resource-allocation v0.35.2 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250922181213-ec3ebc5fd46b // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
-	k8s.io/kubelet v0.34.1 // indirect
+	k8s.io/kubelet v0.35.2 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/kustomize/api v0.20.1 // indirect
 	sigs.k8s.io/kustomize/kyaml v0.20.1 // indirect
