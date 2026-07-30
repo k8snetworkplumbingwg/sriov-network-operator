@@ -3,10 +3,12 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,6 +52,12 @@ func (dr *DrainReconcile) handleNodeIdleNodeStateDrainingOrCompleted(ctx context
 	err = utils.AnnotateObject(ctx, nodeNetworkState, constants.NodeStateDrainAnnotationCurrent, constants.DrainIdle, dr.Client)
 	if err != nil {
 		reqLogger.Error(err, "failed to annotate node with annotation", "annotation", constants.DrainIdle)
+		return ctrl.Result{}, err
+	}
+
+	// Update drain conditions to idle state
+	if err := dr.updateDrainConditions(ctx, nodeNetworkState, sriovnetworkv1.DrainStateIdle, ""); err != nil {
+		reqLogger.Error(err, "failed to update drain conditions to idle state")
 		return ctrl.Result{}, err
 	}
 
@@ -105,8 +113,16 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 		}
 	}
 
+	// Collect all drain errors (e.g. PDB violations, eviction failures) so the
+	// condition message surfaces every issue instead of only the first one.
+	var drainErrors []string
+	onDrainError := func(drainErr error) {
+		drainErrors = append(drainErrors, drainErr.Error())
+		reqLogger.Info("drain encountered error", "error", drainErr)
+	}
+
 	// call the drain function that will also call drain to other platform providers like openshift
-	drained, err := dr.drainer.DrainNode(ctx, node, fullNodeDrain, singleNode)
+	drained, err := dr.drainer.DrainNode(ctx, node, fullNodeDrain, singleNode, onDrainError)
 	if err != nil {
 		reqLogger.Error(err, "error trying to drain the node")
 		dr.recorder.Eventf(nodeNetworkState, nil,
@@ -114,6 +130,15 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 			"DrainController",
 			"DrainNode",
 			"failed to drain node")
+		// Use the collected errors if available (contain the real reasons like PDB violations),
+		// otherwise fall back to the returned error (which might be a generic timeout).
+		errorMessage := strings.Join(drainErrors, "; ")
+		if errorMessage == "" {
+			errorMessage = err.Error()
+		}
+		if condErr := dr.updateDrainConditions(ctx, nodeNetworkState, sriovnetworkv1.DrainStateDrainingWithErrors, errorMessage); condErr != nil {
+			reqLogger.Error(condErr, "failed to update drain conditions to degraded state")
+		}
 		return reconcile.Result{}, err
 	}
 
@@ -126,6 +151,13 @@ func (dr *DrainReconcile) handleNodeDrainOrReboot(ctx context.Context,
 			"DrainNode",
 			"node drain operation was not completed")
 		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
+	}
+
+	// Update drain conditions to completed state
+	// this needs to be done before we annotate the node state with drain completed
+	if err := dr.updateDrainConditions(ctx, nodeNetworkState, sriovnetworkv1.DrainStateComplete, ""); err != nil {
+		reqLogger.Error(err, "failed to update drain conditions to completed state")
+		return ctrl.Result{}, err
 	}
 
 	// if we manage to drain we label the node state with drain completed and finish
@@ -191,23 +223,40 @@ func (dr *DrainReconcile) tryDrainNode(ctx context.Context, node *corev1.Node) (
 	reqLogger.Info("Max node allowed to be draining at the same time", "MaxParallelNodeConfiguration", maxUnv)
 	reqLogger.Info("Count of draining", "drainingNodes", current)
 
+	if currentSnns == nil {
+		return nil, fmt.Errorf("failed to find sriov network node state for requested node")
+	}
+
+	if utils.ObjectHasAnnotation(currentSnns, constants.NodeStateDrainAnnotationCurrent, constants.Draining) ||
+		utils.ObjectHasAnnotation(currentSnns, constants.NodeStateDrainAnnotationCurrent, constants.DrainComplete) {
+		reqLogger.Info("node drain already transitioned while waiting for drain slot check",
+			"current-state", currentSnns.GetAnnotations()[constants.NodeStateDrainAnnotationCurrent])
+		return nil, nil
+	}
+
 	// if maxUnv is zero this means we drain all the nodes in parallel without a limit
 	if maxUnv == -1 {
 		reqLogger.Info("draining all the nodes in parallel")
 	} else if current >= maxUnv {
+		if err := dr.updateDrainConditions(ctx, currentSnns, sriovnetworkv1.DrainStatePending, "Waiting for an available drain slot"); err != nil {
+			reqLogger.Error(err, "failed to update drain conditions to pending state")
+			return nil, err
+		}
 		// the node requested to be drained, but we are at the limit so we re-enqueue the request
 		reqLogger.Info("MaxParallelNodeConfiguration limit reached for draining nodes re-enqueue the request")
 		// TODO: make this time configurable
 		return &reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
 	}
 
-	if currentSnns == nil {
-		return nil, fmt.Errorf("failed to find sriov network node state for requested node")
-	}
-
 	err = utils.AnnotateObject(ctx, currentSnns, constants.NodeStateDrainAnnotationCurrent, constants.Draining, dr.Client)
 	if err != nil {
 		reqLogger.Error(err, "failed to annotate node with annotation", "annotation", constants.Draining)
+		return nil, err
+	}
+
+	// Update drain conditions to draining state - use currentSnns for consistency
+	if err := dr.updateDrainConditions(ctx, currentSnns, sriovnetworkv1.DrainStateDraining, ""); err != nil {
+		reqLogger.Error(err, "failed to update drain conditions to draining state")
 		return nil, err
 	}
 
@@ -302,4 +351,35 @@ func (dr *DrainReconcile) findNodePoolConfig(ctx context.Context, node *corev1.N
 		}
 		return defaultPoolConfig, defaultNodeLists, nil
 	}
+}
+
+// updateDrainConditions updates the drain-related conditions on the SriovNetworkNodeState
+func (dr *DrainReconcile) updateDrainConditions(ctx context.Context, nodeNetworkState *sriovnetworkv1.SriovNetworkNodeState, state sriovnetworkv1.DrainState, errorMessage string) error {
+	reqLogger := ctx.Value(constants.LoggerContextKey).(logr.Logger).WithName("updateDrainConditions")
+
+	// Get the latest version of the nodeNetworkState
+	latestState := &sriovnetworkv1.SriovNetworkNodeState{}
+	if err := dr.Get(ctx, client.ObjectKey{Namespace: nodeNetworkState.Namespace, Name: nodeNetworkState.Name}, latestState); err != nil {
+		if errors.IsNotFound(err) {
+			reqLogger.V(2).Info("node state no longer exists, skipping drain condition update")
+			return nil
+		}
+		return err
+	}
+
+	conditionState := latestState.DeepCopy()
+	conditionState.SetNodeStateDrainConditions(state, errorMessage)
+
+	drainingCondition := meta.FindStatusCondition(conditionState.Status.Conditions, sriovnetworkv1.ConditionDraining)
+	if drainingCondition == nil {
+		return nil
+	}
+
+	if err := dr.StatusPatcher.ApplyCondition(ctx, latestState, *drainingCondition); err != nil {
+		reqLogger.Error(err, "failed to update drain conditions")
+		return err
+	}
+
+	reqLogger.V(2).Info("updated drain conditions", "state", state)
+	return nil
 }
