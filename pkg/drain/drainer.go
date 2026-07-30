@@ -179,9 +179,14 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 			cleanMsg := strings.ReplaceAll(msg, "\n", "")
 			if IsInformationalDrainErrOutMessage(cleanMsg) {
 				logger.Info(cleanMsg, kv...)
+			} else {
+				logger.Error(nil, cleanMsg, kv...)
+			}
+			// Retry progress is informational but still recorded so the condition
+			// names the pods blocking the drain. Empty and WARNING: lines are not.
+			if isIgnoredDrainErrOutMessage(cleanMsg) {
 				return
 			}
-			logger.Error(nil, cleanMsg, kv...)
 			onError(fmt.Errorf("%s", cleanMsg))
 		}},
 	}
@@ -211,6 +216,13 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 	return drainer
 }
 
+// isIgnoredDrainErrOutMessage reports ErrOut lines that should not be recorded as
+// drain errors, such as empty output and kubectl WARNING: progress (e.g. DaemonSet pods).
+func isIgnoredDrainErrOutMessage(msg string) bool {
+	cleanMsg := strings.TrimSpace(strings.ReplaceAll(msg, "\n", ""))
+	return cleanMsg == "" || strings.HasPrefix(cleanMsg, "WARNING:")
+}
+
 // IsInformationalDrainErrOutMessage reports whether msg is a non-terminal progress or
 // warning line from k8s.io/kubectl/pkg/drain (v0.36.3). Terminal drain failures are
 // returned from RunNodeDrain and are not written to ErrOut.
@@ -220,12 +232,9 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 //   - drain.go evictPods (TooManyRequests): "error when evicting pods/... (will retry after ...)"
 //   - drain.go evictPods (namespace terminating): "error when evicting pod ... from terminating namespace ... (will retry after ...)"
 func IsInformationalDrainErrOutMessage(msg string) bool {
+	if isIgnoredDrainErrOutMessage(msg) {
+		return true
+	}
 	cleanMsg := strings.TrimSpace(strings.ReplaceAll(msg, "\n", ""))
-	if cleanMsg == "" {
-		return true
-	}
-	if strings.HasPrefix(cleanMsg, "WARNING:") {
-		return true
-	}
 	return strings.Contains(cleanMsg, "(will retry after")
 }
