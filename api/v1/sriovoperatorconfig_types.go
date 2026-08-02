@@ -39,6 +39,46 @@ func (pns PluginNameSlice) ToStringSlice() []string {
 	return ss
 }
 
+// LogConfig contains configuration for config daemon log persistence on the host filesystem.
+type LogConfig struct {
+	// Enabled controls whether persistent log storage is active.
+	// Defaults to true.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MaxSizeMB is the maximum size in megabytes of a log file before rotation.
+	// Defaults to 100. Minimum 1 MB; maximum 1024 MB (1 GB).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1024
+	// +optional
+	MaxSizeMB *int `json:"maxSizeMB,omitempty"`
+
+	// MaxFiles is the maximum number of old log files to retain after rotation.
+	// Defaults to 5. Minimum 1; maximum 20.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +optional
+	MaxFiles *int `json:"maxFiles,omitempty"`
+
+	// MaxAgeDays is the maximum number of days to retain old log files.
+	// Defaults to 30. Set to 0 to disable age-based cleanup (files are then
+	// bounded only by MaxFiles). Maximum 365.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=365
+	// +optional
+	MaxAgeDays *int `json:"maxAgeDays,omitempty"`
+
+	// Compress controls whether rotated log files are compressed using gzip.
+	// Defaults to true.
+	// +optional
+	Compress *bool `json:"compress,omitempty"`
+
+	// HostPath is the directory on the host where log files are stored.
+	// Defaults to "/var/log/sriov-network-config-daemon".
+	// +optional
+	HostPath *string `json:"hostPath,omitempty"`
+}
+
 // SriovOperatorConfigSpec defines the desired state of SriovOperatorConfig
 type SriovOperatorConfigSpec struct {
 	// NodeSelector selects the nodes to be configured
@@ -68,6 +108,10 @@ type SriovOperatorConfigSpec struct {
 	// ConfigDaemonEnvVars allows to specify custom environment variables
 	// for the sriov-network-config-daemon
 	ConfigDaemonEnvVars map[string]string `json:"configDaemonEnvVars,omitempty"`
+	// LogConfig contains configuration for config daemon log persistence.
+	// When unset, persistent logging is enabled with default values.
+	// +optional
+	LogConfig *LogConfig `json:"logConfig,omitempty"`
 }
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig

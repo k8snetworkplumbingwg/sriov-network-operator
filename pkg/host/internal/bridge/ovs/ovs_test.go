@@ -187,11 +187,11 @@ var _ = Describe("OVS", func() {
 	)
 	BeforeEach(func() {
 		ctx = context.Background()
-		origInChroot := vars.InChroot
+		origInChroot := vars.InChroot.Load()
 		origSocketValue := vars.OVSDBSocketPath
 		origFSRoot := vars.FilesystemRoot
 		DeferCleanup(func() {
-			vars.InChroot = origInChroot
+			vars.InChroot.Store(origInChroot)
 			vars.OVSDBSocketPath = origSocketValue
 			vars.FilesystemRoot = origFSRoot
 		})
@@ -264,7 +264,7 @@ var _ = Describe("OVS", func() {
 					Dirs:  []string{"/host/ovs"},
 					Files: map[string][]byte{"/host/ovs/ovsdb.sock": {}},
 				})
-				vars.InChroot = false
+				vars.InChroot.Store(false)
 				vars.OVSDBSocketPath = "unix:///ovs/ovsdb.sock"
 				sock, err := getDBSocketPath()
 				Expect(err).NotTo(HaveOccurred())
@@ -275,7 +275,7 @@ var _ = Describe("OVS", func() {
 					Dirs:  []string{"/ovs"},
 					Files: map[string][]byte{"/ovs/ovsdb.sock": {}},
 				})
-				vars.InChroot = true
+				vars.InChroot.Store(true)
 				vars.OVSDBSocketPath = "unix:///ovs/ovsdb.sock"
 				sock, err := getDBSocketPath()
 				Expect(err).NotTo(HaveOccurred())
@@ -286,7 +286,7 @@ var _ = Describe("OVS", func() {
 					Dirs:  []string{"/host/run/ovs"},
 					Files: map[string][]byte{"/host/run/ovs/ovsdb.sock": {}},
 				})
-				vars.InChroot = false
+				vars.InChroot.Store(false)
 				vars.OVSDBSocketPath = "unix:///var/run/ovs/ovsdb.sock"
 				sock, err := getDBSocketPath()
 				Expect(err).NotTo(HaveOccurred())
@@ -307,7 +307,7 @@ var _ = Describe("OVS", func() {
 			ovs              Interface
 		)
 		BeforeEach(func() {
-			vars.InChroot = true
+			vars.InChroot.Store(true)
 			tempDir, err = os.MkdirTemp("", "sriov-operator-ovs-test-dir*")
 			testServerSocket = filepath.Join(tempDir, "ovsdb.sock")
 			Expect(err).NotTo(HaveOccurred())

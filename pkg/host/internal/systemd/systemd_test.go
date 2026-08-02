@@ -101,7 +101,7 @@ lastSyncError: ""`)
 		err = os.MkdirAll(path.Join(tempDir, "/var/lib/sriov/"), 0777)
 		Expect(err).ToNot(HaveOccurred())
 
-		vars.InChroot = true
+		vars.InChroot.Store(true)
 		vars.FilesystemRoot = tempDir
 		vars.PlatformType = consts.Baremetal
 		sriovnetworkv1.NicIDMap = []string{}
