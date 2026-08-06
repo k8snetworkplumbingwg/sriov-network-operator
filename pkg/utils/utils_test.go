@@ -10,6 +10,81 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestValidateOvsConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    map[string]string
+		expectErr bool
+	}{
+		{
+			name:      "nil map",
+			config:    nil,
+			expectErr: false,
+		},
+		{
+			name:      "empty map",
+			config:    map[string]string{},
+			expectErr: false,
+		},
+		{
+			name:      "valid keys and values",
+			config:    map[string]string{"hw-offload": "true", "tc_policy": "none"},
+			expectErr: false,
+		},
+		{
+			name:      "value with special characters other than single quote",
+			config:    map[string]string{"key": `value with "double" quotes and $pecial`},
+			expectErr: false,
+		},
+		{
+			name:      "key with dot",
+			config:    map[string]string{"invalid.key": "value"},
+			expectErr: true,
+		},
+		{
+			name:      "key with space",
+			config:    map[string]string{"invalid key": "value"},
+			expectErr: true,
+		},
+		{
+			name:      "key with shell special character",
+			config:    map[string]string{"key$name": "value"},
+			expectErr: true,
+		},
+		{
+			name:      "empty key",
+			config:    map[string]string{"": "value"},
+			expectErr: true,
+		},
+		{
+			name:      "value with single quote",
+			config:    map[string]string{"key": "val'ue"},
+			expectErr: true,
+		},
+		{
+			name:      "value is only a single quote",
+			config:    map[string]string{"key": "'"},
+			expectErr: true,
+		},
+		{
+			name:      "second key invalid",
+			config:    map[string]string{"good-key": "value", "bad key": "value"},
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateOvsConfig(tt.config)
+			if tt.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestWriteFileWithTimeout_Success(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test")
 	data := []byte("hello")
