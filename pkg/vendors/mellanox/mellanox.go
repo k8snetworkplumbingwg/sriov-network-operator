@@ -56,6 +56,14 @@ type MlxNic struct {
 	LinkTypeP2  string
 }
 
+// MlxNicFwDataCache holds all cached mstconfig query results for a single NIC.
+type MlxNicFwDataCache struct {
+	FwCurrent     *MlxNic
+	FwNext        *MlxNic
+	BlueFieldMode BlueFieldMode
+	BfModeQueried bool // whether BlueFieldMode was populated (since zero-value is a valid mode)
+}
+
 //go:generate ../../../bin/mockgen -destination mock/mock_mellanox.go -source mellanox.go
 type MellanoxInterface interface {
 	MstConfigReadData(string) (string, string, error)
@@ -64,18 +72,45 @@ type MellanoxInterface interface {
 
 	MlxConfigFW(attributesToChange map[string]MlxNic) error
 	MlxResetFW(pciAddresses []string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) error
+
+	// SetGeneration sets the NodeState generation for cache invalidation.
+	// If the generation differs from the cached one, the cache is fully invalidated.
+	SetGeneration(gen int64)
+	// InvalidateCache clears the entire mstconfig query cache.
+	InvalidateCache()
 }
 
 type mellanoxHelper struct {
-	utils      utils.CmdInterface
-	hostHelper host.HostManagerInterface
+	utils           utils.CmdInterface
+	hostHelper      host.HostManagerInterface
+	cacheGeneration int64
+	cache           map[string]*MlxNicFwDataCache // keyed by PCI address
 }
 
 func New(utilsHelper utils.CmdInterface, hostHelper host.HostManagerInterface) MellanoxInterface {
 	return &mellanoxHelper{
 		utils:      utilsHelper,
 		hostHelper: hostHelper,
+		cache:      make(map[string]*MlxNicFwDataCache),
 	}
+}
+
+func (m *mellanoxHelper) SetGeneration(gen int64) {
+	if m.cacheGeneration != gen {
+		log.Log.V(2).Info("mellanox cache: generation changed, invalidating cache",
+			"old", m.cacheGeneration, "new", gen)
+		m.InvalidateCache()
+		m.cacheGeneration = gen
+	}
+}
+
+func (m *mellanoxHelper) InvalidateCache() {
+	m.cache = make(map[string]*MlxNicFwDataCache)
+}
+
+// invalidateCacheEntry removes a single PCI address entry from the cache.
+func (m *mellanoxHelper) invalidateCacheEntry(pciAddress string) {
+	delete(m.cache, pciAddress)
 }
 
 func (m *mellanoxHelper) MstConfigReadData(pciAddress string) (string, string, error) {
@@ -87,6 +122,13 @@ func (m *mellanoxHelper) MstConfigReadData(pciAddress string) (string, string, e
 
 func (m *mellanoxHelper) GetMellanoxBlueFieldMode(PciAddress string) (BlueFieldMode, error) {
 	log.Log.V(2).Info("MellanoxBlueFieldMode(): checking mode for device", "device", PciAddress)
+
+	// Check cache first
+	if entry, ok := m.cache[PciAddress]; ok && entry.BfModeQueried {
+		log.Log.V(2).Info("MellanoxBlueFieldMode(): returning cached result", "device", PciAddress)
+		return entry.BlueFieldMode, nil
+	}
+
 	stdout, stderr, err := m.MstConfigReadData(PciAddress)
 	if err != nil {
 		log.Log.Error(err, "MellanoxBlueFieldMode(): failed to get mlx nic fw data", "stderr", stderr)
@@ -125,6 +167,7 @@ func (m *mellanoxHelper) GetMellanoxBlueFieldMode(PciAddress string) (BlueFieldM
 		return -1, fmt.Errorf("failed to find %s in the mstconfig output command", internalCPUModel)
 	}
 
+	var bfMode BlueFieldMode
 	// check for DPU
 	if strings.Contains(internalCPUPageSupplierstatus, ecpf) &&
 		strings.Contains(internalCPUEswitchManagerStatus, ecpf) &&
@@ -132,19 +175,30 @@ func (m *mellanoxHelper) GetMellanoxBlueFieldMode(PciAddress string) (BlueFieldM
 		strings.Contains(internalCPUOffloadEngineStatus, enabled) &&
 		strings.Contains(internalCPUModelStatus, embeddedCPU) {
 		log.Log.V(2).Info("MellanoxBlueFieldMode(): device in DPU mode", "device", PciAddress)
-		return BluefieldDpu, nil
+		bfMode = BluefieldDpu
 	} else if strings.Contains(internalCPUPageSupplierstatus, extHostPf) &&
 		strings.Contains(internalCPUEswitchManagerStatus, extHostPf) &&
 		strings.Contains(internalCPUIbVportoStatus, extHostPf) &&
 		strings.Contains(internalCPUOffloadEngineStatus, disabled) &&
 		strings.Contains(internalCPUModelStatus, embeddedCPU) {
 		log.Log.V(2).Info("MellanoxBlueFieldMode(): device in ConnectX mode", "device", PciAddress)
-		return BluefieldConnectXMode, nil
+		bfMode = BluefieldConnectXMode
+	} else {
+		log.Log.Error(nil, "MellanoxBlueFieldMode(): unknown device status",
+			"device", PciAddress, "mstconfig-output", stdout)
+		return -1, fmt.Errorf("MellanoxBlueFieldMode(): unknown device status for %s", PciAddress)
 	}
 
-	log.Log.Error(err, "MellanoxBlueFieldMode(): unknown device status",
-		"device", PciAddress, "mstconfig-output", stdout)
-	return -1, fmt.Errorf("MellanoxBlueFieldMode(): unknown device status for %s", PciAddress)
+	// Store in cache
+	entry := m.cache[PciAddress]
+	if entry == nil {
+		entry = &MlxNicFwDataCache{}
+		m.cache[PciAddress] = entry
+	}
+	entry.BlueFieldMode = bfMode
+	entry.BfModeQueried = true
+
+	return bfMode, nil
 }
 
 func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) error {
@@ -172,6 +226,9 @@ func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus ma
 		_, stderr, err := m.utils.RunCommand("mstfwreset", cmdArgs...)
 		if err != nil {
 			log.Log.Error(err, "mellanox-plugin resetFW(): mstfwreset failed, continuing as best-effort", "stderr", stderr, "pciAddress", pciAddress)
+		} else {
+			// Invalidate cache for this PCI address after successful firmware reset
+			m.invalidateCacheEntry(pciAddress)
 		}
 	}
 
@@ -215,12 +272,24 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 			log.Log.Error(err, "mellanox-plugin configFW(): failed", "stderr", strerr)
 			return err
 		}
+		// Invalidate cache for this PCI address after successful firmware write
+		m.invalidateCacheEntry(pciAddr)
 	}
 	return nil
 }
 
 func (m *mellanoxHelper) GetMlxNicFwData(pciAddress string) (current, next *MlxNic, err error) {
 	log.Log.Info("mellanox-plugin getMlnxNicFwData()", "device", pciAddress)
+
+	// Check cache first
+	if entry, ok := m.cache[pciAddress]; ok && entry.FwCurrent != nil && entry.FwNext != nil {
+		log.Log.V(2).Info("mellanox-plugin getMlnxNicFwData(): returning cached result", "device", pciAddress)
+		// Return copies to prevent callers from mutating cached data
+		currentCopy := *entry.FwCurrent
+		nextCopy := *entry.FwNext
+		return &currentCopy, &nextCopy, nil
+	}
+
 	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2}
 
 	out, stderr, err := m.MstConfigReadData(pciAddress)
@@ -237,7 +306,20 @@ func (m *mellanoxHelper) GetMlxNicFwData(pciAddress string) (current, next *MlxN
 	next, err = mlnxNicFromMap(mstNextData)
 	if err != nil {
 		log.Log.Error(err, "mellanox-plugin mlnxNicFromMap() for next mstconfig data failed")
+		return
 	}
+
+	// Store copies in cache to prevent callers from mutating cached data
+	entry := m.cache[pciAddress]
+	if entry == nil {
+		entry = &MlxNicFwDataCache{}
+		m.cache[pciAddress] = entry
+	}
+	currentCopy := *current
+	nextCopy := *next
+	entry.FwCurrent = &currentCopy
+	entry.FwNext = &nextCopy
+
 	return
 }
 
