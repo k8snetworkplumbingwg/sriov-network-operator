@@ -5,11 +5,13 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/client-go/util/retry"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -17,45 +19,76 @@ const (
 	Unknown = "Unknown"
 )
 
-func (dn *NodeReconciler) updateSyncState(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, status, failedMessage string) error {
+// updateSyncState updates daemon-owned status fields and configuration conditions
+// via a single Server-Side Apply call. SSA eliminates resource-version conflicts,
+// so no RetryOnConflict loop is needed. Drain-owned conditions are not included
+// in the payload and remain under the drain controller's field manager.
+func (dn *NodeReconciler) updateSyncState(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, syncStatus, failedMessage string, waitingForDrain bool) error {
 	funcLog := log.Log.WithName("updateSyncState")
-	currentNodeState := &sriovnetworkv1.SriovNetworkNodeState{}
-	desiredNodeState.Status.SyncStatus = status
+
+	desiredNodeState.Status.SyncStatus = syncStatus
 	desiredNodeState.Status.LastSyncError = failedMessage
 
-	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if err := dn.client.Get(ctx, client.ObjectKey{Namespace: desiredNodeState.Namespace, Name: desiredNodeState.Name}, currentNodeState); err != nil {
-			funcLog.Error(err, "failed to get latest node state",
-				"SyncStatus", status,
-				"LastSyncError", failedMessage)
-			return err
-		}
-		// update the object meta if not the patch can fail if the object did change
-		desiredNodeState.ObjectMeta = currentNodeState.ObjectMeta
-
-		funcLog.V(2).Info("update nodeState status",
-			"CurrentSyncStatus", currentNodeState.Status.SyncStatus,
-			"CurrentLastSyncError", currentNodeState.Status.LastSyncError,
-			"NewSyncStatus", desiredNodeState.Status.SyncStatus,
-			"NewFailedMessage", desiredNodeState.Status.LastSyncError)
-
-		err := dn.client.Status().Patch(ctx, desiredNodeState, client.MergeFrom(currentNodeState))
-		if err != nil {
-			funcLog.Error(err, "failed to update node state status",
-				"SyncStatus", status,
-				"LastSyncError", failedMessage)
-			return err
-		}
-		return nil
-	})
-
-	if retryErr != nil {
-		funcLog.Error(retryErr, "failed to update node state status")
-		return retryErr
+	currentNodeState := &sriovnetworkv1.SriovNetworkNodeState{}
+	if err := dn.client.Get(ctx, client.ObjectKey{Namespace: desiredNodeState.Namespace, Name: desiredNodeState.Name}, currentNodeState); err != nil {
+		funcLog.Error(err, "failed to get latest node state",
+			"SyncStatus", syncStatus,
+			"LastSyncError", failedMessage)
+		return err
 	}
 
-	dn.recordStatusChangeEvent(ctx, currentNodeState.Status.SyncStatus, status, failedMessage)
+	statusFieldsChanged := !currentNodeState.Status.StatusFieldsEqual(&desiredNodeState.Status)
+
+	conditionState := currentNodeState.DeepCopy()
+	conditionState.SetNodeStateConfigurationConditions(syncStatus, failedMessage, waitingForDrain)
+	configConditions := configurationOwnedConditions(conditionState.Status.Conditions)
+	currentOwnedConditions := configurationOwnedConditions(currentNodeState.Status.Conditions)
+	conditionsChanged := status.HasTransitions(currentOwnedConditions, configConditions)
+
+	if !statusFieldsChanged && !conditionsChanged {
+		funcLog.V(2).Info("nodeState status unchanged, skipping update",
+			"SyncStatus", syncStatus)
+		return nil
+	}
+
+	funcLog.V(2).Info("update nodeState status",
+		"CurrentSyncStatus", currentNodeState.Status.SyncStatus,
+		"CurrentLastSyncError", currentNodeState.Status.LastSyncError,
+		"NewSyncStatus", desiredNodeState.Status.SyncStatus,
+		"NewFailedMessage", desiredNodeState.Status.LastSyncError)
+
+	statusFields := map[string]interface{}{
+		"syncStatus":    desiredNodeState.Status.SyncStatus,
+		"lastSyncError": desiredNodeState.Status.LastSyncError,
+		"interfaces":    desiredNodeState.Status.Interfaces,
+		"bridges":       desiredNodeState.Status.Bridges,
+		"system":        desiredNodeState.Status.System,
+	}
+
+	if err := dn.statusPatcher.ApplyStatus(ctx, currentNodeState, statusFields, configConditions); err != nil {
+		funcLog.Error(err, "failed to apply node state status",
+			"SyncStatus", syncStatus,
+			"LastSyncError", failedMessage)
+		return err
+	}
+
+	dn.recordStatusChangeEvent(ctx, currentNodeState.Status.SyncStatus, syncStatus, failedMessage)
 	return nil
+}
+
+// configurationOwnedConditions returns the condition entries owned by the config daemon.
+func configurationOwnedConditions(conditions []metav1.Condition) []metav1.Condition {
+	owned := make([]metav1.Condition, 0, 2)
+
+	if condition := meta.FindStatusCondition(conditions, sriovnetworkv1.ConditionProgressing); condition != nil {
+		owned = append(owned, *condition)
+	}
+
+	if condition := meta.FindStatusCondition(conditions, sriovnetworkv1.ConditionReady); condition != nil {
+		owned = append(owned, *condition)
+	}
+
+	return owned
 }
 
 func (dn *NodeReconciler) shouldUpdateStatus(current, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) bool {
