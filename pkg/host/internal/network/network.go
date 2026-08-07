@@ -441,6 +441,12 @@ func (n *network) DiscoverRDMASubsystem() (string, error) {
 
 func (n *network) SetRDMASubsystem(mode string) error {
 	log.Log.Info("SetRDMASubsystem(): Updating RDMA subsystem mode", "mode", mode)
+
+	if os.Getenv("SKIP_MODPROBE_CONFIG") == "true" {
+		log.Log.Info("SetRDMASubsystem(): SKIP_MODPROBE_CONFIG is set, skipping modprobe config file creation")
+		return nil
+	}
+
 	path := filepath.Join(vars.FilesystemRoot, consts.Host, "etc", "modprobe.d", "sriov_network_operator_modules_config.conf")
 
 	if mode == "" {
