@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -72,6 +73,7 @@ type SriovOperatorConfigSpec struct {
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig
 type SriovOperatorConfigStatus struct {
+	ConditionStatus `json:",inline"`
 	// Show the runtime status of the network resource injector webhook
 	Injector string `json:"injector,omitempty"`
 	// Show the runtime status of the operator admission controller webhook
@@ -80,6 +82,8 @@ type SriovOperatorConfigStatus struct {
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SriovOperatorConfig is the Schema for the sriovoperatorconfigs API
 type SriovOperatorConfig struct {
@@ -100,5 +104,8 @@ type SriovOperatorConfigList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&SriovOperatorConfig{}, &SriovOperatorConfigList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &SriovOperatorConfig{}, &SriovOperatorConfigList{})
+		return nil
+	})
 }

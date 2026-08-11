@@ -18,6 +18,7 @@ package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // OVSNetworkSpec defines the desired state of OVSNetwork
@@ -63,7 +64,7 @@ type TrunkConfig struct {
 
 // OVSNetworkStatus defines the observed state of OVSNetwork
 type OVSNetworkStatus struct {
-	NetworkStatus `json:",inline"`
+	ConditionStatus `json:",inline"`
 }
 
 //+kubebuilder:object:root=true
@@ -90,5 +91,8 @@ type OVSNetworkList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&OVSNetwork{}, &OVSNetworkList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &OVSNetwork{}, &OVSNetworkList{})
+		return nil
+	})
 }
