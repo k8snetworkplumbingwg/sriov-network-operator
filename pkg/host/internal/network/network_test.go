@@ -3,6 +3,7 @@ package network
 import (
 	"fmt"
 	"net"
+	"os"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -479,6 +480,34 @@ var _ = Describe("Network", func() {
 				Dirs: []string{"/host/etc/modprobe.d"},
 			})
 			Expect(n.SetRDMASubsystem("")).NotTo(HaveOccurred())
+		})
+
+		It("should preserve the existing file when SKIP_MODPROBE_CONFIG is set with a non-empty mode", func() {
+			os.Setenv("SKIP_MODPROBE_CONFIG", "true")
+			defer os.Unsetenv("SKIP_MODPROBE_CONFIG")
+
+			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
+				Dirs: []string{"/host/etc/modprobe.d"},
+				Files: map[string][]byte{
+					"/host/etc/modprobe.d/sriov_network_operator_modules_config.conf": []byte("# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n"),
+				},
+			})
+			Expect(n.SetRDMASubsystem("shared")).NotTo(HaveOccurred())
+			helpers.GinkgoAssertFileContentsEquals("/host/etc/modprobe.d/sriov_network_operator_modules_config.conf", "# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n")
+		})
+
+		It("should preserve the existing file when SKIP_MODPROBE_CONFIG is set with an empty mode", func() {
+			os.Setenv("SKIP_MODPROBE_CONFIG", "true")
+			defer os.Unsetenv("SKIP_MODPROBE_CONFIG")
+
+			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
+				Dirs: []string{"/host/etc/modprobe.d"},
+				Files: map[string][]byte{
+					"/host/etc/modprobe.d/sriov_network_operator_modules_config.conf": []byte("# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n"),
+				},
+			})
+			Expect(n.SetRDMASubsystem("")).NotTo(HaveOccurred())
+			helpers.GinkgoAssertFileContentsEquals("/host/etc/modprobe.d/sriov_network_operator_modules_config.conf", "# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n")
 		})
 	})
 })
