@@ -889,18 +889,18 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 		})
 		It("should render SRIOV_CONF_BASE_PATH from ConfigDaemonEnvVars into sriov-network-config-daemon env", func() {
 			config := &sriovnetworkv1.SriovOperatorConfig{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred(), "failed to get the default SriovOperatorConfig")
 
 			config.Spec.ConfigDaemonEnvVars = map[string]string{"SRIOV_CONF_BASE_PATH": "/custom/path"}
 			err := k8sClient.Update(ctx, config)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(err).NotTo(HaveOccurred(), "failed to update SriovOperatorConfig with SRIOV_CONF_BASE_PATH env var")
 
 			Eventually(func(g Gomega) {
 				daemonSet := &appsv1.DaemonSet{}
 				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-network-config-daemon", Namespace: testNamespace}, daemonSet)
-				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(err).NotTo(HaveOccurred(), "failed to get the sriov-network-config-daemon DaemonSet")
 				g.Expect(daemonSet.Spec.Template.Spec.Containers[0].Env).To(ContainElement(
-					corev1.EnvVar{Name: "SRIOV_CONF_BASE_PATH", Value: "/custom/path"}))
+					corev1.EnvVar{Name: "SRIOV_CONF_BASE_PATH", Value: "/custom/path"}), "expected sriov-network-config-daemon env to contain SRIOV_CONF_BASE_PATH with the configured value")
 			}, util.APITimeout*10, util.RetryInterval).Should(Succeed())
 		})
 		It("should render the resourceInjectorMatchCondition in the mutation if feature flag is enabled and block only pods with the networks annotation", func() {
