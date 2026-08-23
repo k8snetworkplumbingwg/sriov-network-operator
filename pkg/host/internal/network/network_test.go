@@ -483,8 +483,15 @@ var _ = Describe("Network", func() {
 		})
 
 		It("should preserve the existing file when SKIP_MODPROBE_CONFIG is set with a non-empty mode", func() {
-			os.Setenv("SKIP_MODPROBE_CONFIG", "true")
-			defer os.Unsetenv("SKIP_MODPROBE_CONFIG")
+			origValue, hadOrigValue := os.LookupEnv("SKIP_MODPROBE_CONFIG")
+			Expect(os.Setenv("SKIP_MODPROBE_CONFIG", "true")).NotTo(HaveOccurred(), "failed to set SKIP_MODPROBE_CONFIG=true")
+			defer func() {
+				if hadOrigValue {
+					Expect(os.Setenv("SKIP_MODPROBE_CONFIG", origValue)).NotTo(HaveOccurred(), "failed to restore original SKIP_MODPROBE_CONFIG value")
+				} else {
+					Expect(os.Unsetenv("SKIP_MODPROBE_CONFIG")).NotTo(HaveOccurred(), "failed to unset SKIP_MODPROBE_CONFIG")
+				}
+			}()
 
 			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
 				Dirs: []string{"/host/etc/modprobe.d"},
@@ -492,13 +499,20 @@ var _ = Describe("Network", func() {
 					"/host/etc/modprobe.d/sriov_network_operator_modules_config.conf": []byte("# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n"),
 				},
 			})
-			Expect(n.SetRDMASubsystem("shared")).NotTo(HaveOccurred())
+			Expect(n.SetRDMASubsystem("shared")).NotTo(HaveOccurred(), "SetRDMASubsystem(shared) should succeed when SKIP_MODPROBE_CONFIG is set")
 			helpers.GinkgoAssertFileContentsEquals("/host/etc/modprobe.d/sriov_network_operator_modules_config.conf", "# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n")
 		})
 
 		It("should preserve the existing file when SKIP_MODPROBE_CONFIG is set with an empty mode", func() {
-			os.Setenv("SKIP_MODPROBE_CONFIG", "true")
-			defer os.Unsetenv("SKIP_MODPROBE_CONFIG")
+			origValue, hadOrigValue := os.LookupEnv("SKIP_MODPROBE_CONFIG")
+			Expect(os.Setenv("SKIP_MODPROBE_CONFIG", "true")).NotTo(HaveOccurred(), "failed to set SKIP_MODPROBE_CONFIG=true")
+			defer func() {
+				if hadOrigValue {
+					Expect(os.Setenv("SKIP_MODPROBE_CONFIG", origValue)).NotTo(HaveOccurred(), "failed to restore original SKIP_MODPROBE_CONFIG value")
+				} else {
+					Expect(os.Unsetenv("SKIP_MODPROBE_CONFIG")).NotTo(HaveOccurred(), "failed to unset SKIP_MODPROBE_CONFIG")
+				}
+			}()
 
 			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
 				Dirs: []string{"/host/etc/modprobe.d"},
@@ -506,7 +520,7 @@ var _ = Describe("Network", func() {
 					"/host/etc/modprobe.d/sriov_network_operator_modules_config.conf": []byte("# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n"),
 				},
 			})
-			Expect(n.SetRDMASubsystem("")).NotTo(HaveOccurred())
+			Expect(n.SetRDMASubsystem("")).NotTo(HaveOccurred(), "SetRDMASubsystem(\"\") should succeed when SKIP_MODPROBE_CONFIG is set")
 			helpers.GinkgoAssertFileContentsEquals("/host/etc/modprobe.d/sriov_network_operator_modules_config.conf", "# This file is managed by sriov-network-operator do not edit.\noptions ib_core netns_mode=1\n")
 		})
 	})
