@@ -74,7 +74,7 @@ func (u *udev) PrepareVFRepUdevRule() error {
 // AddDisableNMUdevRule adds udev rule that disables NetworkManager for VFs on the concrete PF:
 func (u *udev) AddDisableNMUdevRule(pfPciAddress string) error {
 	log.Log.V(2).Info("AddDisableNMUdevRule()", "device", pfPciAddress)
-	udevRuleContent := fmt.Sprintf(consts.NMUdevRule, strings.Join(vars.SupportedVfIds, "|"), pfPciAddress)
+	udevRuleContent := fmt.Sprintf(consts.NMUdevRuleContent(), strings.Join(vars.SupportedVfIds, "|"), pfPciAddress)
 	return u.addUdevRule(pfPciAddress, "10-nm-disable", udevRuleContent)
 }
 
@@ -101,7 +101,7 @@ func (u *udev) RemovePersistPFNameUdevRule(pfPciAddress string) error {
 func (u *udev) AddVfRepresentorUdevRule(pfPciAddress, pfName, pfSwitchID, pfSwitchPort string) error {
 	log.Log.V(2).Info("AddVfRepresentorUdevRule()",
 		"device", pfPciAddress, "name", pfName, "switch", pfSwitchID, "port", pfSwitchPort)
-	udevRuleContent := fmt.Sprintf(consts.SwitchdevUdevRule, pfSwitchID, strings.TrimPrefix(pfSwitchPort, "p"), pfName)
+	udevRuleContent := fmt.Sprintf(consts.SwitchdevUdevRuleContent(), pfSwitchID, strings.TrimPrefix(pfSwitchPort, "p"), pfName)
 	return u.addUdevRule(pfPciAddress, "20-switchdev", udevRuleContent)
 }
 

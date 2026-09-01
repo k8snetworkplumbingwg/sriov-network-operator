@@ -129,9 +129,15 @@ spec:
               value: {{ .Values.operator.clusterType }}
             - name: STALE_NODE_STATE_CLEANUP_DELAY_MINUTES
               value: "{{ .Values.operator.staleNodeStateCleanupDelayMinutes }}"
+            - name: SRIOV_CONF_BASE_PATH
+              value: {{ .Values.sriovConfBasePath | quote }}
+            - name: UDEV_BASE_PATH
+              value: {{ .Values.udevBasePath | quote }}
             {{- range $k, $v := .Values.operator.extraEnv }}
+            {{- if and (ne $k "SRIOV_CONF_BASE_PATH") (ne $k "UDEV_BASE_PATH") }}
             - name: {{ $k }}
               value: {{ $v | toString | quote }}
+            {{- end }}
             {{- end }}
             - name: TLS_CIPHER_SUITES
               value: {{ .Values.operator.tls.cipherSuites | quote }}
