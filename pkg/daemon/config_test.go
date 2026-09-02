@@ -121,6 +121,100 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 		})
 	})
 
+	Context("LogConfig", func() {
+		var savedLogCfg vars.LogFileSettings
+
+		BeforeEach(func() {
+			savedLogCfg = vars.LogCfg
+		})
+
+		AfterEach(func() {
+			vars.LogCfg = savedLogCfg
+			snolog.CloseFileLogger()
+		})
+
+		It("should update vars.LogCfg when LogConfig is set", func() {
+			maxSize := 50
+			maxFiles := 3
+			maxAge := 7
+			compress := false
+			hostPath := "/var/log/sriov-test"
+
+			soc := &sriovnetworkv1.SriovOperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      consts.DefaultConfigName,
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+					LogConfig: &sriovnetworkv1.LogConfig{
+						MaxSizeMB:  &maxSize,
+						MaxFiles:   &maxFiles,
+						MaxAgeDays: &maxAge,
+						Compress:   &compress,
+						HostPath:   &hostPath,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, soc)).To(Succeed())
+
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(vars.LogCfg.MaxSizeMB).To(Equal(50))
+				g.Expect(vars.LogCfg.MaxFiles).To(Equal(3))
+				g.Expect(vars.LogCfg.MaxAgeDays).To(Equal(7))
+				g.Expect(vars.LogCfg.Compress).To(BeFalse())
+				g.Expect(vars.LogCfg.HostPath).To(Equal("/var/log/sriov-test"))
+				g.Expect(vars.LogCfg.Enabled).To(BeTrue())
+			}, "15s", "3s").Should(Succeed())
+		})
+
+		It("should disable file logging when Enabled=false is set", func() {
+			enabled := false
+			soc := &sriovnetworkv1.SriovOperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      consts.DefaultConfigName,
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+					LogConfig: &sriovnetworkv1.LogConfig{
+						Enabled: &enabled,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, soc)).To(Succeed())
+
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(vars.LogCfg.Enabled).To(BeFalse())
+			}, "15s", "3s").Should(Succeed())
+		})
+
+		It("should revert to defaults when LogConfig is removed", func() {
+			maxSize := 25
+			soc := &sriovnetworkv1.SriovOperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      consts.DefaultConfigName,
+					Namespace: testNamespace,
+				},
+				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+					LogConfig: &sriovnetworkv1.LogConfig{
+						MaxSizeMB: &maxSize,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, soc)).To(Succeed())
+
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(vars.LogCfg.MaxSizeMB).To(Equal(25))
+			}, "15s", "3s").Should(Succeed())
+
+			soc.Spec.LogConfig = nil
+			Expect(k8sClient.Update(ctx, soc)).To(Succeed())
+
+			EventuallyWithOffset(1, func(g Gomega) {
+				g.Expect(vars.LogCfg.MaxSizeMB).To(Equal(vars.DefaultLogCfg().MaxSizeMB))
+			}, "15s", "3s").Should(Succeed())
+		})
+	})
+
 	Context("Feature gates", func() {
 		It("should update the feature gates struct", func() {
 			soc := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{
