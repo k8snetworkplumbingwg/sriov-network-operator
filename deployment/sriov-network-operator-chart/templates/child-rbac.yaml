@@ -1,0 +1,209 @@
+{{- if .Values.operator.admissionControllers.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: network-resources-injector
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - k8s.cni.cncf.io
+  resources:
+    - network-attachment-definitions
+  verbs:
+    - watch
+    - list
+    - get
+- apiGroups:
+    - ""
+  resources:
+    - configmaps
+  verbs:
+    - watch
+    - list
+    - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: network-resources-injector-role-binding
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: network-resources-injector
+subjects:
+- kind: ServiceAccount
+  name: network-resources-injector-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: operator-webhook
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - nodes
+    - configmaps
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - sriovnetwork.openshift.io
+  resources:
+    - "*"
+  verbs:
+    - get
+    - list
+    - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: operator-webhook-role-binding
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: operator-webhook
+subjects:
+- kind: ServiceAccount
+  name: operator-webhook-sa
+  namespace: {{ .Release.Namespace }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sriov-metrics-kube-rbac-role
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - authentication.k8s.io
+  resources:
+    - tokenreviews
+  verbs:
+    - create
+- apiGroups:
+    - authorization.k8s.io
+  resources:
+    - subjectaccessreviews
+  verbs:
+    - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sriov-metrics-kube-rbac-rolebinding
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sriov-metrics-kube-rbac-role
+subjects:
+- kind: ServiceAccount
+  name: metrics-exporter-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: metrics-exporter-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - security.openshift.io
+    resourceNames:
+      - privileged
+    resources:
+      - securitycontextconstraints
+    verbs:
+      - use
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: metrics-exporter-rb
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: metrics-exporter-role
+subjects:
+  - kind: ServiceAccount
+    name: metrics-exporter-sa
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sriov-plugin
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - security.openshift.io
+    resourceNames:
+      - privileged
+    resources:
+      - securitycontextconstraints
+    verbs:
+      - use
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sriov-device-plugin
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sriov-plugin
+subjects:
+  - kind: ServiceAccount
+    name: sriov-device-plugin
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sriov-device-plugin-pod-access
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sriov-device-plugin-pod-access
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sriov-device-plugin-pod-access
+subjects:
+- kind: ServiceAccount
+  name: sriov-device-plugin
+  namespace: {{ .Release.Namespace }}
