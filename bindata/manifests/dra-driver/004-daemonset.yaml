@@ -58,6 +58,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        resources:
+          requests:
+            cpu: 10m
+            memory: 10Mi
       containers:
       - name: sriov-dra-driver
         image: {{.SRIOVDRADriverImage}}
@@ -92,6 +96,10 @@ spec:
           value: "-1"
         - name: CONFIGURATION_MODE
           value: "MULTUS"
+        resources:
+          requests:
+            cpu: 10m
+            memory: 50Mi
         volumeMounts:
         - name: kubelet-plugins-registry
           mountPath: /var/lib/kubelet/plugins_registry
