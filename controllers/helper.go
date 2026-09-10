@@ -73,6 +73,14 @@ const (
 	draDriverPodAccessRoleBindingName = "sriov-dra-driver-pod-access"
 	draDriverBaseDeviceClassName      = "sriovnetwork.k8snetworkplumbingwg.io"
 
+	// Device plugin bindata (constants.PluginPath) — keep resource names in sync with manifests.
+	devicePluginDaemonSetName            = "sriov-device-plugin"
+	devicePluginServiceAccountName       = "sriov-device-plugin"
+	devicePluginSCCRoleName              = "sriov-plugin"
+	devicePluginSCCRoleBindingName       = "sriov-device-plugin"
+	devicePluginPodAccessRoleName        = "sriov-device-plugin-pod-access"
+	devicePluginPodAccessRoleBindingName = "sriov-device-plugin-pod-access"
+
 	clusterRoleResourceName               = "ClusterRole"
 	clusterRoleBindingResourceName        = "ClusterRoleBinding"
 	deviceClassResourceName               = "DeviceClass"
@@ -365,23 +373,51 @@ func deleteIfNotFound(ctx context.Context, c k8sclient.Client, obj k8sclient.Obj
 }
 
 // cleanupDevicePluginObjs removes device plugin objects when switching to DRA mode
+// (same set as constants.PluginPath: DaemonSet, RBAC, ServiceAccount).
 func cleanupDevicePluginObjs(ctx context.Context, client k8sclient.Client) error {
 	logger := log.Log.WithName("cleanupDevicePluginObjs")
 	logger.V(1).Info("Start to cleanup device plugin objects")
+	ns := vars.Namespace
 
-	// Delete device plugin DaemonSet
-	ds := &appsv1.DaemonSet{}
-	err := client.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: "sriov-device-plugin"}, ds)
-	if err == nil {
-		logger.Info("Deleting device plugin DaemonSet")
-		if err := client.Delete(ctx, ds); err != nil && !errors.IsNotFound(err) {
-			logger.Error(err, "Failed to delete device plugin DaemonSet")
-			return err
-		}
-	} else if !errors.IsNotFound(err) {
+	// Stop workloads first, then bindings, then roles, then SA.
+	if err := deleteIfNotFound(ctx, client, &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginDaemonSetName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin DaemonSet")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginSCCRoleBindingName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin RoleBinding")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginPodAccessRoleBindingName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin pod-access RoleBinding")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginSCCRoleName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin Role")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginPodAccessRoleName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin pod-access Role")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginServiceAccountName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin ServiceAccount")
 		return err
 	}
 
+	logger.Info("Cleaned up device plugin DaemonSet, RBAC, and ServiceAccount")
 	return nil
 }
 
