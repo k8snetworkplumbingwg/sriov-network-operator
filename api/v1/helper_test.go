@@ -218,7 +218,7 @@ func TestIBRendering(t *testing.T) {
 				Spec: v1.SriovIBNetworkSpec{
 					NetworkNamespace: "testnamespace",
 					ResourceName:     "testresource",
-					Capabilities:     "foo",
+					Capabilities:     `{"infinibandGUID": true}`,
 				},
 			},
 		},
@@ -337,6 +337,122 @@ func TestOVSRendering(t *testing.T) {
 
 			assert.Equal(t, string(g), b.String(), "bytes do not match .golden file [%s]", gp)
 		})
+	}
+}
+
+func TestRenderRejectsInvalidJSON(t *testing.T) {
+	tests := []struct {
+		tname   string
+		network v1.SriovNetwork
+	}{
+		{
+			tname: "invalid capabilities",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName: "res",
+					Capabilities: `not-json`,
+				},
+			},
+		},
+		{
+			tname: "invalid ipam",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName: "res",
+					IPAM:         `not-json`,
+				},
+			},
+		},
+		{
+			tname: "invalid metaplugins",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName:      "res",
+					MetaPluginsConfig: `not-json`,
+				},
+			},
+		},
+		{
+			tname: "nested metaplugin array",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName:      "res",
+					MetaPluginsConfig: `[{"type":"vrf"}]`,
+				},
+			},
+		},
+		{
+			tname: "empty metaplugin array",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName:      "res",
+					MetaPluginsConfig: `[]`,
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.tname, func(t *testing.T) {
+			_, err := tc.network.RenderNetAttDef()
+			if err == nil {
+				t.Error("expected render to fail with invalid JSON input")
+			}
+		})
+	}
+}
+
+func TestRenderProducesValidNADConfig(t *testing.T) {
+	network := v1.SriovNetwork{
+		TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+		Spec: v1.SriovNetworkSpec{
+			ResourceName:      "res",
+			Capabilities:      `{"mac": true}`,
+			IPAM:              `{"type": "host-local", "subnet": "10.10.0.0/16"}`,
+			MetaPluginsConfig: `{"type": "vrf", "vrfname": "blue"}, {"type": "tuning"}`,
+			LogFile:           "sriov.log",
+		},
+	}
+
+	rendered, err := network.RenderNetAttDef()
+	if err != nil {
+		t.Fatal("failed rendering:", err)
+	}
+
+	spec, ok := rendered.Object["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("missing spec in rendered object")
+	}
+	config, ok := spec["config"].(string)
+	if !ok {
+		t.Fatal("missing spec.config in rendered object")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(config), &parsed); err != nil {
+		t.Fatalf("rendered NAD config is not valid JSON: %v\nconfig: %s", err, config)
+	}
+	plugins, ok := parsed["plugins"].([]any)
+	if !ok {
+		t.Fatalf("missing plugins array in rendered config: %s", config)
+	}
+	if len(plugins) != 3 {
+		t.Fatalf("expected primary plugin plus two metaplugins, got %d: %s", len(plugins), config)
+	}
+	for i, plugin := range plugins {
+		if _, ok := plugin.(map[string]any); !ok {
+			t.Fatalf("plugins[%d] is not a plugin object: %#v", i, plugin)
+		}
 	}
 }
 

@@ -10,6 +10,6 @@
     "namespace": "testnamespace"
   },
   "spec": {
-    "config": "{ \"cniVersion\":\"1.0.0\", \"name\":\"test\",\"type\":\"ib-sriov\",\"capabilities\":foo,\"ipam\":{} }"
+    "config": "{ \"cniVersion\":\"1.0.0\", \"name\":\"test\",\"type\":\"ib-sriov\",\"capabilities\":{\"infinibandGUID\":true},\"ipam\":{} }"
   }
 }
