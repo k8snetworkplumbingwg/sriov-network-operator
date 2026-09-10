@@ -154,6 +154,65 @@ var _ = Describe("Helper DRA", func() {
 		})
 	})
 
+	Context("cleanupDevicePluginObjs", func() {
+		var (
+			ctx     context.Context
+			scheme  *runtime.Scheme
+			client  k8sclient.Client
+			nsSaved string
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			nsSaved = vars.Namespace
+			vars.Namespace = testNamespace
+			DeferCleanup(func() { vars.Namespace = nsSaved })
+			scheme = runtime.NewScheme()
+			utilruntime.Must(sriovnetworkv1.AddToScheme(scheme))
+			utilruntime.Must(corev1.AddToScheme(scheme))
+			utilruntime.Must(appsv1.AddToScheme(scheme))
+			utilruntime.Must(rbacv1.AddToScheme(scheme))
+		})
+
+		It("deletes device plugin DaemonSet, RBAC, and ServiceAccount when present", func() {
+			ds := &appsv1.DaemonSet{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginDaemonSetName, Namespace: testNamespace},
+			}
+			sa := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginServiceAccountName, Namespace: testNamespace},
+			}
+			sccRole := &rbacv1.Role{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginSCCRoleName, Namespace: testNamespace},
+			}
+			sccRoleBinding := &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginSCCRoleBindingName, Namespace: testNamespace},
+			}
+			podAccessRole := &rbacv1.Role{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginPodAccessRoleName, Namespace: testNamespace},
+			}
+			podAccessRoleBinding := &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginPodAccessRoleBindingName, Namespace: testNamespace},
+			}
+
+			client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				ds, sa, sccRole, sccRoleBinding, podAccessRole, podAccessRoleBinding,
+			).Build()
+			Expect(cleanupDevicePluginObjs(ctx, client)).To(Succeed())
+
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: devicePluginDaemonSetName}, &appsv1.DaemonSet{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: devicePluginServiceAccountName}, &corev1.ServiceAccount{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: devicePluginSCCRoleName}, &rbacv1.Role{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: devicePluginSCCRoleBindingName}, &rbacv1.RoleBinding{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: devicePluginPodAccessRoleName}, &rbacv1.Role{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: devicePluginPodAccessRoleBindingName}, &rbacv1.RoleBinding{})).To(MatchError(ContainSubstring("not found")))
+		})
+
+		It("succeeds when device plugin objects do not exist", func() {
+			client = fake.NewClientBuilder().WithScheme(scheme).Build()
+			Expect(cleanupDevicePluginObjs(ctx, client)).To(Succeed())
+		})
+	})
+
 	Context("syncDRADriverObjs", func() {
 		var (
 			ctx     context.Context
