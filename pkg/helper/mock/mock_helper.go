@@ -695,6 +695,18 @@ func (mr *MockHostHelpersInterfaceMockRecorder) HasDriver(pciAddr any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasDriver", reflect.TypeOf((*MockHostHelpersInterface)(nil).HasDriver), pciAddr)
 }
 
+// InvalidateCache mocks base method.
+func (m *MockHostHelpersInterface) InvalidateCache() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "InvalidateCache")
+}
+
+// InvalidateCache indicates an expected call of InvalidateCache.
+func (mr *MockHostHelpersInterfaceMockRecorder) InvalidateCache() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InvalidateCache", reflect.TypeOf((*MockHostHelpersInterface)(nil).InvalidateCache))
+}
+
 // IsKernelArgsSet mocks base method.
 func (m *MockHostHelpersInterface) IsKernelArgsSet(cmdLine, karg string) bool {
 	m.ctrl.T.Helper()
@@ -1138,6 +1150,18 @@ func (m *MockHostHelpersInterface) SetDevlinkDeviceParam(pciAddr, paramName, val
 func (mr *MockHostHelpersInterfaceMockRecorder) SetDevlinkDeviceParam(pciAddr, paramName, value any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDevlinkDeviceParam", reflect.TypeOf((*MockHostHelpersInterface)(nil).SetDevlinkDeviceParam), pciAddr, paramName, value)
+}
+
+// SetGeneration mocks base method.
+func (m *MockHostHelpersInterface) SetGeneration(gen int64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetGeneration", gen)
+}
+
+// SetGeneration indicates an expected call of SetGeneration.
+func (mr *MockHostHelpersInterfaceMockRecorder) SetGeneration(gen any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetGeneration", reflect.TypeOf((*MockHostHelpersInterface)(nil).SetGeneration), gen)
 }
 
 // SetNetdevMTU mocks base method.
