@@ -46,8 +46,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"github.com/go-logr/logr"
 	sriovdrav1alpha1 "github.com/k8snetworkplumbingwg/dra-driver-sriov/pkg/api/sriovdra/v1alpha1"
 	dptypes "github.com/k8snetworkplumbingwg/sriov-network-device-plugin/pkg/types"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -733,6 +735,55 @@ func updateDevicePluginResource(
 	return nil
 }
 
+// collectDRAPolicyResourceNames returns every non-empty resourceName from policies, excluding the default policy.
+func collectDRAPolicyResourceNames(pl *sriovnetworkv1.SriovNetworkNodePolicyList) map[string]struct{} {
+	names := make(map[string]struct{})
+	for i := range pl.Items {
+		p := &pl.Items[i]
+		if p.Name == constants.DefaultPolicyName {
+			continue
+		}
+		if p.Spec.ResourceName != "" {
+			names[p.Spec.ResourceName] = struct{}{}
+		}
+	}
+	return names
+}
+
+type draPolicyResource struct {
+	resourceName    string
+	deviceClassName string
+}
+
+// filterDRAResourceNamesByDeviceClass returns policy resource names whose normalized device class names are unique.
+// Distinct policy resourceNames that normalize to the same device class name cannot coexist in DRA mode.
+// validateDRAResourceNameCollision in the admission webhook rejects such policies at apply time; collisions
+// skipped here are logged as a reconciliation fallback (e.g. webhook disabled or objects changed out of band).
+func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[string]struct{}, objectKind string) []draPolicyResource {
+	keys := make([]string, 0, len(resourceNames))
+	for name := range resourceNames {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+
+	seen := make(map[string]struct{})
+	filtered := make([]draPolicyResource, 0, len(keys))
+	for _, resourceName := range keys {
+		deviceClassName := dra.ResourceNameToDeviceClassName(resourceName)
+		if _, dup := seen[deviceClassName]; dup {
+			logger.Error(nil, "Skipping "+objectKind+" with colliding normalized name",
+				"name", deviceClassName, "resourceName", resourceName)
+			continue
+		}
+		seen[deviceClassName] = struct{}{}
+		filtered = append(filtered, draPolicyResource{
+			resourceName:    resourceName,
+			deviceClassName: deviceClassName,
+		})
+	}
+	return filtered
+}
+
 // syncDeviceAttributes creates/updates/deletes DeviceAttributes CRs for each unique resourceName from policies (DRA mode).
 // Policies reference these via DeviceAttributesSelector; the driver merges attributes onto selected devices.
 func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Context,
@@ -741,16 +792,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 	logger := log.Log.WithName("syncDeviceAttributes")
 	logger.V(1).Info("Start to sync DeviceAttributes CRs")
 
-	desiredResourceNames := make(map[string]struct{})
-	for i := range pl.Items {
-		p := &pl.Items[i]
-		if p.Name == constants.DefaultPolicyName {
-			continue
-		}
-		if p.Spec.ResourceName != "" {
-			desiredResourceNames[p.Spec.ResourceName] = struct{}{}
-		}
-	}
+	desiredResourceNames := collectDRAPolicyResourceNames(pl)
 
 	attrList := &sriovdrav1alpha1.DeviceAttributesList{}
 	if err := r.List(ctx, attrList, client.InNamespace(vars.Namespace),
@@ -763,10 +805,9 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		return err
 	}
 
-	for resourceName := range desiredResourceNames {
-		deviceClassName := resourceNameToDeviceClassName(resourceName)
-		name := deviceClassName + "-attrs"
-		desired := buildDeviceAttributesCR(name, resourceName)
+	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceAttributes") {
+		name := res.deviceClassName + "-attrs"
+		desired := buildDeviceAttributesCR(name, res.resourceName)
 		if err := controllerutil.SetControllerReference(dc, desired, r.Scheme); err != nil {
 			logger.Error(err, "Failed to set controller reference on DeviceAttributes", "name", name)
 			return err
@@ -801,7 +842,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		// Match by resource-pool label: desired set uses resourceNameToDeviceClassName(rn) as pool
 		found := false
 		for resourceName := range desiredResourceNames {
-			if resourceNameToDeviceClassName(resourceName) == pool {
+			if dra.ResourceNameToDeviceClassName(resourceName) == pool {
 				found = true
 				break
 			}
@@ -818,7 +859,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 }
 
 func buildDeviceAttributesCR(name, resourceName string) *sriovdrav1alpha1.DeviceAttributes {
-	deviceClassName := resourceNameToDeviceClassName(resourceName)
+	deviceClassName := dra.ResourceNameToDeviceClassName(resourceName)
 	// Use same extended resource name (prefix/resourceName) as device plugin for consistency
 	extendedName := buildExtendedResourceName(resourceName)
 	return &sriovdrav1alpha1.DeviceAttributes{
@@ -1009,7 +1050,7 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 // (DeviceAttributesSelector + ResourceFilters; resource name is in DeviceAttributes).
 func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 	nodeState *sriovnetworkv1.SriovNetworkNodeState) (*sriovdrav1alpha1.Config, error) {
-	pool := resourceNameToDeviceClassName(p.Spec.ResourceName)
+	pool := dra.ResourceNameToDeviceClassName(p.Spec.ResourceName)
 	config := &sriovdrav1alpha1.Config{
 		DeviceAttributesSelector: &metav1.LabelSelector{
 			MatchLabels: map[string]string{draResourcePoolLabel: pool},
@@ -1067,25 +1108,6 @@ func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 	return config, nil
 }
 
-// resourceNameToDeviceClassName converts a policy resourceName to a DNS-subdomain-safe DeviceClass metadata.name
-// (lowercase alnum + hyphens; leading/trailing hyphens stripped; empty falls back to "sriov").
-func resourceNameToDeviceClassName(resourceName string) string {
-	s := strings.ReplaceAll(resourceName, "_", "-")
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			b.WriteRune(r)
-		} else if r >= 'A' && r <= 'Z' {
-			b.WriteRune(r + 32)
-		}
-	}
-	name := strings.Trim(b.String(), "-")
-	if name == "" {
-		name = "sriov"
-	}
-	return name
-}
-
 // buildExtendedResourceName returns the extended resource name: ResourcePrefix/resourceName.
 func buildExtendedResourceName(resourceName string) string {
 	prefix := vars.ResourcePrefix
@@ -1122,16 +1144,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	pl *sriovnetworkv1.SriovNetworkNodePolicyList) error {
 	logger := log.Log.WithName("syncExtendedResourceDeviceClasses")
 	logger.V(1).Info("Start to sync extended resource DeviceClasses")
-	desiredResourceNames := make(map[string]struct{})
-	for i := range pl.Items {
-		p := &pl.Items[i]
-		if p.Name == constants.DefaultPolicyName {
-			continue
-		}
-		if p.Spec.ResourceName != "" {
-			desiredResourceNames[p.Spec.ResourceName] = struct{}{}
-		}
-	}
+	desiredResourceNames := collectDRAPolicyResourceNames(pl)
 	gvk := schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"}
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(gvk)
@@ -1142,14 +1155,13 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 		}
 		return err
 	}
-	for resourceName := range desiredResourceNames {
-		deviceClassName := resourceNameToDeviceClassName(resourceName)
-		desired := buildDeviceClassUnstructured(deviceClassName, resourceName, buildExtendedResourceName(resourceName), buildDeviceClassCEL(resourceName))
+	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceClass") {
+		desired := buildDeviceClassUnstructured(res.deviceClassName, res.resourceName, buildExtendedResourceName(res.resourceName), buildDeviceClassCEL(res.resourceName))
 		// Do not set controller reference: DeviceClass is cluster-scoped and dc (SriovOperatorConfig) is namespaced.
 		// Operator-created DeviceClasses are identified by label and cleaned up in cleanupExtendedResourceDeviceClasses when DRA is disabled.
 		var existing *unstructured.Unstructured
 		for i := range list.Items {
-			if list.Items[i].GetName() == deviceClassName {
+			if list.Items[i].GetName() == res.deviceClassName {
 				existing = &list.Items[i]
 				break
 			}

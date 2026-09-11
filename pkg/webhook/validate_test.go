@@ -739,6 +739,40 @@ func TestValidatePoliciesWithDifferentNumVfForTheSameResourceAndTheSameRootDevic
 	g.Expect(err).To(MatchError("root device 0000:86:00.1 is overlapped with existing policy previousPolicy"))
 }
 
+func TestValidateDRAResourceNameCollision(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	config := newDefaultOperatorConfig()
+	config.Spec.FeatureGates = map[string]bool{
+		constants.DynamicResourceAllocationFeatureGate: true,
+	}
+	existing := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-a", Namespace: vars.Namespace},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+	}
+	client = fake.NewClientBuilder().WithScheme(vars.Scheme).WithObjects(config, existing).Build()
+
+	colliding := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-b", Namespace: vars.Namespace},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
+	}
+	err := validateDRAResourceNameCollision(colliding, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	g.Expect(err).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
+
+	unique := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-c", Namespace: vars.Namespace},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "mlx_nic"},
+	}
+	err = validateDRAResourceNameCollision(unique, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	config.Spec.FeatureGates[constants.DynamicResourceAllocationFeatureGate] = false
+	err = client.Update(context.Background(), config)
+	g.Expect(err).NotTo(HaveOccurred())
+	err = validateDRAResourceNameCollision(colliding, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
 func TestValidateResourceName(t *testing.T) {
 	cases := []struct {
 		name      string
