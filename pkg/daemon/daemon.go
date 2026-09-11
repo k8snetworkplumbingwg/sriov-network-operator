@@ -699,6 +699,20 @@ func (dn *NodeReconciler) getDevicePluginPodsForNode(ctx context.Context) ([]cor
 	return pods.Items, nil
 }
 
+// IsManagedDRADriverPod reports whether pod is the operator-managed sriov-dra-driver DaemonSet pod.
+func IsManagedDRADriverPod(pod *corev1.Pod) bool {
+	if pod.Spec.ServiceAccountName != consts.DRADriverServiceAccountName {
+		return false
+	}
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "DaemonSet" && ref.Name == consts.DRADriverDaemonSetName &&
+			ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
 // getDRADriverPodsForNode returns the DRA driver pods running on this node
 func (dn *NodeReconciler) getDRADriverPodsForNode(ctx context.Context) ([]corev1.Pod, error) {
 	funcLog := log.Log.WithName("getDRADriverPodsForNode")
@@ -712,10 +726,13 @@ func (dn *NodeReconciler) getDRADriverPodsForNode(ctx context.Context) ([]corev1
 		funcLog.Error(err, "failed to list DRA driver pods")
 		return []corev1.Pod{}, err
 	}
-	if len(pods.Items) == 0 {
-		return []corev1.Pod{}, nil
+	matched := make([]corev1.Pod, 0, len(pods.Items))
+	for i := range pods.Items {
+		if IsManagedDRADriverPod(&pods.Items[i]) {
+			matched = append(matched, pods.Items[i])
+		}
 	}
-	return pods.Items, nil
+	return matched, nil
 }
 
 // restartDevicePluginPod restarts the device plugin pod on the specified node.

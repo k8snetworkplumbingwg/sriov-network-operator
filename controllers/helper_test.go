@@ -111,41 +111,41 @@ var _ = Describe("Helper DRA", func() {
 		It("deletes DRA driver DaemonSet, RBAC, ServiceAccount, and base DeviceClass when present", func() {
 			ds := &appsv1.DaemonSet{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      draDriverDaemonSetName,
+					Name:      consts.DRADriverDaemonSetName,
 					Namespace: testNamespace,
 				},
 			}
 			sa := &corev1.ServiceAccount{
-				ObjectMeta: metav1.ObjectMeta{Name: draDriverServiceAccountName, Namespace: testNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverServiceAccountName, Namespace: testNamespace},
 			}
 			role := &rbacv1.Role{
-				ObjectMeta: metav1.ObjectMeta{Name: draDriverPodAccessRoleName, Namespace: testNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverPodAccessRoleName, Namespace: testNamespace},
 			}
 			roleBinding := &rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: draDriverPodAccessRoleBindingName, Namespace: testNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverPodAccessRoleBindingName, Namespace: testNamespace},
 			}
 			clusterRole := &rbacv1.ClusterRole{
-				ObjectMeta: metav1.ObjectMeta{Name: draDriverClusterRBACName},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName},
 			}
 			clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: draDriverClusterRBACName},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName},
 			}
 			dc := &unstructured.Unstructured{}
 			dc.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
-			dc.SetName(draDriverBaseDeviceClassName)
+			dc.SetName(consts.DRADriverBaseDeviceClassName)
 
 			client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 				ds, sa, role, roleBinding, clusterRole, clusterRoleBinding, dc,
 			).Build()
 			Expect(cleanupDRADriverObjs(ctx, client)).To(Succeed())
 
-			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: draDriverDaemonSetName}, &appsv1.DaemonSet{})).To(MatchError(ContainSubstring("not found")))
-			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: draDriverServiceAccountName}, &corev1.ServiceAccount{})).To(MatchError(ContainSubstring("not found")))
-			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: draDriverPodAccessRoleName}, &rbacv1.Role{})).To(MatchError(ContainSubstring("not found")))
-			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: draDriverPodAccessRoleBindingName}, &rbacv1.RoleBinding{})).To(MatchError(ContainSubstring("not found")))
-			Expect(client.Get(ctx, types.NamespacedName{Name: draDriverClusterRBACName}, &rbacv1.ClusterRole{})).To(MatchError(ContainSubstring("not found")))
-			Expect(client.Get(ctx, types.NamespacedName{Name: draDriverClusterRBACName}, &rbacv1.ClusterRoleBinding{})).To(MatchError(ContainSubstring("not found")))
-			Expect(client.Get(ctx, types.NamespacedName{Name: draDriverBaseDeviceClassName}, dc)).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DRADriverDaemonSetName}, &appsv1.DaemonSet{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DRADriverServiceAccountName}, &corev1.ServiceAccount{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DRADriverPodAccessRoleName}, &rbacv1.Role{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.DRADriverPodAccessRoleBindingName}, &rbacv1.RoleBinding{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Name: consts.DRADriverClusterRBACName}, &rbacv1.ClusterRole{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Name: consts.DRADriverClusterRBACName}, &rbacv1.ClusterRoleBinding{})).To(MatchError(ContainSubstring("not found")))
+			Expect(client.Get(ctx, types.NamespacedName{Name: consts.DRADriverBaseDeviceClassName}, dc)).To(MatchError(ContainSubstring("not found")))
 		})
 
 		It("succeeds when DRA driver DaemonSet does not exist", func() {

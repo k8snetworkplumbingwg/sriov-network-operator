@@ -65,14 +65,6 @@ var (
 )
 
 const (
-	// DRA bindata (constants.DRADriverPath) — keep resource names in sync with manifests.
-	draDriverDaemonSetName            = "sriov-dra-driver"
-	draDriverServiceAccountName       = "sriov-dra-driver"
-	draDriverClusterRBACName          = "sriov-dra-driver"
-	draDriverPodAccessRoleName        = "sriov-dra-driver-pod-access"
-	draDriverPodAccessRoleBindingName = "sriov-dra-driver-pod-access"
-	draDriverBaseDeviceClassName      = "sriovnetwork.k8snetworkplumbingwg.io"
-
 	// Device plugin bindata (constants.PluginPath) — keep resource names in sync with manifests.
 	devicePluginDaemonSetName            = "sriov-device-plugin"
 	devicePluginServiceAccountName       = "sriov-device-plugin"
@@ -313,37 +305,37 @@ func cleanupDRADriverObjs(ctx context.Context, client k8sclient.Client) error {
 
 	// Stop workloads first, then bindings, then roles, then SA, then cluster DeviceClass.
 	if err := deleteIfNotFound(ctx, client, &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: draDriverDaemonSetName},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverDaemonSetName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver DaemonSet")
 		return err
 	}
 	if err := deleteIfNotFound(ctx, client, &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: draDriverClusterRBACName},
+		ObjectMeta: metav1.ObjectMeta{Name: constants.DRADriverClusterRBACName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver ClusterRoleBinding")
 		return err
 	}
 	if err := deleteIfNotFound(ctx, client, &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: draDriverPodAccessRoleBindingName},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverPodAccessRoleBindingName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver RoleBinding")
 		return err
 	}
 	if err := deleteIfNotFound(ctx, client, &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: draDriverClusterRBACName},
+		ObjectMeta: metav1.ObjectMeta{Name: constants.DRADriverClusterRBACName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver ClusterRole")
 		return err
 	}
 	if err := deleteIfNotFound(ctx, client, &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: draDriverPodAccessRoleName},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverPodAccessRoleName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver Role")
 		return err
 	}
 	if err := deleteIfNotFound(ctx, client, &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: draDriverServiceAccountName},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverServiceAccountName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver ServiceAccount")
 		return err
@@ -351,7 +343,7 @@ func cleanupDRADriverObjs(ctx context.Context, client k8sclient.Client) error {
 
 	baseDC := &uns.Unstructured{}
 	baseDC.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
-	baseDC.SetName(draDriverBaseDeviceClassName)
+	baseDC.SetName(constants.DRADriverBaseDeviceClassName)
 	if err := deleteIfNotFound(ctx, client, baseDC); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			logger.V(1).Info("DeviceClass CRD not available, skipping base DeviceClass cleanup")
