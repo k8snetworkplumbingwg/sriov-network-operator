@@ -26,6 +26,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -247,32 +248,6 @@ func TestRenderDevicePluginConfigData(t *testing.T) {
 
 // --- Phase 1: DRA pure helper unit tests ---
 
-func TestResourceNameToDeviceClassName(t *testing.T) {
-	testCases := []struct {
-		name         string
-		resourceName string
-		expected     string
-	}{
-		{"empty returns sriov", "", "sriov"},
-		{"underscores to dashes", "intel_nic", "intel-nic"},
-		{"uppercase to lowercase", "IntelNic", "intelnic"},
-		{"mixed", "My_Resource_01", "my-resource-01"},
-		{"trailing hyphen trimmed", "a1-", "a1"},
-		{"non-DNS chars stripped", "foo.bar", "foobar"},
-		{"leading/trailing hyphens trimmed", "-x-", "x"},
-		{"leading underscores become hyphens then trimmed", "_foo", "foo"},
-		{"only underscores/dashes becomes sriov", "___", "sriov"},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resourceNameToDeviceClassName(tc.resourceName)
-			if got != tc.expected {
-				t.Errorf("resourceNameToDeviceClassName(%q) = %q, want %q", tc.resourceName, got, tc.expected)
-			}
-		})
-	}
-}
-
 func TestNodeHostname(t *testing.T) {
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -294,6 +269,45 @@ func TestNodeHostname(t *testing.T) {
 	_, err = nodeHostname(node)
 	if err == nil {
 		t.Fatal("nodeHostname() without label should return an error")
+	}
+}
+
+func TestCollectDRAPolicyResourceNames(t *testing.T) {
+	pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+		Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+			{ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultPolicyName}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "default"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "p1"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "p2"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: ""}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "p3"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "mlx5"}},
+		},
+	}
+	got := collectDRAPolicyResourceNames(pl)
+	if len(got) != 2 {
+		t.Fatalf("collectDRAPolicyResourceNames() returned %d names, want 2", len(got))
+	}
+	if _, ok := got["intel_nic"]; !ok {
+		t.Error("expected intel_nic in result")
+	}
+	if _, ok := got["mlx5"]; !ok {
+		t.Error("expected mlx5 in result")
+	}
+}
+
+func TestFilterDRAResourceNamesByDeviceClass(t *testing.T) {
+	names := map[string]struct{}{
+		"intel_nic": {},
+		"INTEL_NIC": {},
+		"mlx5":      {},
+	}
+	got := filterDRAResourceNamesByDeviceClass(log.Log, names, "DeviceClass")
+	if len(got) != 2 {
+		t.Fatalf("filterDRAResourceNamesByDeviceClass() returned %d names, want 2", len(got))
+	}
+	if got[0].resourceName != "INTEL_NIC" || got[0].deviceClassName != "intel-nic" {
+		t.Fatalf("filterDRAResourceNamesByDeviceClass()[0] = %+v, want INTEL_NIC/intel-nic (sorted, first collision wins)", got[0])
+	}
+	if got[1].resourceName != "mlx5" || got[1].deviceClassName != "mlx5" {
+		t.Fatalf("filterDRAResourceNamesByDeviceClass()[1] = %+v, want mlx5/mlx5", got[1])
 	}
 }
 
@@ -1225,6 +1239,28 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(*attr.Spec.Attributes[key].StringValue).To(Equal("openshift.io/intel_nic"))
 		})
 
+		It("syncDeviceAttributes skips colliding normalized names in the same pass", func() {
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy2", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
+					},
+				},
+			}
+			beforeEachDRA()
+			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
+			attrList := &sriovdrav1alpha1.DeviceAttributesList{}
+			Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
+				k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(attrList.Items).To(HaveLen(1))
+			Expect(attrList.Items[0].Name).To(Equal("intel-nic-attrs"))
+		})
+
 		It("syncDeviceAttributes removes DeviceAttributes when resource name no longer in policies", func() {
 			attr := &sriovdrav1alpha1.DeviceAttributes{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1292,6 +1328,28 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(policy.Spec.Configs[0].DeviceAttributesSelector.MatchLabels).To(HaveKeyWithValue("sriovnetwork.openshift.io/resource-pool", "intel-nic"))
 			Expect(policy.Spec.Configs[0].ResourceFilters).To(HaveLen(1))
 			Expect(policy.Spec.Configs[0].ResourceFilters[0].Vendors).To(Equal([]string{"8086"}))
+		})
+
+		It("syncExtendedResourceDeviceClasses skips colliding normalized names in the same pass", func() {
+			beforeEachDRA()
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "p2", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
+					},
+				},
+			}
+			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+			dcList := &unstructured.UnstructuredList{}
+			dcList.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"})
+			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(dcList.Items).To(HaveLen(1))
+			Expect(dcList.Items[0].GetName()).To(Equal("intel-nic"))
 		})
 
 		It("syncExtendedResourceDeviceClasses creates DeviceClass per resource name", func() {
