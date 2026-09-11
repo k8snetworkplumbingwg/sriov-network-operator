@@ -913,6 +913,16 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 	return nil
 }
 
+// nodeHostname returns the kubernetes.io/hostname label value for node selectors.
+// node.Name is not guaranteed to match that label (e.g. FQDN vs short name).
+func nodeHostname(node *corev1.Node) (string, error) {
+	hostname := node.Labels[corev1.LabelHostname]
+	if hostname == "" {
+		return "", fmt.Errorf("node %q is missing required label %q", node.Name, corev1.LabelHostname)
+	}
+	return hostname, nil
+}
+
 // sriovResourcePolicyNodeSelectorForHostname returns a NodeSelector that matches exactly
 // one node by kubernetes.io/hostname (same intent as the former map nodeSelector).
 func sriovResourcePolicyNodeSelectorForHostname(hostname string) *corev1.NodeSelector {
@@ -953,6 +963,12 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 		return nil, nil
 	}
 
+	hostname, err := nodeHostname(node)
+	if err != nil {
+		logger.Error(err, "Failed to resolve node hostname for SriovResourcePolicy", "node", node.Name)
+		return nil, err
+	}
+
 	policy := &sriovdrav1alpha1.SriovResourcePolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			// Same metadata.name as SriovNetworkNodeState (syncAllSriovNetworkNodeStates: ns.Name = node.Name).
@@ -964,7 +980,7 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 			},
 		},
 		Spec: sriovdrav1alpha1.SriovResourcePolicySpec{
-			NodeSelector: sriovResourcePolicyNodeSelectorForHostname(node.Name),
+			NodeSelector: sriovResourcePolicyNodeSelectorForHostname(hostname),
 			Configs:      []sriovdrav1alpha1.Config{},
 		},
 	}
