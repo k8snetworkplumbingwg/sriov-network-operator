@@ -394,8 +394,14 @@ func TestBuildPolicyConfig(t *testing.T) {
 		name      string
 		policy    *sriovnetworkv1.SriovNetworkNodePolicy
 		nodeState *sriovnetworkv1.SriovNetworkNodeState
+		wantErr   bool
 		check     func(t *testing.T, c *sriovdrav1alpha1.Config)
 	}{
+		{
+			name:    "nil policy",
+			policy:  nil,
+			wantErr: true,
+		},
 		{
 			name: "vendor and deviceID and pfNames and rootDevices",
 			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
@@ -603,6 +609,12 @@ func TestBuildPolicyConfig(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := buildPolicyConfig(tc.policy, tc.nodeState)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("buildPolicyConfig: expected error")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("buildPolicyConfig: %v", err)
 			}

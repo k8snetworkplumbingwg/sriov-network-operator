@@ -1050,6 +1050,9 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 // (DeviceAttributesSelector + ResourceFilters; resource name is in DeviceAttributes).
 func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 	nodeState *sriovnetworkv1.SriovNetworkNodeState) (*sriovdrav1alpha1.Config, error) {
+	if p == nil {
+		return nil, fmt.Errorf("policy is required")
+	}
 	pool := dra.ResourceNameToDeviceClassName(p.Spec.ResourceName)
 	config := &sriovdrav1alpha1.Config{
 		DeviceAttributesSelector: &metav1.LabelSelector{
