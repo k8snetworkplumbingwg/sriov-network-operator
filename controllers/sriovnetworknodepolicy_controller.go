@@ -784,6 +784,80 @@ func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[s
 	return filtered
 }
 
+// applyDesiredLabels merges operator labels onto obj and reports whether any value changed.
+func applyDesiredLabels(obj metav1.Object, desired map[string]string) bool {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	changed := false
+	for k, v := range desired {
+		if labels[k] != v {
+			changed = true
+		}
+		labels[k] = v
+	}
+	obj.SetLabels(labels)
+	return changed
+}
+
+// reconcileDeviceAttributes brings an existing DeviceAttributes CR in line with desired state:
+// owner reference, operator labels (including after managed-label drift), and spec.
+func reconcileDeviceAttributes(ctx context.Context, r *SriovNetworkNodePolicyReconciler,
+	dc *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger,
+	desired, existing *sriovdrav1alpha1.DeviceAttributes) error {
+	if err := controllerutil.SetControllerReference(dc, existing, r.Scheme); err != nil {
+		return err
+	}
+	changed := applyDesiredLabels(existing, desired.Labels)
+	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		existing.Spec = desired.Spec
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	logger.V(1).Info("Updating DeviceAttributes", "name", existing.Name)
+	return r.Update(ctx, existing)
+}
+
+// reconcileSriovResourcePolicy brings an existing SriovResourcePolicy CR in line with desired state:
+// owner reference, operator labels (including after managed-label drift), and spec.
+func reconcileSriovResourcePolicy(ctx context.Context, r *SriovNetworkNodePolicyReconciler,
+	dc *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger,
+	desired, existing *sriovdrav1alpha1.SriovResourcePolicy) error {
+	if err := controllerutil.SetControllerReference(dc, existing, r.Scheme); err != nil {
+		return err
+	}
+	changed := applyDesiredLabels(existing, desired.Labels)
+	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		existing.Spec = desired.Spec
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	logger.V(1).Info("Updating SriovResourcePolicy", "name", existing.Name)
+	return r.Update(ctx, existing)
+}
+
+// reconcileExtendedDeviceClass brings an existing extended-resource DeviceClass in line with desired
+// operator labels (including after managed-label drift) and spec.
+func reconcileExtendedDeviceClass(ctx context.Context, r client.Client,
+	desired, existing *unstructured.Unstructured) error {
+	changed := applyDesiredLabels(existing, desired.GetLabels())
+	desiredSpec, _, _ := unstructured.NestedMap(desired.Object, "spec")
+	existingSpec, _, _ := unstructured.NestedMap(existing.Object, "spec")
+	if !equality.Semantic.DeepEqual(desiredSpec, existingSpec) {
+		existing.Object["spec"] = desired.Object["spec"]
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return r.Update(ctx, existing)
+}
+
 // syncDeviceAttributes creates/updates/deletes DeviceAttributes CRs for each unique resourceName from policies (DRA mode).
 // Policies reference these via DeviceAttributesSelector; the driver merges attributes onto selected devices.
 func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Context,
@@ -820,20 +894,29 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 			}
 		}
 		if existing != nil {
-			if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
-				logger.V(1).Info("Updating DeviceAttributes", "name", name)
-				existing.Spec = desired.Spec
-				if err := r.Update(ctx, existing); err != nil {
-					logger.Error(err, "Failed to update DeviceAttributes", "name", name)
-					return err
-				}
-			}
-		} else {
-			logger.V(1).Info("Creating DeviceAttributes", "name", name)
-			if err := r.Create(ctx, desired); err != nil {
-				logger.Error(err, "Failed to create DeviceAttributes", "name", name)
+			if err := reconcileDeviceAttributes(ctx, r, dc, logger, desired, existing); err != nil {
+				logger.Error(err, "Failed to reconcile DeviceAttributes", "name", name)
 				return err
 			}
+			continue
+		}
+		logger.V(1).Info("Creating DeviceAttributes", "name", name)
+		if err := r.Create(ctx, desired); err != nil {
+			if errors.IsAlreadyExists(err) {
+				logger.V(1).Info("Adopting existing DeviceAttributes after managed-label drift", "name", name)
+				existing := &sriovdrav1alpha1.DeviceAttributes{}
+				if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: name}, existing); err != nil {
+					logger.Error(err, "Failed to get existing DeviceAttributes for adoption", "name", name)
+					return err
+				}
+				if err := reconcileDeviceAttributes(ctx, r, dc, logger, desired, existing); err != nil {
+					logger.Error(err, "Failed to adopt DeviceAttributes", "name", name)
+					return err
+				}
+				continue
+			}
+			logger.Error(err, "Failed to create DeviceAttributes", "name", name)
+			return err
 		}
 	}
 	for i := range attrList.Items {
@@ -916,13 +999,9 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 			existing := &policyList.Items[i]
 			if existing.Name == desired.Name {
 				found = true
-				if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
-					logger.V(1).Info("Updating SriovResourcePolicy", "name", desired.Name, "node", nodeName)
-					existing.Spec = desired.Spec
-					if err := r.Update(ctx, existing); err != nil {
-						logger.Error(err, "Failed to update SriovResourcePolicy", "name", desired.Name)
-						return err
-					}
+				if err := reconcileSriovResourcePolicy(ctx, r, dc, logger, desired, existing); err != nil {
+					logger.Error(err, "Failed to reconcile SriovResourcePolicy", "name", desired.Name, "node", nodeName)
+					return err
 				}
 				break
 			}
@@ -934,6 +1013,19 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 				return err
 			}
 			if err := r.Create(ctx, desired); err != nil {
+				if errors.IsAlreadyExists(err) {
+					logger.V(1).Info("Adopting existing SriovResourcePolicy after managed-label drift", "name", desired.Name, "node", nodeName)
+					existing := &sriovdrav1alpha1.SriovResourcePolicy{}
+					if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing); err != nil {
+						logger.Error(err, "Failed to get existing SriovResourcePolicy for adoption", "name", desired.Name)
+						return err
+					}
+					if err := reconcileSriovResourcePolicy(ctx, r, dc, logger, desired, existing); err != nil {
+						logger.Error(err, "Failed to adopt SriovResourcePolicy", "name", desired.Name)
+						return err
+					}
+					continue
+				}
 				logger.Error(err, "Failed to create SriovResourcePolicy", "name", desired.Name)
 				return err
 			}
@@ -1170,18 +1262,28 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 			}
 		}
 		if existing != nil {
-			desiredSpec, _, _ := unstructured.NestedMap(desired.Object, "spec")
-			existingSpec, _, _ := unstructured.NestedMap(existing.Object, "spec")
-			if !equality.Semantic.DeepEqual(desiredSpec, existingSpec) {
-				existing.Object["spec"] = desired.Object["spec"]
-				if err := r.Update(ctx, existing); err != nil {
-					return err
-				}
-			}
-		} else {
-			if err := r.Create(ctx, desired); err != nil {
+			if err := reconcileExtendedDeviceClass(ctx, r.Client, desired, existing); err != nil {
+				logger.Error(err, "Failed to reconcile DeviceClass", "name", res.deviceClassName)
 				return err
 			}
+			continue
+		}
+		if err := r.Create(ctx, desired); err != nil {
+			if errors.IsAlreadyExists(err) {
+				logger.V(1).Info("Adopting existing DeviceClass after managed-label drift", "name", res.deviceClassName)
+				existing := &unstructured.Unstructured{}
+				existing.SetGroupVersionKind(desired.GroupVersionKind())
+				if err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil {
+					logger.Error(err, "Failed to get existing DeviceClass for adoption", "name", res.deviceClassName)
+					return err
+				}
+				if err := reconcileExtendedDeviceClass(ctx, r.Client, desired, existing); err != nil {
+					logger.Error(err, "Failed to adopt DeviceClass", "name", res.deviceClassName)
+					return err
+				}
+				continue
+			}
+			return err
 		}
 	}
 	for i := range list.Items {

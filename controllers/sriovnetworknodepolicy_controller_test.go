@@ -1303,6 +1303,92 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(dcList.Items).To(BeEmpty())
 		})
 
+		It("syncDeviceAttributes adopts CR when operator managed label was removed", func() {
+			attr := buildDeviceAttributesCR("intel-nic-attrs", "intel_nic")
+			attr.Labels = map[string]string{"sriovnetwork.openshift.io/resource-pool": "intel-nic"}
+			beforeEachDRA(attr)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+				},
+			}
+			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
+			got := &sriovdrav1alpha1.DeviceAttributes{}
+			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "intel-nic-attrs"}, got)).To(Succeed())
+			Expect(got.Labels["sriovnetwork.openshift.io/generated-by"]).To(Equal("sriov-network-operator"))
+			Expect(got.Labels["sriovnetwork.openshift.io/resource-pool"]).To(Equal("intel-nic"))
+		})
+
+		It("syncSriovResourcePolicies adopts CR when operator managed label was removed", func() {
+			nodeName := "worker-0"
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+					Labels: map[string]string{
+						"node-role.kubernetes.io/worker": "",
+						"kubernetes.io/hostname":         nodeName,
+					},
+				},
+			}
+			nodeState := &sriovnetworkv1.SriovNetworkNodeState{
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName, Namespace: testNamespace},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
+					Interfaces: sriovnetworkv1.InterfaceExts{
+						{Vendor: "8086", Driver: "i40e", PciAddress: "0000:86:00.0"},
+					},
+				},
+			}
+			existingPolicy := &sriovdrav1alpha1.SriovResourcePolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      nodeName,
+					Namespace: testNamespace,
+					Labels:    map[string]string{"sriovnetwork.openshift.io/node": nodeName},
+				},
+				Spec: sriovdrav1alpha1.SriovResourcePolicySpec{},
+			}
+			beforeEachDRA(node, nodeState, existingPolicy)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+							ResourceName: "intel_nic",
+							NodeSelector: map[string]string{"node-role.kubernetes.io/worker": ""},
+							NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{Vendor: "8086"},
+						},
+					},
+				},
+			}
+			nl := &corev1.NodeList{Items: []corev1.Node{*node}}
+			Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+			got := &sriovdrav1alpha1.SriovResourcePolicy{}
+			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: nodeName}, got)).To(Succeed())
+			Expect(got.Labels["sriovnetwork.openshift.io/generated-by"]).To(Equal("sriov-network-operator"))
+			Expect(got.Spec.Configs).To(HaveLen(1))
+		})
+
+		It("syncExtendedResourceDeviceClasses adopts CR when operator managed label was removed", func() {
+			obj := buildDeviceClassUnstructured("intel-nic", "intel_nic", "openshift.io/intel_nic", buildDeviceClassCEL("intel_nic"))
+			obj.SetLabels(map[string]string{"sriovnetwork.openshift.io/resource-name": "intel_nic"})
+			beforeEachDRA(obj)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+				},
+			}
+			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
+			Expect(r.Get(ctx, k8sclient.ObjectKey{Name: "intel-nic"}, got)).To(Succeed())
+			Expect(got.GetLabels()["sriovnetwork.openshift.io/generated-by"]).To(Equal("sriov-network-operator"))
+		})
+
 		It("syncDeviceAttributes creates DeviceAttributes for each policy resource name", func() {
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
