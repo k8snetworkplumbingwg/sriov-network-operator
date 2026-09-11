@@ -1231,6 +1231,78 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			r = &SriovNetworkNodePolicyReconciler{Client: client, Scheme: scheme, FeatureGate: fg}
 		}
 
+		It("DRA sync and cleanup are idempotent across repeated reconcile", func() {
+			nodeName := "worker-0"
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+					Labels: map[string]string{
+						"node-role.kubernetes.io/worker": "",
+						"kubernetes.io/hostname":         nodeName,
+					},
+				},
+			}
+			nodeState := &sriovnetworkv1.SriovNetworkNodeState{
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName, Namespace: testNamespace},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
+					Interfaces: sriovnetworkv1.InterfaceExts{
+						{Vendor: "8086", Driver: "i40e", PciAddress: "0000:86:00.0"},
+					},
+				},
+			}
+			beforeEachDRA(node, nodeState)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+							ResourceName: "intel_nic",
+							NodeSelector: map[string]string{"node-role.kubernetes.io/worker": ""},
+							NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{Vendor: "8086"},
+						},
+					},
+				},
+			}
+			nl := &corev1.NodeList{Items: []corev1.Node{*node}}
+
+			for range 3 {
+				Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
+			}
+			attrList := &sriovdrav1alpha1.DeviceAttributesList{}
+			Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
+				k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(attrList.Items).To(HaveLen(1))
+
+			for range 3 {
+				Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+			}
+			policyList := &sriovdrav1alpha1.SriovResourcePolicyList{}
+			Expect(r.List(ctx, policyList, k8sclient.InNamespace(testNamespace),
+				k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(policyList.Items).To(HaveLen(1))
+
+			for range 3 {
+				Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+			}
+			dcList := &unstructured.UnstructuredList{}
+			dcList.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"})
+			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(dcList.Items).To(HaveLen(1))
+
+			for range 3 {
+				Expect(r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx)).To(Succeed())
+				Expect(r.cleanupExtendedResourceDeviceClasses(ctx)).To(Succeed())
+			}
+			Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
+				k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(attrList.Items).To(BeEmpty())
+			Expect(r.List(ctx, policyList, k8sclient.InNamespace(testNamespace),
+				k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(policyList.Items).To(BeEmpty())
+			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(dcList.Items).To(BeEmpty())
+		})
+
 		It("syncDeviceAttributes creates DeviceAttributes for each policy resource name", func() {
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
