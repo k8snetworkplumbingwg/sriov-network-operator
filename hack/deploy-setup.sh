@@ -20,7 +20,7 @@ load_manifest() {
       
       envsubst< namespace.yaml | ${OPERATOR_EXEC} apply -f -
     fi
-    files="service_account.yaml role.yaml role_binding.yaml clusterrole.yaml clusterrolebinding.yaml configmap.yaml sriovoperatorconfig.yaml operator.yaml"
+    files="service_account.yaml child_service_account.yaml role.yaml child_role.yaml role_binding.yaml child_role_binding.yaml clusterrole.yaml child_clusterrole.yaml clusterrolebinding.yaml child_clusterrolebinding.yaml configmap.yaml sriovoperatorconfig.yaml operator.yaml"
     for m in ${files}; do
       if [ "$(echo "${EXCLUSIONS[@]}" | grep -o ${m} | wc -w | xargs)" == "0" ] ; then
         envsubst< ${m} | ${OPERATOR_EXEC} apply ${namespace:-} --validate=false -f -

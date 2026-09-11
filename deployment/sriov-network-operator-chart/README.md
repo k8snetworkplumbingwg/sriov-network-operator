@@ -23,7 +23,7 @@ SR-IOV Network Operator features:
 ### Prerequisites
 
 - Kubernetes v1.17+
-- Helm v3
+- Helm v3.17+
 
 ### Install Helm
 
@@ -61,6 +61,16 @@ In the case that [Pod Security Admission](https://kubernetes.io/docs/concepts/se
 ```
 $ kubectl label ns sriov-network-operator pod-security.kubernetes.io/enforce=privileged
 ```
+
+### Upgrading from older versions
+
+When upgrading from a version where the operator created child-component RBAC at runtime, use the `--take-ownership` flag (Helm 3.17+) on the first upgrade:
+
+```
+$ helm upgrade --take-ownership -n sriov-network-operator sriov-network-operator ./deployment/sriov-network-operator-chart
+```
+
+This is needed once to let Helm adopt the existing RBAC resources. Subsequent upgrades work normally. The flag is safe to use even when not strictly required.
 
 ## Chart parameters
 

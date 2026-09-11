@@ -56,13 +56,26 @@ rules:
     verbs:
       - update
   - apiGroups:
-      - rbac.authorization.k8s.io
+      - ""
     resources:
       - serviceaccounts
+    verbs:
+      - get
+      - create
+      - update
+      - delete
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
       - roles
       - rolebindings
     verbs:
-      - '*'
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - delete
   - apiGroups:
       - config.openshift.io
     resources:
@@ -131,6 +144,7 @@ rules:
     verbs:
       - create
       - patch
+{{- if .Values.operator.admissionControllers.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -146,3 +160,4 @@ rules:
       - configmaps
     verbs:
       - get
+{{- end }}

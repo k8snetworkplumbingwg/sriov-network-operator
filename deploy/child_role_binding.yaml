@@ -1,0 +1,41 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: metrics-exporter-rb
+  namespace: $NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: metrics-exporter-role
+subjects:
+  - kind: ServiceAccount
+    name: metrics-exporter-sa
+    namespace: $NAMESPACE
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sriov-device-plugin
+  namespace: $NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sriov-plugin
+subjects:
+  - kind: ServiceAccount
+    name: sriov-device-plugin
+    namespace: $NAMESPACE
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sriov-device-plugin-pod-access
+  namespace: $NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sriov-device-plugin-pod-access
+subjects:
+- kind: ServiceAccount
+  name: sriov-device-plugin
+  namespace: $NAMESPACE
