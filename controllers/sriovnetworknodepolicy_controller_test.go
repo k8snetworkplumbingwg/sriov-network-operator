@@ -273,6 +273,30 @@ func TestResourceNameToDeviceClassName(t *testing.T) {
 	}
 }
 
+func TestNodeHostname(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-0.example.com",
+			Labels: map[string]string{
+				corev1.LabelHostname: "worker-0",
+			},
+		},
+	}
+	got, err := nodeHostname(node)
+	if err != nil {
+		t.Fatalf("nodeHostname() unexpected error: %v", err)
+	}
+	if got != "worker-0" {
+		t.Errorf("nodeHostname() = %q, want %q", got, "worker-0")
+	}
+
+	node.Labels = nil
+	_, err = nodeHostname(node)
+	if err == nil {
+		t.Fatal("nodeHostname() without label should return an error")
+	}
+}
+
 func TestBuildExtendedResourceName(t *testing.T) {
 	defer func(prev string) { vars.ResourcePrefix = prev }(vars.ResourcePrefix)
 
