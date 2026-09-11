@@ -126,7 +126,7 @@ func runServiceCmd(cmd *cobra.Command, args []string) error {
 
 	// Mark that we are running on host
 	vars.UsingSystemdMode = true
-	vars.InChroot = true
+	vars.InChroot.Store(true)
 	vars.Destdir = "/tmp"
 
 	sc, err := newServiceConfig(setupLog)
