@@ -18,6 +18,7 @@ HELM_VALUES_OPTS="\
   --set images.sriovConfigDaemon=${SRIOV_NETWORK_CONFIG_DAEMON_IMAGE} \
   --set images.sriovCni=${SRIOV_CNI_IMAGE} \
   --set images.sriovDevicePlugin=${SRIOV_DEVICE_PLUGIN_IMAGE} \
+  --set images.sriovDraDriver=${SRIOV_DRA_DRIVER_IMAGE} \
   --set images.resourcesInjector=${NETWORK_RESOURCES_INJECTOR_IMAGE} \
   --set images.webhook=${SRIOV_NETWORK_WEBHOOK_IMAGE} \
   --set operator.admissionControllers.enabled=${ADMISSION_CONTROLLERS_ENABLED} \
