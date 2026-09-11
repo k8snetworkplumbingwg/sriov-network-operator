@@ -439,8 +439,21 @@ func (n *network) DiscoverRDMASubsystem() (string, error) {
 	return subsystem, nil
 }
 
+// SetRDMASubsystem manages the modprobe config file that sets the RDMA ib_core
+// netns_mode. When SKIP_MODPROBE_CONFIG=true the operator does not manage the
+// modprobe configuration at all: the file is left untouched (neither written nor
+// removed) so that externally managed hosts (e.g. Talos, where /etc is read-only
+// and the mode is set via the ib_core.netns_mode boot parameter) keep full
+// control. This is intentional: a file previously created by the operator is
+// preserved and remains authoritative for hosts that manage modprobe externally.
 func (n *network) SetRDMASubsystem(mode string) error {
 	log.Log.Info("SetRDMASubsystem(): Updating RDMA subsystem mode", "mode", mode)
+
+	if os.Getenv("SKIP_MODPROBE_CONFIG") == "true" {
+		log.Log.Info("SetRDMASubsystem(): SKIP_MODPROBE_CONFIG is set, skipping modprobe config file management")
+		return nil
+	}
+
 	path := filepath.Join(vars.FilesystemRoot, consts.Host, "etc", "modprobe.d", "sriov_network_operator_modules_config.conf")
 
 	if mode == "" {
