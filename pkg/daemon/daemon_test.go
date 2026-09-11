@@ -782,6 +782,66 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 	})
 })
 
+var _ = Describe("IsManagedDRADriverPod", func() {
+	It("matches operator-managed DRA driver pods", func() {
+		controller := true
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: constants.DRADriverServiceAccountName},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind:       "DaemonSet",
+					Name:       constants.DRADriverDaemonSetName,
+					Controller: &controller,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeTrue())
+	})
+
+	It("rejects pods with the wrong service account", func() {
+		controller := true
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: "other"},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind:       "DaemonSet",
+					Name:       constants.DRADriverDaemonSetName,
+					Controller: &controller,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse())
+	})
+
+	It("rejects pods owned by a different DaemonSet", func() {
+		controller := true
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: constants.DRADriverServiceAccountName},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind:       "DaemonSet",
+					Name:       "other-daemonset",
+					Controller: &controller,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse())
+	})
+
+	It("rejects pods without a controller owner reference", func() {
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: constants.DRADriverServiceAccountName},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind: "DaemonSet",
+					Name: constants.DRADriverDaemonSetName,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse())
+	})
+})
+
 var _ = Describe("Daemon CheckSystemdStatus", func() {
 	var (
 		myMockCtrl   *gomock.Controller

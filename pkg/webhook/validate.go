@@ -18,6 +18,7 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -281,6 +282,50 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	return true, nil
 }
 
+func isDRAFeatureEnabled(ctx context.Context) (bool, error) {
+	config := &sriovnetworkv1.SriovOperatorConfig{}
+	err := client.Get(ctx, runtimeclient.ObjectKey{Name: consts.DefaultConfigName, Namespace: vars.Namespace}, config)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return config.Spec.FeatureGates != nil && config.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate], nil
+}
+
+// validateDRAResourceNameCollision rejects policies whose resourceName normalizes to the same
+// DRA device class name as another policy with a different resourceName.
+func validateDRAResourceNameCollision(cr *sriovnetworkv1.SriovNetworkNodePolicy, npList *sriovnetworkv1.SriovNetworkNodePolicyList) error {
+	enabled, err := isDRAFeatureEnabled(context.Background())
+	if err != nil || !enabled {
+		return err
+	}
+	if cr.Spec.ResourceName == "" {
+		return nil
+	}
+
+	normalized := dra.ResourceNameToDeviceClassName(cr.Spec.ResourceName)
+	for i := range npList.Items {
+		other := &npList.Items[i]
+		if other.GetName() == cr.GetName() || other.GetName() == consts.DefaultPolicyName {
+			continue
+		}
+		if other.GetNamespace() != vars.Namespace {
+			continue
+		}
+		if other.Spec.ResourceName == "" || other.Spec.ResourceName == cr.Spec.ResourceName {
+			continue
+		}
+		if dra.ResourceNameToDeviceClassName(other.Spec.ResourceName) == normalized {
+			return fmt.Errorf(
+				"resourceName %q cannot be used in policy %q: it normalizes to the same DRA device class name %q as policy %q resourceName %q",
+				cr.Spec.ResourceName, cr.GetName(), normalized, other.GetName(), other.Spec.ResourceName)
+		}
+	}
+	return nil
+}
+
 func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy) (bool, error) {
 	nodesSelected = false
 	interfaceSelected = false
@@ -300,6 +345,9 @@ func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePo
 	npList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
 	err = client.List(context.Background(), npList, &runtimeclient.ListOptions{Namespace: namespace})
 	if err != nil {
+		return false, err
+	}
+	if err := validateDRAResourceNameCollision(cr, npList); err != nil {
 		return false, err
 	}
 	for _, node := range nodeList.Items {

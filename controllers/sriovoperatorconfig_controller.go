@@ -251,8 +251,26 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
-		return reconcile.Result{}, err
+	// Deploy either DRA driver or device plugin based on feature gate.
+	// Sync the replacement provider before cleaning up the old one so a failed
+	// switch does not leave the cluster without either provider.
+	if r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		logger.Info("DRA feature gate enabled, deploying DRA driver instead of device plugin")
+		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
+			return reconcile.Result{}, fmt.Errorf("sync DRA driver objects: %w", err)
+		}
+		if err = cleanupDevicePluginObjs(ctx, r.Client); err != nil {
+			logger.Error(err, "Failed to cleanup device plugin objects")
+			return reconcile.Result{}, fmt.Errorf("cleanup device plugin objects: %w", err)
+		}
+	} else {
+		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
+			return reconcile.Result{}, fmt.Errorf("sync device plugin objects: %w", err)
+		}
+		if err = cleanupDRADriverObjs(ctx, r.Client); err != nil {
+			logger.Error(err, "Failed to cleanup DRA driver objects")
+			return reconcile.Result{}, fmt.Errorf("cleanup DRA driver objects: %w", err)
+		}
 	}
 
 	if err = r.syncMetricsExporter(ctx, defaultConfig); err != nil {
@@ -376,13 +394,7 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 	data.Data["ParallelNicConfig"] = r.FeatureGate.IsEnabled(consts.ParallelNicConfigFeatureGate)
 	data.Data["ManageSoftwareBridges"] = r.FeatureGate.IsEnabled(consts.ManageSoftwareBridgesFeatureGate)
 
-	envCniBinPath := os.Getenv("SRIOV_CNI_BIN_PATH")
-	if envCniBinPath == "" {
-		data.Data["CNIBinPath"] = "/var/lib/cni/bin"
-	} else {
-		logger.V(1).Info("New cni bin found", "CNIBinPath", envCniBinPath)
-		data.Data["CNIBinPath"] = envCniBinPath
-	}
+	data.Data["CNIBinPath"] = GetCNIBinPath()
 
 	if len(dc.Spec.DisablePlugins) > 0 {
 		logger.V(1).Info("DisablePlugins provided", "DisablePlugins", dc.Spec.DisablePlugins)

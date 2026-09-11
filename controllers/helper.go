@@ -27,12 +27,15 @@ import (
 	errs "github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	kscheme "k8s.io/client-go/kubernetes/scheme"
@@ -62,12 +65,23 @@ var (
 )
 
 const (
+	// Device plugin bindata (constants.PluginPath) — keep resource names in sync with manifests.
+	devicePluginDaemonSetName            = "sriov-device-plugin"
+	devicePluginServiceAccountName       = "sriov-device-plugin"
+	devicePluginSCCRoleName              = "sriov-plugin"
+	devicePluginSCCRoleBindingName       = "sriov-device-plugin"
+	devicePluginPodAccessRoleName        = "sriov-device-plugin-pod-access"
+	devicePluginPodAccessRoleBindingName = "sriov-device-plugin-pod-access"
+
 	clusterRoleResourceName               = "ClusterRole"
 	clusterRoleBindingResourceName        = "ClusterRoleBinding"
+	deviceClassResourceName               = "DeviceClass"
 	mutatingWebhookConfigurationCRDName   = "MutatingWebhookConfiguration"
 	validatingWebhookConfigurationCRDName = "ValidatingWebhookConfiguration"
 	machineConfigCRDName                  = "MachineConfig"
 	trueString                            = "true"
+	defaultCNIBinPath                     = "/var/lib/cni/bin"
+	defaultDRADriverCDIRoot               = "/var/run/cdi"
 )
 
 type DrainAnnotationPredicate struct {
@@ -141,6 +155,16 @@ func GetImagePullSecrets() []string {
 	}
 }
 
+// GetCNIBinPath returns the host filesystem path for CNI plugin binaries.
+// Matches syncConfigDaemonSet (SRIOV_CNI_BIN_PATH env or default /var/lib/cni/bin).
+func GetCNIBinPath() string {
+	if p := os.Getenv("SRIOV_CNI_BIN_PATH"); p != "" {
+		log.Log.V(1).Info("Using custom CNI bin path", "CNIBinPath", p)
+		return p
+	}
+	return defaultCNIBinPath
+}
+
 func formatJSON(str string) (string, error) {
 	var prettyJSON bytes.Buffer
 	if err := json.Indent(&prettyJSON, []byte(str), "", "    "); err != nil {
@@ -170,6 +194,17 @@ func GetNodeSelectorForDevicePlugin(dc *sriovnetworkv1.SriovOperatorConfig) map[
 	tmp := dc.Spec.DeepCopy()
 	tmp.ConfigDaemonNodeSelector[constants.SriovDevicePluginLabel] = constants.SriovDevicePluginLabelEnabled
 	return tmp.ConfigDaemonNodeSelector
+}
+
+// GetNodeSelectorForDRADriver returns the same node selector as the config daemon (workers).
+// Unlike the device plugin, the DRA driver does not use the device-plugin=Enabled label
+// because that label is only set when in device-plugin mode; in DRA mode we need the
+// driver to run on all config-daemon nodes.
+func GetNodeSelectorForDRADriver(dc *sriovnetworkv1.SriovOperatorConfig) map[string]string {
+	if len(dc.Spec.ConfigDaemonNodeSelector) > 0 {
+		return dc.Spec.ConfigDaemonNodeSelector
+	}
+	return GetDefaultNodeSelector()
 }
 
 func syncPluginDaemonObjs(ctx context.Context,
@@ -211,6 +246,173 @@ func syncPluginDaemonObjs(ctx context.Context,
 	return nil
 }
 
+func syncDRADriverObjs(ctx context.Context,
+	client k8sclient.Client,
+	scheme *runtime.Scheme,
+	dc *sriovnetworkv1.SriovOperatorConfig,
+	renderFn renderManifestFunc,
+	applyFn applyManifestFunc) error {
+	logger := log.Log.WithName("syncDRADriverObjs")
+	logger.V(1).Info("Start to sync DRA driver objects")
+
+	// render DRA driver manifests
+	data := render.MakeRenderData()
+	data.Data["Namespace"] = vars.Namespace
+	data.Data["SRIOVDRADriverImage"] = os.Getenv("SRIOV_DRA_DRIVER_IMAGE")
+	data.Data["SRIOVNetworkConfigDaemonImage"] = os.Getenv("SRIOV_NETWORK_CONFIG_DAEMON_IMAGE")
+	data.Data["ReleaseVersion"] = os.Getenv("RELEASEVERSION")
+	data.Data["ImagePullSecrets"] = GetImagePullSecrets()
+	data.Data["NodeSelectorField"] = GetNodeSelectorForDRADriver(dc)
+	data.Data["CNIBinPath"] = GetCNIBinPath()
+
+	// DRA driver specific configuration
+	draDriverCDIRoot := os.Getenv("DRA_DRIVER_CDI_ROOT")
+	if draDriverCDIRoot == "" {
+		draDriverCDIRoot = defaultDRADriverCDIRoot
+	}
+	data.Data["DRADriverCDIRoot"] = draDriverCDIRoot
+
+	draDriverInterfacePrefix := os.Getenv("DRA_DRIVER_DEFAULT_INTERFACE_PREFIX")
+	if draDriverInterfacePrefix == "" {
+		draDriverInterfacePrefix = "net"
+	}
+	data.Data["DRADriverDefaultInterfacePrefix"] = draDriverInterfacePrefix
+
+	objs, err := renderDsForCR(constants.DRADriverPath, &data, renderFn)
+	if err != nil {
+		logger.Error(err, "Fail to render DRA driver manifests")
+		return err
+	}
+
+	// Sync DRA driver objects
+	for _, obj := range objs {
+		err = syncDsObject(ctx, client, scheme, dc, obj, applyFn)
+		if err != nil {
+			logger.Error(err, "Couldn't sync DRA driver objects")
+			return err
+		}
+	}
+
+	return nil
+}
+
+// cleanupDRADriverObjs removes DRA driver objects when switching to device plugin mode
+// (same set as constants.DRADriverPath: DaemonSet, RBAC, ServiceAccount, base DeviceClass).
+func cleanupDRADriverObjs(ctx context.Context, client k8sclient.Client) error {
+	logger := log.Log.WithName("cleanupDRADriverObjs")
+	logger.V(1).Info("Start to cleanup DRA driver objects")
+	ns := vars.Namespace
+
+	// Stop workloads first, then bindings, then roles, then SA, then cluster DeviceClass.
+	if err := deleteIfNotFound(ctx, client, &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverDaemonSetName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete DRA driver DaemonSet")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: constants.DRADriverClusterRBACName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete DRA driver ClusterRoleBinding")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverPodAccessRoleBindingName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete DRA driver RoleBinding")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: constants.DRADriverClusterRBACName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete DRA driver ClusterRole")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverPodAccessRoleName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete DRA driver Role")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: constants.DRADriverServiceAccountName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete DRA driver ServiceAccount")
+		return err
+	}
+
+	baseDC := &uns.Unstructured{}
+	baseDC.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
+	baseDC.SetName(constants.DRADriverBaseDeviceClassName)
+	if err := deleteIfNotFound(ctx, client, baseDC); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			logger.V(1).Info("DeviceClass CRD not available, skipping base DeviceClass cleanup")
+		} else {
+			logger.Error(err, "Failed to delete DRA base DeviceClass")
+			return err
+		}
+	}
+
+	logger.Info("Cleaned up DRA driver DaemonSet, RBAC, ServiceAccount, and base DeviceClass")
+	return nil
+}
+
+func deleteIfNotFound(ctx context.Context, c k8sclient.Client, obj k8sclient.Object) error {
+	if err := c.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// cleanupDevicePluginObjs removes device plugin objects when switching to DRA mode
+// (same set as constants.PluginPath: DaemonSet, RBAC, ServiceAccount).
+func cleanupDevicePluginObjs(ctx context.Context, client k8sclient.Client) error {
+	logger := log.Log.WithName("cleanupDevicePluginObjs")
+	logger.V(1).Info("Start to cleanup device plugin objects")
+	ns := vars.Namespace
+
+	// Stop workloads first, then bindings, then roles, then SA.
+	if err := deleteIfNotFound(ctx, client, &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginDaemonSetName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin DaemonSet")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginSCCRoleBindingName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin RoleBinding")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginPodAccessRoleBindingName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin pod-access RoleBinding")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginSCCRoleName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin Role")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginPodAccessRoleName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin pod-access Role")
+		return err
+	}
+	if err := deleteIfNotFound(ctx, client, &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: devicePluginServiceAccountName},
+	}); err != nil {
+		logger.Error(err, "Failed to delete device plugin ServiceAccount")
+		return err
+	}
+
+	logger.Info("Cleaned up device plugin DaemonSet, RBAC, and ServiceAccount")
+	return nil
+}
+
 func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.Scheme, dc *sriovnetworkv1.SriovOperatorConfig, obj *uns.Unstructured, applyFn applyManifestFunc) error {
 	logger := log.Log.WithName("syncDsObject")
 	kind := obj.GetKind()
@@ -221,6 +423,21 @@ func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.
 			return err
 		}
 		if err := applyFn(ctx, client, obj); err != nil {
+			logger.Error(err, "Fail to sync", "Kind", kind)
+			return err
+		}
+	case clusterRoleResourceName, clusterRoleBindingResourceName:
+		// ClusterRole/ClusterRoleBinding are cluster-scoped; do not set controller reference from namespaced dc.
+		if err := applyFn(ctx, client, obj); err != nil {
+			logger.Error(err, "Fail to sync", "Kind", kind)
+			return err
+		}
+	case deviceClassResourceName:
+		if err := applyFn(ctx, client, obj); err != nil {
+			if apimeta.IsNoMatchError(err) {
+				logger.V(1).Info("DeviceClass CRD not available, skipping DeviceClass sync")
+				return nil
+			}
 			logger.Error(err, "Fail to sync", "Kind", kind)
 			return err
 		}
