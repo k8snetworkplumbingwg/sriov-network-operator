@@ -944,9 +944,11 @@ When Policy Changes:
 Kubernetes 1.34 introduces an alpha feature called **Extended Resource Allocation by DRA** (controlled by the `DRAExtendedResource` feature gate). This feature allows `DeviceClass` resources to specify an `extendedResourceName`, enabling pods to request DRA-managed devices using traditional extended resource syntax instead of `ResourceClaim` objects.
 
 **Key Benefits:**
-- **Backward compatibility**: Existing pod specs using `resources.limits` can work with DRA without modification
-- **Seamless migration**: Users can switch from device plugin to DRA without rewriting pod specifications
-- **Coexistence**: Same extended resource name can be provided by device plugin on some nodes and DRA on others
+- **Backward compatibility**: Existing pod specs using `resources.limits` can work with DRA without modification when the cluster `DRAExtendedResource` feature gate is enabled
+- **Seamless migration**: Users can switch from device plugin to DRA cluster-wide without rewriting pod specifications
+- **Consistent resource names**: Per-resourceName DeviceClasses use the same `extendedResourceName` values as device plugin mode (`ResourcePrefix/resourceName`)
+
+**Cluster mode:** Device plugin and DRA driver are mutually exclusive at the cluster level (`dynamicResourceAllocation` feature gate). Per-node mixed mode (device plugin on some nodes, DRA on others) is not supported; see **Documentation and Migration** below and Open Questions item 2.
 
 #### Kubernetes Feature Details
 
@@ -1102,7 +1104,7 @@ func buildDeviceClassCEL(resourceName string) string {
 
 **4. Conflict Prevention**
 
-- *(Not yet implemented)* Validate that `extendedResourceName` doesn't conflict with actual device plugin resources on mixed-mode clusters
+- *(Not yet implemented)* Validate during mode transitions that `extendedResourceName` values do not conflict with lingering device plugin state before DRA is fully active
 - *(Not yet implemented)* Add status field to indicate if DeviceClass creation succeeded or failed due to conflicts
 
 **5. Documentation and Migration**
