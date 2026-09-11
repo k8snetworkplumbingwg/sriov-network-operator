@@ -251,25 +251,25 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	// Deploy either DRA driver or device plugin based on feature gate
+	// Deploy either DRA driver or device plugin based on feature gate.
+	// Sync the replacement provider before cleaning up the old one so a failed
+	// switch does not leave the cluster without either provider.
 	if r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
 		logger.Info("DRA feature gate enabled, deploying DRA driver instead of device plugin")
-		// Clean up device plugin if it exists
+		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
+			return reconcile.Result{}, fmt.Errorf("sync DRA driver objects: %w", err)
+		}
 		if err = cleanupDevicePluginObjs(ctx, r.Client); err != nil {
 			logger.Error(err, "Failed to cleanup device plugin objects")
-			return reconcile.Result{}, err
-		}
-		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
-			return reconcile.Result{}, err
+			return reconcile.Result{}, fmt.Errorf("cleanup device plugin objects: %w", err)
 		}
 	} else {
-		// Clean up DRA driver if it exists
+		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
+			return reconcile.Result{}, fmt.Errorf("sync device plugin objects: %w", err)
+		}
 		if err = cleanupDRADriverObjs(ctx, r.Client); err != nil {
 			logger.Error(err, "Failed to cleanup DRA driver objects")
-			return reconcile.Result{}, err
-		}
-		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
-			return reconcile.Result{}, err
+			return reconcile.Result{}, fmt.Errorf("cleanup DRA driver objects: %w", err)
 		}
 	}
 
