@@ -271,16 +271,16 @@ func TestValidateSriovNetworkNodePolicyWithDefaultPolicy(t *testing.T) {
 	os.Setenv("NAMESPACE", "openshift-sriov-network-operator")
 	vars.Namespace = "openshift-sriov-network-operator"
 	g := NewGomegaWithT(t)
-	ok, w, err := validateSriovNetworkNodePolicy(policy, "DELETE")
+	ok, w, err := validateSriovNetworkNodePolicy(context.Background(), policy, "DELETE")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(ok).To(Equal(true))
 	g.Expect(w).To(BeEmpty())
 
-	ok, _, err = validateSriovNetworkNodePolicy(policy, "UPDATE")
+	ok, _, err = validateSriovNetworkNodePolicy(context.Background(), policy, "UPDATE")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(ok).To(Equal(true))
 
-	ok, _, err = validateSriovNetworkNodePolicy(policy, "CREATE")
+	ok, _, err = validateSriovNetworkNodePolicy(context.Background(), policy, "CREATE")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(ok).To(Equal(true))
 }
@@ -756,20 +756,27 @@ func TestValidateDRAResourceNameCollision(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "policy-b", Namespace: vars.Namespace},
 		Spec:       SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
 	}
-	err := validateDRAResourceNameCollision(colliding, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	err := validateDRAResourceNameCollision(context.Background(), colliding, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
 	g.Expect(err).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
 
 	unique := &SriovNetworkNodePolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy-c", Namespace: vars.Namespace},
 		Spec:       SriovNetworkNodePolicySpec{ResourceName: "mlx_nic"},
 	}
-	err = validateDRAResourceNameCollision(unique, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	err = validateDRAResourceNameCollision(context.Background(), unique, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	outOfNamespace := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-other-ns", Namespace: "other-namespace"},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
+	}
+	err = validateDRAResourceNameCollision(context.Background(), outOfNamespace, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	config.Spec.FeatureGates[constants.DynamicResourceAllocationFeatureGate] = false
 	err = client.Update(context.Background(), config)
 	g.Expect(err).NotTo(HaveOccurred())
-	err = validateDRAResourceNameCollision(colliding, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
+	err = validateDRAResourceNameCollision(context.Background(), colliding, &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}})
 	g.Expect(err).NotTo(HaveOccurred())
 }
 

@@ -118,7 +118,7 @@ func validateSriovNetworkPoolConfig(cr *sriovnetworkv1.SriovNetworkPoolConfig, o
 	return true, warnings, nil
 }
 
-func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, operation v1.Operation) (bool, []string, error) {
+func validateSriovNetworkNodePolicy(ctx context.Context, cr *sriovnetworkv1.SriovNetworkNodePolicy, operation v1.Operation) (bool, []string, error) {
 	log.Log.V(2).Info("validateSriovNetworkNodePolicy", "object", cr)
 	var warnings []string
 
@@ -141,7 +141,7 @@ func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, o
 		return admit, warnings, err
 	}
 
-	admit, err = dynamicValidateSriovNetworkNodePolicy(cr)
+	admit, err = dynamicValidateSriovNetworkNodePolicy(ctx, cr)
 	if err != nil {
 		return admit, warnings, err
 	}
@@ -294,15 +294,18 @@ func isDRAFeatureEnabled(ctx context.Context) (bool, error) {
 		if k8serrors.IsNotFound(err) {
 			return false, nil
 		}
-		return false, err
+		return false, fmt.Errorf("get SriovOperatorConfig %q for DRA feature gate: %w", consts.DefaultConfigName, err)
 	}
 	return config.Spec.FeatureGates != nil && config.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate], nil
 }
 
 // validateDRAResourceNameCollision rejects policies whose resourceName normalizes to the same
 // DRA device class name as another policy with a different resourceName.
-func validateDRAResourceNameCollision(cr *sriovnetworkv1.SriovNetworkNodePolicy, npList *sriovnetworkv1.SriovNetworkNodePolicyList) error {
-	enabled, err := isDRAFeatureEnabled(context.Background())
+func validateDRAResourceNameCollision(ctx context.Context, cr *sriovnetworkv1.SriovNetworkNodePolicy, npList *sriovnetworkv1.SriovNetworkNodePolicyList) error {
+	if cr.GetNamespace() != vars.Namespace {
+		return nil
+	}
+	enabled, err := isDRAFeatureEnabled(ctx)
 	if err != nil || !enabled {
 		return err
 	}
@@ -331,28 +334,28 @@ func validateDRAResourceNameCollision(cr *sriovnetworkv1.SriovNetworkNodePolicy,
 	return nil
 }
 
-func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy) (bool, error) {
+func dynamicValidateSriovNetworkNodePolicy(ctx context.Context, cr *sriovnetworkv1.SriovNetworkNodePolicy) (bool, error) {
 	nodesSelected = false
 	interfaceSelected = false
 	nodeInterfaceErrorList := make(map[string][]string)
 
-	nodeList, err := kubeclient.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{
+	nodeList, err := kubeclient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
 		LabelSelector: labels.Set(cr.Spec.NodeSelector).String(),
 	})
 	if err != nil {
 		return false, err
 	}
 	nsList := &sriovnetworkv1.SriovNetworkNodeStateList{}
-	err = client.List(context.Background(), nsList, &runtimeclient.ListOptions{Namespace: namespace})
+	err = client.List(ctx, nsList, &runtimeclient.ListOptions{Namespace: namespace})
 	if err != nil {
 		return false, err
 	}
 	npList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
-	err = client.List(context.Background(), npList, &runtimeclient.ListOptions{Namespace: namespace})
+	err = client.List(ctx, npList, &runtimeclient.ListOptions{Namespace: namespace})
 	if err != nil {
 		return false, err
 	}
-	if err := validateDRAResourceNameCollision(cr, npList); err != nil {
+	if err := validateDRAResourceNameCollision(ctx, cr, npList); err != nil {
 		return false, err
 	}
 	for _, node := range nodeList.Items {
