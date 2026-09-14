@@ -795,7 +795,9 @@ var _ = Describe("IsManagedDRADriverPod", func() {
 				}},
 			},
 		}
-		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeTrue())
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeTrue(),
+			"pod with %s service account and %s DaemonSet controller owner should be managed",
+			constants.DRADriverServiceAccountName, constants.DRADriverDaemonSetName)
 	})
 
 	It("rejects pods with the wrong service account", func() {
@@ -810,7 +812,9 @@ var _ = Describe("IsManagedDRADriverPod", func() {
 				}},
 			},
 		}
-		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse())
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse(),
+			"pod with service account %q should not match when %s is required",
+			"other", constants.DRADriverServiceAccountName)
 	})
 
 	It("rejects pods owned by a different DaemonSet", func() {
@@ -825,7 +829,9 @@ var _ = Describe("IsManagedDRADriverPod", func() {
 				}},
 			},
 		}
-		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse())
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse(),
+			"pod owned by DaemonSet %q should not match when owner is %s",
+			"other-daemonset", constants.DRADriverDaemonSetName)
 	})
 
 	It("rejects pods without a controller owner reference", func() {
@@ -838,7 +844,9 @@ var _ = Describe("IsManagedDRADriverPod", func() {
 				}},
 			},
 		}
-		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse())
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse(),
+			"pod with DaemonSet owner %s but controller=false should not match",
+			constants.DRADriverDaemonSetName)
 	})
 })
 
