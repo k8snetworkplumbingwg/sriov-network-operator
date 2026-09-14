@@ -818,7 +818,8 @@ When Policy Changes:
 - **Requires:** DRA driver with Multus integration ([dra-driver-sriov#7](https://github.com/k8snetworkplumbingwg/dra-driver-sriov/pull/7))
 
 **6. Metrics and Monitoring**
-- DRA driver provides its own health check endpoints
+- The upstream DRA driver can expose a gRPC health service when `HEALTHCHECK_PORT` is set to a positive port
+- **Operator deployment:** `HEALTHCHECK_PORT` stays `-1` (health service off) and the DaemonSet has no liveness/readiness probes. The driver pod runs with `hostNetwork: true` (same as the SR-IOV device plugin). Binding a fixed health port on the host network namespace risks port conflicts with other hostNetwork workloads on the node (config daemon, device plugin, node services); the operator does not coordinate per-node port assignment or enforce non-overlap at admission time
 - *(Not yet implemented)* Operator DRA-specific metrics (CR counts, allocation events, etc.)
 
 **7. RBAC Requirements**
