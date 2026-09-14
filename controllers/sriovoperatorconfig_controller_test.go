@@ -85,12 +85,13 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			}).AnyTimes()
 
 		err = (&SriovOperatorConfigReconciler{
-			Client:            k8sManager.GetClient(),
-			Scheme:            k8sManager.GetScheme(),
-			Orchestrator:      orchestrator,
-			FeatureGate:       featuregate.New(),
-			StatusPatcher:     statusPatcher,
-			UncachedAPIReader: k8sManager.GetAPIReader(),
+			Client:                  k8sManager.GetClient(),
+			Scheme:                  k8sManager.GetScheme(),
+			Orchestrator:            orchestrator,
+			FeatureGate:             featuregate.New(),
+			StatusPatcher:           statusPatcher,
+			UncachedAPIReader:       k8sManager.GetAPIReader(),
+			ensureProviderRolloutFn: envtestEnsureProviderDaemonSetRolledOut(k8sManager.GetClient()),
 		}).SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -1145,12 +1146,42 @@ func (f *fakeStatusPatcher) ApplyCondition(_ context.Context, _ client.Object, c
 // Reconcile invocations against the envtest API.
 func newDirectSriovOperatorConfigReconciler(orchestrator *orchestratorMock.MockInterface) *SriovOperatorConfigReconciler {
 	return &SriovOperatorConfigReconciler{
-		Client:            k8sClient,
-		Scheme:            vars.Scheme,
-		Orchestrator:      orchestrator,
-		FeatureGate:       featuregate.New(),
-		StatusPatcher:     status.NewPatcher(k8sClient, nil, vars.Scheme, "direct-test"),
-		UncachedAPIReader: k8sClient,
+		Client:                  k8sClient,
+		Scheme:                  vars.Scheme,
+		Orchestrator:            orchestrator,
+		FeatureGate:             featuregate.New(),
+		StatusPatcher:           status.NewPatcher(k8sClient, nil, vars.Scheme, "direct-test"),
+		UncachedAPIReader:       k8sClient,
+		ensureProviderRolloutFn: envtestEnsureProviderDaemonSetRolledOut(k8sClient),
+	}
+}
+
+// envtestEnsureProviderDaemonSetRolledOut returns a rollout checker for envtest.
+// The API server does not run the DaemonSet controller, so status is patched once
+// the provider DaemonSet object exists.
+func envtestEnsureProviderDaemonSetRolledOut(c client.Client) func(context.Context, string) error {
+	return func(ctx context.Context, name string) error {
+		if err := ensureDaemonSetRolledOut(ctx, c, name); err == nil {
+			return nil
+		}
+		ds := &appsv1.DaemonSet{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: name}, ds); err != nil {
+			return fmt.Errorf("get DaemonSet %s: %w", name, err)
+		}
+		desired := ds.Status.DesiredNumberScheduled
+		if desired == 0 {
+			desired = 1
+		}
+		updated := ds.DeepCopy()
+		updated.Status.ObservedGeneration = updated.Generation
+		updated.Status.DesiredNumberScheduled = desired
+		updated.Status.CurrentNumberScheduled = desired
+		updated.Status.NumberReady = desired
+		updated.Status.UpdatedNumberScheduled = desired
+		if err := c.Status().Update(ctx, updated); err != nil {
+			return fmt.Errorf("mark DaemonSet %s rolled out for envtest: %w", name, err)
+		}
+		return nil
 	}
 }
 

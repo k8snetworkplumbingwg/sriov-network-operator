@@ -73,6 +73,8 @@ type SriovOperatorConfigReconciler struct {
 	renderManifestFn renderManifestFunc
 	applyManifestFn  applyManifestFunc
 	deleteManifestFn applyManifestFunc
+	// ensureProviderRolloutFn overrides provider DaemonSet rollout checks (envtest has no DS controller).
+	ensureProviderRolloutFn func(ctx context.Context, daemonSetName string) error
 }
 
 // renderManifests renders operator manifests using a reconciler-scoped renderer
@@ -103,6 +105,13 @@ func (r *SriovOperatorConfigReconciler) deleteManifest(ctx context.Context, c cl
 	}
 
 	return apply.DeleteObject(ctx, c, obj)
+}
+
+func (r *SriovOperatorConfigReconciler) ensureProviderDaemonSetRolledOut(ctx context.Context, name string) error {
+	if r.ensureProviderRolloutFn != nil {
+		return r.ensureProviderRolloutFn(ctx, name)
+	}
+	return ensureDaemonSetRolledOut(ctx, r.Client, name)
 }
 
 // getTLSTemplateData retrieves TLS configuration data for manifest rendering.
@@ -259,7 +268,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
 			return reconcile.Result{}, fmt.Errorf("sync DRA driver objects: %w", err)
 		}
-		if err = ensureDaemonSetRolledOut(ctx, r.Client, consts.DRADriverDaemonSetName); err != nil {
+		if err = r.ensureProviderDaemonSetRolledOut(ctx, consts.DRADriverDaemonSetName); err != nil {
 			return reconcile.Result{}, fmt.Errorf("wait for DRA driver rollout: %w", err)
 		}
 		if err = cleanupDevicePluginObjs(ctx, r.Client); err != nil {
@@ -270,7 +279,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
 			return reconcile.Result{}, fmt.Errorf("sync device plugin objects: %w", err)
 		}
-		if err = ensureDaemonSetRolledOut(ctx, r.Client, devicePluginDaemonSetName); err != nil {
+		if err = r.ensureProviderDaemonSetRolledOut(ctx, devicePluginDaemonSetName); err != nil {
 			return reconcile.Result{}, fmt.Errorf("wait for device plugin rollout: %w", err)
 		}
 		if err = cleanupDRADriverObjs(ctx, r.Client); err != nil {
