@@ -724,7 +724,8 @@ func (dn *NodeReconciler) getDRADriverPodsForNode(ctx context.Context) ([]corev1
 		}})
 	if err != nil {
 		funcLog.Error(err, "failed to list DRA driver pods")
-		return []corev1.Pod{}, err
+		return []corev1.Pod{}, fmt.Errorf("list DRA driver pods in namespace %s on node %s: %w",
+			vars.Namespace, vars.NodeName, err)
 	}
 	matched := make([]corev1.Pod, 0, len(pods.Items))
 	for i := range pods.Items {
@@ -754,7 +755,7 @@ func (dn *NodeReconciler) restartPods(ctx context.Context, component string, pod
 		}
 		if err != nil {
 			funcLog.Error(err, "Failed to delete pod", "component", component)
-			return err
+			return fmt.Errorf("delete %s pod %s/%s: %w", component, pod.Namespace, pod.Name, err)
 		}
 		newPod := &corev1.Pod{}
 		if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
