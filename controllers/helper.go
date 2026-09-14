@@ -246,6 +246,32 @@ func syncPluginDaemonObjs(ctx context.Context,
 	return nil
 }
 
+func isDaemonSetRolledOut(ds *appsv1.DaemonSet) bool {
+	if ds.Status.ObservedGeneration < ds.Generation {
+		return false
+	}
+	return ds.Status.NumberReady == ds.Status.DesiredNumberScheduled &&
+		ds.Status.UpdatedNumberScheduled == ds.Status.DesiredNumberScheduled
+}
+
+// ensureDaemonSetRolledOut gets the named DaemonSet once and requires that it
+// exists and has finished rolling out.
+func ensureDaemonSetRolledOut(ctx context.Context, c k8sclient.Client, name string) error {
+	ds := &appsv1.DaemonSet{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: name}, ds); err != nil {
+		if errors.IsNotFound(err) {
+			return fmt.Errorf("DaemonSet %s does not exist: %w", name, err)
+		}
+		return fmt.Errorf("get DaemonSet %s: %w", name, err)
+	}
+	if !isDaemonSetRolledOut(ds) {
+		return fmt.Errorf("DaemonSet %s is not rolled out: ready %d/%d updated %d, observedGeneration %d generation %d",
+			name, ds.Status.NumberReady, ds.Status.DesiredNumberScheduled, ds.Status.UpdatedNumberScheduled,
+			ds.Status.ObservedGeneration, ds.Generation)
+	}
+	return nil
+}
+
 func syncDRADriverObjs(ctx context.Context,
 	client k8sclient.Client,
 	scheme *runtime.Scheme,

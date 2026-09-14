@@ -259,6 +259,9 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
 			return reconcile.Result{}, fmt.Errorf("sync DRA driver objects: %w", err)
 		}
+		if err = ensureDaemonSetRolledOut(ctx, r.Client, consts.DRADriverDaemonSetName); err != nil {
+			return reconcile.Result{}, fmt.Errorf("wait for DRA driver rollout: %w", err)
+		}
 		if err = cleanupDevicePluginObjs(ctx, r.Client); err != nil {
 			logger.Error(err, "Failed to cleanup device plugin objects")
 			return reconcile.Result{}, fmt.Errorf("cleanup device plugin objects: %w", err)
@@ -266,6 +269,9 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 	} else {
 		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
 			return reconcile.Result{}, fmt.Errorf("sync device plugin objects: %w", err)
+		}
+		if err = ensureDaemonSetRolledOut(ctx, r.Client, devicePluginDaemonSetName); err != nil {
+			return reconcile.Result{}, fmt.Errorf("wait for device plugin rollout: %w", err)
 		}
 		if err = cleanupDRADriverObjs(ctx, r.Client); err != nil {
 			logger.Error(err, "Failed to cleanup DRA driver objects")

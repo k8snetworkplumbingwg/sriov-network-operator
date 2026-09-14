@@ -272,4 +272,51 @@ var _ = Describe("Helper DRA", func() {
 			Expect(err).To(MatchError(ContainSubstring("DeviceClass API is unavailable")))
 		})
 	})
+
+	Context("ensureDaemonSetRolledOut", func() {
+		var (
+			ctx    context.Context
+			scheme *runtime.Scheme
+			nsSave string
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			nsSave = vars.Namespace
+			vars.Namespace = testNamespace
+			DeferCleanup(func() { vars.Namespace = nsSave })
+			scheme = runtime.NewScheme()
+			utilruntime.Must(appsv1.AddToScheme(scheme))
+		})
+
+		It("fails when the DaemonSet is missing", func() {
+			client := fake.NewClientBuilder().WithScheme(scheme).Build()
+			err := ensureDaemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
+			Expect(err).To(MatchError(ContainSubstring("does not exist")))
+		})
+
+		It("fails when the DaemonSet is not rolled out", func() {
+			ds := &appsv1.DaemonSet{
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverDaemonSetName, Namespace: testNamespace, Generation: 1},
+				Status:     appsv1.DaemonSetStatus{ObservedGeneration: 0, DesiredNumberScheduled: 2, NumberReady: 0},
+			}
+			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ds).Build()
+			err := ensureDaemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
+			Expect(err).To(MatchError(ContainSubstring("is not rolled out")))
+		})
+
+		It("succeeds when the DaemonSet has finished rolling out", func() {
+			ds := &appsv1.DaemonSet{
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverDaemonSetName, Namespace: testNamespace, Generation: 1},
+				Status: appsv1.DaemonSetStatus{
+					ObservedGeneration:     1,
+					DesiredNumberScheduled: 2,
+					NumberReady:            2,
+					UpdatedNumberScheduled: 2,
+				},
+			}
+			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ds).Build()
+			Expect(ensureDaemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)).To(Succeed())
+		})
+	})
 })
