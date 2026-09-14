@@ -62,6 +62,9 @@ spec:
           requests:
             cpu: 10m
             memory: 10Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
       containers:
       - name: sriov-dra-driver
         image: {{.SRIOVDRADriverImage}}
@@ -100,6 +103,9 @@ spec:
           requests:
             cpu: 10m
             memory: 50Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         volumeMounts:
         - name: kubelet-plugins-registry
           mountPath: /var/lib/kubelet/plugins_registry
