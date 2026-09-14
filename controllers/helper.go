@@ -435,8 +435,7 @@ func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.
 	case deviceClassResourceName:
 		if err := applyFn(ctx, client, obj); err != nil {
 			if apimeta.IsNoMatchError(err) {
-				logger.V(1).Info("DeviceClass CRD not available, skipping DeviceClass sync")
-				return nil
+				return fmt.Errorf("DeviceClass API is unavailable: %w", err)
 			}
 			logger.Error(err, "Fail to sync", "Kind", kind)
 			return err

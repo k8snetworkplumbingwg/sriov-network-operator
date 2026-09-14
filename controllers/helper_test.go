@@ -26,6 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -256,6 +257,19 @@ var _ = Describe("Helper DRA", func() {
 			ds := &appsv1.DaemonSet{}
 			Expect(client.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "sriov-dra-driver"}, ds)).To(Succeed())
 			Expect(ds.Spec.Template.Spec.NodeSelector).To(HaveKeyWithValue("node-role.kubernetes.io/worker", ""))
+		})
+
+		It("fails when DeviceClass API is unavailable", func() {
+			applyFn := func(ctx context.Context, c k8sclient.Client, obj *unstructured.Unstructured) error {
+				if obj.GetKind() == deviceClassResourceName {
+					return &meta.NoKindMatchError{
+						GroupKind: schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"}.GroupKind(),
+					}
+				}
+				return testApplyManifest(ctx, c, obj)
+			}
+			err := syncDRADriverObjs(ctx, client, scheme, dc, testRenderManifests, applyFn)
+			Expect(err).To(MatchError(ContainSubstring("DeviceClass API is unavailable")))
 		})
 	})
 })
