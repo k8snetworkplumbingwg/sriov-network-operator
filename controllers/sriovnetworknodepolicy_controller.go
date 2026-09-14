@@ -1221,8 +1221,12 @@ func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 		}
 	}
 
-	// Add the filter if it has any criteria
-	config.ResourceFilters = append(config.ResourceFilters, resourceFilter)
+	// Skip an empty filter: a zero ResourceFilter matches every device and
+	// would advertise the whole node as this resource pool. Selection then
+	// relies on DeviceAttributesSelector (resource-pool label) alone.
+	if !equality.Semantic.DeepEqual(resourceFilter, sriovdrav1alpha1.ResourceFilter{}) {
+		config.ResourceFilters = append(config.ResourceFilters, resourceFilter)
+	}
 
 	return config, nil
 }

@@ -459,6 +459,24 @@ func TestBuildPolicyConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "empty nic selector omits ResourceFilter",
+			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
+				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+					ResourceName: "intel_nic",
+					NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{},
+				},
+			},
+			nodeState: nil,
+			check: func(t *testing.T, c *sriovdrav1alpha1.Config) {
+				if c.DeviceAttributesSelector == nil || c.DeviceAttributesSelector.MatchLabels["sriovnetwork.openshift.io/resource-pool"] != poolLabel {
+					t.Errorf("DeviceAttributesSelector should match pool %q", poolLabel)
+				}
+				if len(c.ResourceFilters) != 0 {
+					t.Errorf("empty nic selector should omit ResourceFilter, got %+v", c.ResourceFilters)
+				}
+			},
+		},
+		{
 			name: "deviceID with NumVfs uses GetVfDeviceID",
 			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
 				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
@@ -469,10 +487,13 @@ func TestBuildPolicyConfig(t *testing.T) {
 			},
 			nodeState: nil,
 			check: func(t *testing.T, c *sriovdrav1alpha1.Config) {
-				if len(c.ResourceFilters) != 1 {
-					t.Fatalf("expected one ResourceFilter, got %d", len(c.ResourceFilters))
+				// GetVfDeviceID returns "" for unknown deviceID; skip the empty filter.
+				if len(c.ResourceFilters) == 0 {
+					return
 				}
-				// GetVfDeviceID may return "" for unknown deviceID; then Devices is not set
+				if len(c.ResourceFilters) != 1 {
+					t.Fatalf("expected one ResourceFilter or none, got %d", len(c.ResourceFilters))
+				}
 				f := c.ResourceFilters[0]
 				if len(f.Devices) > 0 && f.Devices[0] == deviceIDVf {
 					t.Errorf("with NumVfs>0 expect VF device ID or empty, got %v", f.Devices)
