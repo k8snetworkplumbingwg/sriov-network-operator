@@ -33,7 +33,7 @@ The Kubernetes Device Plugin framework has several limitations that the Dynamic 
 
 1. **Limited Resource Modeling**: Device plugins can only expose simple countable resources (e.g., `intel.com/sriov: 10`). They cannot express complex device characteristics, NUMA topology, or filtering criteria.
 
-2. **Static Allocation**: Device plugin resource allocation happens before pod scheduling decisions are made, leading to potential scheduling inefficiencies and race conditions.
+2. **Static Allocation**: Device plugins advertise extended resources so the scheduler can filter nodes, but actual device assignment happens in the kubelet during container creation (device plugin `Allocate` RPC) after the pod is scheduled - not as a pre-scheduling allocation step.
 
 3. **No Resource Sharing**: Device plugins don't support controlled sharing or partitioning of resources across multiple containers or pods.
 
@@ -219,7 +219,7 @@ When `featureGates.dynamicResourceAllocation: true`:
 - Operator creates/manages DRA-related resources (DeviceClass, ServiceAccount, RBAC, etc.)
 - Operator auto-generates `SriovResourcePolicy` and `DeviceAttributes` CRs from policies
 - DRA driver only advertises devices that match a `SriovResourcePolicy` (opt-in model)
-- `SriovNetwork` CRs still work but users must use ResourceClaims instead of device plugin resources
+- Workloads request SR-IOV devices via **ResourceClaim** / **ResourceClaimTemplate** by default (not node extended resources). If the cluster enables the Kubernetes **`DRAExtendedResource`** feature gate, pods may instead use `resources.limits` with the same extended resource names as device-plugin mode (see [Extended Resource Allocation Support](#extended-resource-allocation-support-optional-enhancement)).
 
 ### API Extensions
 
@@ -633,7 +633,7 @@ metadata:
   name: sriovnetwork.k8snetworkplumbingwg.io
 spec:
   selectors:
-  - cel: 
+  - cel:
       expression: "device.driver == 'sriovnetwork.k8snetworkplumbingwg.io'"
 ```
 
@@ -953,13 +953,13 @@ Kubernetes 1.34 introduces an alpha feature called **Extended Resource Allocatio
 
 #### Kubernetes Feature Details
 
-**Feature State:** Kubernetes v1.34 [alpha] (disabled by default)
+**Feature state (Kubernetes `DRAExtendedResource` gate):** alpha in v1.34–v1.35, beta in v1.36, stable in v1.37 (disabled by default until stable).
 
-**Requirements:**
-- Enable `DRAExtendedResource` feature gate in:
-  - kube-apiserver
-  - kube-scheduler
-  - kubelet
+**Requirements:** Enable `DRAExtendedResource` on:
+- kube-apiserver
+- kube-scheduler
+- kube-controller-manager
+- kubelet
 
 **Two Usage Patterns:**
 
@@ -1105,6 +1105,7 @@ func buildDeviceClassCEL(resourceName string) string {
 
 **4. Conflict Prevention**
 
+- **Implemented:** When DRA is enabled, the admission webhook rejects `SriovNetworkNodePolicy` objects whose `resourceName` normalizes to the same DeviceClass name as another policy (`resourceNameToDeviceClassName()`). The policy controller skips colliding names as a fallback if validation is bypassed.
 - *(Not yet implemented)* Validate during mode transitions that `extendedResourceName` values do not conflict with lingering device plugin state before DRA is fully active
 - *(Not yet implemented)* Add status field to indicate if DeviceClass creation succeeded or failed due to conflicts
 
