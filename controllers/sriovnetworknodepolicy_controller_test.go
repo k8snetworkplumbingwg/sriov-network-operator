@@ -1491,6 +1491,45 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 
+		It("syncSriovResourcePolicies skips nodes missing kubernetes.io/hostname", func() {
+			nodeName := "worker-unlabeled"
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+					Labels: map[string]string{
+						"node-role.kubernetes.io/worker": "",
+					},
+				},
+			}
+			nodeState := &sriovnetworkv1.SriovNetworkNodeState{
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName, Namespace: testNamespace},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
+					Interfaces: sriovnetworkv1.InterfaceExts{
+						{Vendor: "8086", Driver: "i40e", PciAddress: "0000:86:00.0"},
+					},
+				},
+			}
+			beforeEachDRA(node, nodeState)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+							ResourceName: "intel_nic",
+							NodeSelector: map[string]string{"node-role.kubernetes.io/worker": ""},
+							NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{Vendor: "8086"},
+						},
+					},
+				},
+			}
+			nl := &corev1.NodeList{Items: []corev1.Node{*node}}
+			Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+			policyList := &sriovdrav1alpha1.SriovResourcePolicyList{}
+			Expect(r.List(ctx, policyList, k8sclient.InNamespace(testNamespace),
+				k8sclient.MatchingLabels{"sriovnetwork.openshift.io/generated-by": "sriov-network-operator"})).To(Succeed())
+			Expect(policyList.Items).To(BeEmpty())
+		})
+
 		It("syncSriovResourcePolicies creates SriovResourcePolicy per node", func() {
 			nodeName := "worker-0"
 			node := &corev1.Node{

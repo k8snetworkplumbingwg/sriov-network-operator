@@ -1122,8 +1122,8 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 
 	hostname, err := nodeHostname(node)
 	if err != nil {
-		logger.Error(err, "Failed to resolve node hostname for SriovResourcePolicy", "node", node.Name)
-		return nil, err
+		logger.V(1).Info("Skipping node without kubernetes.io/hostname for SriovResourcePolicy", "node", node.Name)
+		return nil, nil
 	}
 
 	policy := &sriovdrav1alpha1.SriovResourcePolicy{
