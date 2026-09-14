@@ -790,6 +790,18 @@ func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[s
 	return filtered
 }
 
+// ensureControllerOwner sets SriovOperatorConfig as controller owner when it is not already.
+// Returns true when OwnerReferences were mutated and an Update is required.
+func ensureControllerOwner(owner, obj metav1.Object, scheme *runtime.Scheme) (bool, error) {
+	if metav1.IsControlledBy(obj, owner) {
+		return false, nil
+	}
+	if err := controllerutil.SetControllerReference(owner, obj, scheme); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // applyDesiredLabels merges operator labels onto obj and reports whether any value changed.
 func applyDesiredLabels(obj metav1.Object, desired map[string]string) bool {
 	labels := obj.GetLabels()
@@ -812,10 +824,13 @@ func applyDesiredLabels(obj metav1.Object, desired map[string]string) bool {
 func reconcileDeviceAttributes(ctx context.Context, r *SriovNetworkNodePolicyReconciler,
 	dc *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger,
 	desired, existing *sriovdrav1alpha1.DeviceAttributes) error {
-	if err := controllerutil.SetControllerReference(dc, existing, r.Scheme); err != nil {
+	changed, err := ensureControllerOwner(dc, existing, r.Scheme)
+	if err != nil {
 		return err
 	}
-	changed := applyDesiredLabels(existing, desired.Labels)
+	if applyDesiredLabels(existing, desired.Labels) {
+		changed = true
+	}
 	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 		existing.Spec = desired.Spec
 		changed = true
@@ -832,10 +847,13 @@ func reconcileDeviceAttributes(ctx context.Context, r *SriovNetworkNodePolicyRec
 func reconcileSriovResourcePolicy(ctx context.Context, r *SriovNetworkNodePolicyReconciler,
 	dc *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger,
 	desired, existing *sriovdrav1alpha1.SriovResourcePolicy) error {
-	if err := controllerutil.SetControllerReference(dc, existing, r.Scheme); err != nil {
+	changed, err := ensureControllerOwner(dc, existing, r.Scheme)
+	if err != nil {
 		return err
 	}
-	changed := applyDesiredLabels(existing, desired.Labels)
+	if applyDesiredLabels(existing, desired.Labels) {
+		changed = true
+	}
 	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 		existing.Spec = desired.Spec
 		changed = true

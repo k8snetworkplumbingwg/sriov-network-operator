@@ -1320,6 +1320,25 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "intel-nic-attrs"}, got)).To(Succeed())
 			Expect(got.Labels["sriovnetwork.openshift.io/generated-by"]).To(Equal("sriov-network-operator"))
 			Expect(got.Labels["sriovnetwork.openshift.io/resource-pool"]).To(Equal("intel-nic"))
+			Expect(metav1.IsControlledBy(got, dc)).To(BeTrue(), "adopted DeviceAttributes should reference SriovOperatorConfig")
+		})
+
+		It("syncDeviceAttributes restores controller owner reference when labels and spec already match", func() {
+			attr := buildDeviceAttributesCR("intel-nic-attrs", "intel_nic")
+			attr.OwnerReferences = nil
+			beforeEachDRA(attr)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+				},
+			}
+			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
+			got := &sriovdrav1alpha1.DeviceAttributes{}
+			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "intel-nic-attrs"}, got)).To(Succeed())
+			Expect(metav1.IsControlledBy(got, dc)).To(BeTrue())
 		})
 
 		It("syncSriovResourcePolicies adopts CR when operator managed label was removed", func() {
@@ -1368,6 +1387,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: nodeName}, got)).To(Succeed())
 			Expect(got.Labels["sriovnetwork.openshift.io/generated-by"]).To(Equal("sriov-network-operator"))
 			Expect(got.Spec.Configs).To(HaveLen(1))
+			Expect(metav1.IsControlledBy(got, dc)).To(BeTrue(), "adopted SriovResourcePolicy should reference SriovOperatorConfig")
 		})
 
 		It("syncExtendedResourceDeviceClasses adopts CR when operator managed label was removed", func() {
