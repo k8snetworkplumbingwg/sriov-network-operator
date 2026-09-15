@@ -489,6 +489,76 @@ func TestBuildExtendedResourceDeviceClass(t *testing.T) {
 	}
 }
 
+func TestExtendedDeviceClassHasOwnershipMarker(t *testing.T) {
+	dc := &resourceapi.DeviceClass{ObjectMeta: metav1.ObjectMeta{
+		Labels: map[string]string{drapkg.DeviceClassResourceNameLabel: "intel_nic"},
+	}}
+	if !extendedDeviceClassHasOwnershipMarker(dc, "intel_nic") {
+		t.Fatal("expected ownership marker for matching resource name")
+	}
+	if extendedDeviceClassHasOwnershipMarker(dc, "other") {
+		t.Fatal("expected no ownership marker for mismatched resource name")
+	}
+	if extendedDeviceClassHasOwnershipMarker(&resourceapi.DeviceClass{}, "intel_nic") {
+		t.Fatal("expected no ownership marker without labels")
+	}
+}
+
+func TestSyncExtendedResourceDeviceClassesForeignNameConflict(t *testing.T) {
+	ctx := context.Background()
+	nsSaved := vars.Namespace
+	prefixSaved := vars.ResourcePrefix
+	vars.Namespace = testNamespace
+	vars.ResourcePrefix = "openshift.io"
+	defer func() {
+		vars.Namespace = nsSaved
+		vars.ResourcePrefix = prefixSaved
+	}()
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(sriovnetworkv1.AddToScheme(scheme))
+	utilruntime.Must(sriovdrav1alpha1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(resourceapi.AddToScheme(scheme))
+	dc := &sriovnetworkv1.SriovOperatorConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace},
+	}
+	foreign := &resourceapi.DeviceClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "intel-nic"},
+		Spec: resourceapi.DeviceClassSpec{
+			Selectors: []resourceapi.DeviceSelector{
+				{CEL: &resourceapi.CELDeviceSelector{Expression: `device.driver == "other"`}},
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dc, foreign).Build()
+	fg := featuregate.New()
+	fg.Init(map[string]bool{consts.DynamicResourceAllocationFeatureGate: true})
+	r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme, FeatureGate: fg}
+	pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+		Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: testNamespace},
+				Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+			},
+		},
+	}
+	err := r.syncExtendedResourceDeviceClasses(ctx, dc, pl)
+	if err == nil {
+		t.Fatal("expected conflict when DeviceClass name collides without ownership marker")
+	}
+	if !errors.IsConflict(err) {
+		t.Fatalf("expected conflict error, got %v", err)
+	}
+	got := &resourceapi.DeviceClass{}
+	if err := cl.Get(ctx, k8sclient.ObjectKey{Name: "intel-nic"}, got); err != nil {
+		t.Fatalf("Get foreign DeviceClass: %v", err)
+	}
+	if got.Spec.Selectors[0].CEL.Expression != `device.driver == "other"` {
+		t.Fatalf("foreign DeviceClass spec was modified: %q", got.Spec.Selectors[0].CEL.Expression)
+	}
+}
+
 var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 	Context("DRA sync and cleanup", func() {
 		var (
@@ -681,6 +751,32 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			Expect(got.Labels[drapkg.GeneratedByLabel]).To(Equal(consts.SriovNetworkOperatorIdentifier))
 			Expect(got.Spec.Configs).To(HaveLen(1))
 			Expect(metav1.IsControlledBy(got, dc)).To(BeTrue(), "adopted SriovResourcePolicy should reference SriovOperatorConfig")
+		})
+
+		It("syncExtendedResourceDeviceClasses returns conflict when DeviceClass name collides without ownership marker", func() {
+			foreign := &resourceapi.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "intel-nic"},
+				Spec: resourceapi.DeviceClassSpec{
+					Selectors: []resourceapi.DeviceSelector{
+						{CEL: &resourceapi.CELDeviceSelector{Expression: `device.driver == "other"`}},
+					},
+				},
+			}
+			beforeEachDRA(foreign)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+				},
+			}
+			err := r.syncExtendedResourceDeviceClasses(ctx, dc, pl)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.IsConflict(err)).To(BeTrue())
+			got := &resourceapi.DeviceClass{}
+			Expect(r.Get(ctx, k8sclient.ObjectKey{Name: "intel-nic"}, got)).To(Succeed())
+			Expect(got.Spec.Selectors[0].CEL.Expression).To(Equal(`device.driver == "other"`))
 		})
 
 		It("syncExtendedResourceDeviceClasses adopts CR when operator managed label was removed", func() {

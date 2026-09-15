@@ -31,6 +31,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -196,6 +197,15 @@ func deviceClassAPIUnavailable(err error) bool {
 		return false
 	}
 	return apimeta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err)
+}
+
+// extendedDeviceClassHasOwnershipMarker reports whether dc was previously managed by this operator.
+// The resource-name label survives managed-label drift when generated-by is removed.
+func extendedDeviceClassHasOwnershipMarker(dc *resourceapi.DeviceClass, resourceName string) bool {
+	if dc == nil || dc.Labels == nil {
+		return false
+	}
+	return dc.Labels[dra.DeviceClassResourceNameLabel] == resourceName
 }
 
 // reconcileExtendedDeviceClass brings an existing extended-resource DeviceClass in line with desired
@@ -641,6 +651,11 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 				if err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil {
 					logger.Error(err, "Failed to get existing DeviceClass for adoption", "name", res.deviceClassName)
 					return err
+				}
+				if !extendedDeviceClassHasOwnershipMarker(existing, res.resourceName) {
+					gr := schema.GroupResource{Group: resourceapi.SchemeGroupVersion.Group, Resource: "deviceclasses"}
+					return apierrors.NewConflict(gr, existing.Name,
+						fmt.Errorf("DeviceClass %q exists but is not operator-managed", existing.Name))
 				}
 				if err := reconcileExtendedDeviceClass(ctx, r.Client, desired, existing); err != nil {
 					logger.Error(err, "Failed to adopt DeviceClass", "name", res.deviceClassName)

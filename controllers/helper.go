@@ -196,10 +196,9 @@ func GetNodeSelectorForDevicePlugin(dc *sriovnetworkv1.SriovOperatorConfig) map[
 	return tmp.ConfigDaemonNodeSelector
 }
 
-// GetNodeSelectorForDRADriver returns the same node selector as the config daemon (workers).
-// Unlike the device plugin, the DRA driver does not use the device-plugin=Enabled label
-// because that label is only set when in device-plugin mode; in DRA mode we need the
-// driver to run on all config-daemon nodes.
+// GetNodeSelectorForDRADriver returns ConfigDaemonNodeSelector when set, otherwise GetDefaultNodeSelector.
+// The DRA driver DaemonSet is scheduled on the same nodes as the config daemon and does not add
+// SriovDevicePluginLabel (see GetNodeSelectorForDevicePlugin).
 func GetNodeSelectorForDRADriver(dc *sriovnetworkv1.SriovOperatorConfig) map[string]string {
 	if len(dc.Spec.ConfigDaemonNodeSelector) > 0 {
 		return dc.Spec.ConfigDaemonNodeSelector
