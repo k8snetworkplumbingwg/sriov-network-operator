@@ -30,9 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -168,15 +166,21 @@ func reconcileSriovResourcePolicy(ctx context.Context, r *SriovNetworkNodePolicy
 	return r.Update(ctx, existing)
 }
 
+// deviceClassAPIUnavailable reports whether the cluster client cannot use DeviceClass (API absent or type not in scheme).
+func deviceClassAPIUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apimeta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err)
+}
+
 // reconcileExtendedDeviceClass brings an existing extended-resource DeviceClass in line with desired
 // operator labels (including after managed-label drift) and spec.
 func reconcileExtendedDeviceClass(ctx context.Context, r client.Client,
-	desired, existing *unstructured.Unstructured) error {
+	desired, existing *resourceapi.DeviceClass) error {
 	changed := applyDesiredLabels(existing, desired.GetLabels())
-	desiredSpec, _, _ := unstructured.NestedMap(desired.Object, "spec")
-	existingSpec, _, _ := unstructured.NestedMap(existing.Object, "spec")
-	if !equality.Semantic.DeepEqual(desiredSpec, existingSpec) {
-		existing.Object["spec"] = desired.Object["spec"]
+	if !equality.Semantic.DeepEqual(desired.Spec, existing.Spec) {
+		existing.Spec = desired.Spec
 		changed = true
 	}
 	if !changed {
@@ -562,24 +566,22 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	logger := log.Log.WithName("syncExtendedResourceDeviceClasses")
 	logger.V(1).Info("Start to sync extended resource DeviceClasses")
 	desiredResourceNames := collectDRAPolicyResourceNames(pl)
-	gvk := schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"}
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(gvk)
+	list := &resourceapi.DeviceClassList{}
 	if err := r.List(ctx, list, client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
-		if apimeta.IsNoMatchError(err) {
-			logger.V(1).Info("DeviceClass CRD not available, skipping extended resource DeviceClass sync")
+		if deviceClassAPIUnavailable(err) {
+			logger.V(1).Info("DeviceClass API not available, skipping extended resource DeviceClass sync")
 			return nil
 		}
 		return err
 	}
 
-	existingDCByName := make(map[string]*unstructured.Unstructured, len(list.Items))
+	existingDCByName := make(map[string]*resourceapi.DeviceClass, len(list.Items))
 	for i := range list.Items {
-		existingDCByName[list.Items[i].GetName()] = &list.Items[i]
+		existingDCByName[list.Items[i].Name] = &list.Items[i]
 	}
 
 	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceClass") {
-		desired := buildDeviceClassUnstructured(res.deviceClassName, res.resourceName, buildExtendedResourceName(res.resourceName), buildDeviceClassCEL(res.resourceName))
+		desired := buildExtendedResourceDeviceClass(res.deviceClassName, res.resourceName, buildExtendedResourceName(res.resourceName), buildDeviceClassCEL(res.resourceName))
 		// Do not set controller reference: DeviceClass is cluster-scoped and dc (SriovOperatorConfig) is namespaced.
 		// Operator-created DeviceClasses are identified by label and cleaned up in cleanupExtendedResourceDeviceClasses when DRA is disabled.
 		if existing, ok := existingDCByName[res.deviceClassName]; ok {
@@ -592,8 +594,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 		if err := r.Create(ctx, desired); err != nil {
 			if errors.IsAlreadyExists(err) {
 				logger.V(1).Info("Adopting existing DeviceClass after managed-label drift", "name", res.deviceClassName)
-				existing := &unstructured.Unstructured{}
-				existing.SetGroupVersionKind(desired.GroupVersionKind())
+				existing := &resourceapi.DeviceClass{}
 				if err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil {
 					logger.Error(err, "Failed to get existing DeviceClass for adoption", "name", res.deviceClassName)
 					return err
@@ -609,7 +610,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
-		resourceName := item.GetLabels()[dra.DeviceClassResourceNameLabel]
+		resourceName := item.Labels[dra.DeviceClassResourceNameLabel]
 		if _, desired := desiredResourceNames[resourceName]; !desired {
 			if err := r.Delete(ctx, item); err != nil && !errors.IsNotFound(err) {
 				return err
@@ -619,31 +620,30 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	return nil
 }
 
-func buildDeviceClassUnstructured(deviceClassName, resourceName, extendedResourceName, celExpression string) *unstructured.Unstructured {
+func buildExtendedResourceDeviceClass(deviceClassName, resourceName, extendedResourceName, celExpression string) *resourceapi.DeviceClass {
 	labels := dra.OperatorGeneratedByLabels()
 	labels[dra.DeviceClassResourceNameLabel] = resourceName
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
-	obj.SetName(deviceClassName)
-	obj.SetLabels(labels)
-	obj.Object["spec"] = map[string]interface{}{
-		"extendedResourceName": extendedResourceName,
-		"selectors": []interface{}{
-			map[string]interface{}{"cel": map[string]interface{}{"expression": celExpression}},
+	return &resourceapi.DeviceClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   deviceClassName,
+			Labels: labels,
+		},
+		Spec: resourceapi.DeviceClassSpec{
+			ExtendedResourceName: &extendedResourceName,
+			Selectors: []resourceapi.DeviceSelector{
+				{CEL: &resourceapi.CELDeviceSelector{Expression: celExpression}},
+			},
 		},
 	}
-	return obj
 }
 
 func (r *SriovNetworkNodePolicyReconciler) cleanupExtendedResourceDeviceClasses(ctx context.Context) error {
 	logger := log.Log.WithName("cleanupExtendedResourceDeviceClasses")
 	logger.V(1).Info("Cleaning up extended resource DeviceClasses")
-	gvk := schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"}
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(gvk)
+	list := &resourceapi.DeviceClassList{}
 	if err := r.List(ctx, list, client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
-		if apimeta.IsNoMatchError(err) {
-			logger.V(1).Info("DeviceClass CRD not available, nothing to clean up")
+		if deviceClassAPIUnavailable(err) {
+			logger.V(1).Info("DeviceClass API not available, nothing to clean up")
 			return nil
 		}
 		return err

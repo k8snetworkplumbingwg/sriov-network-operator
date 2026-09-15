@@ -15,9 +15,7 @@ import (
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -430,40 +428,44 @@ func TestBuildPolicyConfig(t *testing.T) {
 	}
 }
 
-func TestBuildDeviceClassUnstructured(t *testing.T) {
+func TestDeviceClassAPIUnavailable(t *testing.T) {
+	list := &resourceapi.DeviceClassList{}
+	scheme := runtime.NewScheme()
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	err := cl.List(context.Background(), list)
+	if err == nil {
+		t.Fatal("expected list error without DeviceClass in scheme")
+	}
+	if !deviceClassAPIUnavailable(err) {
+		t.Errorf("deviceClassAPIUnavailable() = false, want true for %v", err)
+	}
+}
+
+func TestBuildExtendedResourceDeviceClass(t *testing.T) {
 	deviceClassName := "intel-nic"
 	resourceName := "intel_nic"
 	extendedResourceName := "openshift.io/intel_nic"
 	celExpr := `device.driver == "sriovnetwork.k8snetworkplumbingwg.io" && device.attributes["k8s.cni.cncf.io"].resourceName == "openshift.io/intel_nic"`
 
-	obj := buildDeviceClassUnstructured(deviceClassName, resourceName, extendedResourceName, celExpr)
+	obj := buildExtendedResourceDeviceClass(deviceClassName, resourceName, extendedResourceName, celExpr)
 
-	if obj.GetName() != deviceClassName {
-		t.Errorf("GetName() = %q, want %q", obj.GetName(), deviceClassName)
+	if obj.Name != deviceClassName {
+		t.Errorf("Name = %q, want %q", obj.Name, deviceClassName)
 	}
-	if obj.GetObjectKind().GroupVersionKind().Kind != "DeviceClass" ||
-		obj.GetObjectKind().GroupVersionKind().Group != "resource.k8s.io" {
-		t.Errorf("GVK = %v", obj.GetObjectKind().GroupVersionKind())
+	if obj.Labels[drapkg.GeneratedByLabel] != consts.SriovNetworkOperatorIdentifier {
+		t.Errorf("generated-by label: %v", obj.Labels)
 	}
-	if obj.GetLabels()[drapkg.GeneratedByLabel] != consts.SriovNetworkOperatorIdentifier {
-		t.Errorf("generated-by label: %v", obj.GetLabels())
+	if obj.Labels[drapkg.DeviceClassResourceNameLabel] != resourceName {
+		t.Errorf("resource-name label: %v", obj.Labels)
 	}
-	if obj.GetLabels()[drapkg.DeviceClassResourceNameLabel] != resourceName {
-		t.Errorf("resource-name label: %v", obj.GetLabels())
+	if obj.Spec.ExtendedResourceName == nil || *obj.Spec.ExtendedResourceName != extendedResourceName {
+		t.Errorf("spec.extendedResourceName = %v", obj.Spec.ExtendedResourceName)
 	}
-	spec, _, _ := unstructured.NestedMap(obj.Object, "spec")
-	if spec["extendedResourceName"] != extendedResourceName {
-		t.Errorf("spec.extendedResourceName = %v", spec["extendedResourceName"])
+	if len(obj.Spec.Selectors) != 1 || obj.Spec.Selectors[0].CEL == nil {
+		t.Fatalf("spec.selectors = %v", obj.Spec.Selectors)
 	}
-	selectors, _, _ := unstructured.NestedSlice(obj.Object, "spec", "selectors")
-	if len(selectors) != 1 {
-		t.Fatalf("spec.selectors length = %d", len(selectors))
-	}
-	sel, _ := selectors[0].(map[string]interface{})
-	cel, _ := sel["cel"].(map[string]interface{})
-	expr, _ := cel["expression"].(string)
-	if expr != celExpr {
-		t.Errorf("spec.selectors[0].cel.expression = %q, want %q", expr, celExpr)
+	if obj.Spec.Selectors[0].CEL.Expression != celExpr {
+		t.Errorf("spec.selectors[0].cel.expression = %q, want %q", obj.Spec.Selectors[0].CEL.Expression, celExpr)
 	}
 }
 
@@ -556,8 +558,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			for range 3 {
 				Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
 			}
-			dcList := &unstructured.UnstructuredList{}
-			dcList.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"})
+			dcList := &resourceapi.DeviceClassList{}
 			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
 			Expect(dcList.Items).To(HaveLen(1))
 
@@ -663,8 +664,8 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 		})
 
 		It("syncExtendedResourceDeviceClasses adopts CR when operator managed label was removed", func() {
-			obj := buildDeviceClassUnstructured("intel-nic", "intel_nic", "openshift.io/intel_nic", buildDeviceClassCEL("intel_nic"))
-			obj.SetLabels(map[string]string{drapkg.DeviceClassResourceNameLabel: "intel_nic"})
+			obj := buildExtendedResourceDeviceClass("intel-nic", "intel_nic", "openshift.io/intel_nic", buildDeviceClassCEL("intel_nic"))
+			obj.Labels = map[string]string{drapkg.DeviceClassResourceNameLabel: "intel_nic"}
 			beforeEachDRA(obj)
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
@@ -675,10 +676,9 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				},
 			}
 			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
-			got := &unstructured.Unstructured{}
-			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
+			got := &resourceapi.DeviceClass{}
 			Expect(r.Get(ctx, k8sclient.ObjectKey{Name: "intel-nic"}, got)).To(Succeed())
-			Expect(got.GetLabels()[drapkg.GeneratedByLabel]).To(Equal(consts.SriovNetworkOperatorIdentifier))
+			Expect(got.Labels[drapkg.GeneratedByLabel]).To(Equal(consts.SriovNetworkOperatorIdentifier))
 		})
 
 		It("syncDeviceAttributes creates DeviceAttributes for each policy resource name", func() {
@@ -845,11 +845,10 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				},
 			}
 			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
-			dcList := &unstructured.UnstructuredList{}
-			dcList.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"})
+			dcList := &resourceapi.DeviceClassList{}
 			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
 			Expect(dcList.Items).To(HaveLen(1))
-			Expect(dcList.Items[0].GetName()).To(Equal("intel-nic"))
+			Expect(dcList.Items[0].Name).To(Equal("intel-nic"))
 		})
 
 		It("syncExtendedResourceDeviceClasses creates DeviceClass per resource name", func() {
@@ -864,24 +863,24 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			}
 			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
 			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
-			dcList := &unstructured.UnstructuredList{}
-			dcList.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"})
+			dcList := &resourceapi.DeviceClassList{}
 			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
 			Expect(dcList.Items).To(HaveLen(1))
-			Expect(dcList.Items[0].GetName()).To(Equal("intel-nic"))
-			extName, _, _ := unstructured.NestedString(dcList.Items[0].Object, "spec", "extendedResourceName")
-			Expect(extName).To(Equal("openshift.io/intel_nic"))
+			Expect(dcList.Items[0].Name).To(Equal("intel-nic"))
+			Expect(dcList.Items[0].Spec.ExtendedResourceName).NotTo(BeNil())
+			Expect(*dcList.Items[0].Spec.ExtendedResourceName).To(Equal("openshift.io/intel_nic"))
 		})
 
 		It("cleanupExtendedResourceDeviceClasses deletes operator-created DeviceClasses", func() {
-			deviceClass := &unstructured.Unstructured{}
-			deviceClass.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
-			deviceClass.SetName("intel-nic")
-			deviceClass.SetLabels(drapkg.OperatorGeneratedByLabels())
+			deviceClass := &resourceapi.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "intel-nic",
+					Labels: drapkg.OperatorGeneratedByLabels(),
+				},
+			}
 			beforeEachDRA(deviceClass)
 			Expect(r.cleanupExtendedResourceDeviceClasses(ctx)).To(Succeed())
-			dcList := &unstructured.UnstructuredList{}
-			dcList.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClassList"})
+			dcList := &resourceapi.DeviceClassList{}
 			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
 			Expect(dcList.Items).To(BeEmpty())
 		})
