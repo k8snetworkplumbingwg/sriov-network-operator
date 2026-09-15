@@ -179,6 +179,7 @@ func TestBuildPolicyConfig(t *testing.T) {
 		policy    *sriovnetworkv1.SriovNetworkNodePolicy
 		nodeState *sriovnetworkv1.SriovNetworkNodeState
 		wantErr   bool
+		wantSkip  bool
 		check     func(t *testing.T, c *sriovdrav1alpha1.Config)
 	}{
 		{
@@ -241,6 +242,19 @@ func TestBuildPolicyConfig(t *testing.T) {
 					t.Errorf("Drivers want [vfio-pci], got %v", c.ResourceFilters[0].Drivers)
 				}
 			},
+		},
+		{
+			name: "netFilter nic selector is skipped",
+			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
+				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+					ResourceName: "openstack_nic",
+					NicSelector: sriovnetworkv1.SriovNetworkNicSelector{
+						NetFilter: "openstack/NetworkID:ada9ec67-2c97-467c-b674-c47200e2f5da",
+					},
+				},
+			},
+			nodeState: nil,
+			wantSkip:  true,
 		},
 		{
 			name: "empty nic selector omits ResourceFilter",
@@ -413,15 +427,21 @@ func TestBuildPolicyConfig(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := buildPolicyConfig(tc.policy, tc.nodeState)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("buildPolicyConfig: expected error")
+			cfg, skip, err := buildPolicyConfig(tc.policy, tc.nodeState)
+			if tc.wantSkip {
+				if !skip || cfg != nil || err == nil {
+					t.Fatalf("buildPolicyConfig: expected skip with reason error, got skip=%v cfg=%v err=%v", skip, cfg, err)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("buildPolicyConfig: %v", err)
+			if tc.wantErr {
+				if err == nil || skip {
+					t.Fatalf("buildPolicyConfig: expected error, got skip=%v err=%v", skip, err)
+				}
+				return
+			}
+			if err != nil || skip {
+				t.Fatalf("buildPolicyConfig: skip=%v err=%v", skip, err)
 			}
 			tc.check(t, cfg)
 		})

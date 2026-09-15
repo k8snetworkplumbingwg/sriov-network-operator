@@ -27,7 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -255,7 +255,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		}
 		logger.V(1).Info("Creating DeviceAttributes", "name", name)
 		if err := r.Create(ctx, desired); err != nil {
-			if errors.IsAlreadyExists(err) {
+			if apierrors.IsAlreadyExists(err) {
 				logger.V(1).Info("Adopting existing DeviceAttributes after managed-label drift", "name", name)
 				existing := &sriovdrav1alpha1.DeviceAttributes{}
 				if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: name}, existing); err != nil {
@@ -280,7 +280,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		pool := item.Labels[dra.ResourcePoolLabel]
 		if _, found := desiredPools[pool]; !found {
 			logger.V(1).Info("Deleting obsolete DeviceAttributes", "name", item.Name)
-			if err := r.Delete(ctx, item); err != nil && !errors.IsNotFound(err) {
+			if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
 				logger.Error(err, "Failed to delete DeviceAttributes", "name", item.Name)
 				return err
 			}
@@ -361,7 +361,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 			return err
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			if errors.IsAlreadyExists(err) {
+			if apierrors.IsAlreadyExists(err) {
 				logger.V(1).Info("Adopting existing SriovResourcePolicy after managed-label drift", "name", desired.Name, "node", nodeName)
 				existing := &sriovdrav1alpha1.SriovResourcePolicy{}
 				if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing); err != nil {
@@ -384,7 +384,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 		nodeName := existing.Labels[dra.SriovResourcePolicyNodeLabel]
 		if _, exists := desiredPolicies[nodeName]; !exists {
 			logger.V(1).Info("Deleting obsolete SriovResourcePolicy", "name", existing.Name, "node", nodeName)
-			if err := r.Delete(ctx, existing); err != nil && !errors.IsNotFound(err) {
+			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 				logger.Error(err, "Failed to delete SriovResourcePolicy", "name", existing.Name)
 				return err
 			}
@@ -467,7 +467,7 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 
 	nodeState := &sriovnetworkv1.SriovNetworkNodeState{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: node.Name}, nodeState); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			logger.V(1).Info("SriovNetworkNodeState not yet created, skipping node", "node", node.Name)
 			return nil, nil
 		}
@@ -482,7 +482,11 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 				continue
 			}
 		}
-		config, err := buildPolicyConfig(p, nodeState)
+		config, skip, err := buildPolicyConfig(p, nodeState)
+		if skip {
+			logger.V(1).Info("Skipping policy config for DRA", "policy", p.Name, "reason", err)
+			continue
+		}
 		if err != nil {
 			logger.Error(err, "Failed to build policy config", "policy", p.Name)
 			return nil, err
@@ -499,11 +503,21 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 
 // buildPolicyConfig converts a SriovNetworkNodePolicy to a SriovResourcePolicy Config
 // (DeviceAttributesSelector + ResourceFilters; resource name is in DeviceAttributes).
+// When skip is true, err describes why the policy was omitted and the caller should not treat it as a failure.
 func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
-	nodeState *sriovnetworkv1.SriovNetworkNodeState) (*sriovdrav1alpha1.Config, error) {
+	nodeState *sriovnetworkv1.SriovNetworkNodeState) (*sriovdrav1alpha1.Config, bool, error) {
 	if p == nil {
-		return nil, fmt.Errorf("policy is required")
+		return nil, false, fmt.Errorf("policy is required")
 	}
+
+	// TODO: Add NetFilter support.
+	// We skip the entire config because we cannot express the NetFilter selector for DRA Driver SR-IOV.
+	if p.Spec.NicSelector.NetFilter != "" {
+		// SriovResourcePolicy ResourceFilter has no netFilter field yet; omitting ResourceFilters
+		// would match all devices on the node (driver wildcard semantics).
+		return nil, true, fmt.Errorf("netFilter nic selector is not supported for DRA")
+	}
+
 	pool := dra.ResourceNameToDeviceClassName(p.Spec.ResourceName)
 	config := &sriovdrav1alpha1.Config{
 		DeviceAttributesSelector: &metav1.LabelSelector{
@@ -558,21 +572,13 @@ func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 
 	// Do not append a zero-valued ResourceFilter: in dra-driver-sriov, deviceMatchesFilter
 	// treats every unset field as a wildcard, so {} matches all devices on the node.
-	//
-	// TODO: Add NetFilter support.
-	// We still return config with DeviceAttributesSelector set and resourceFilters omitted
-	// when nothing from the SriovNetworkNodePolicy mapped into resourceFilter (e.g. webhook
-	// disabled, GetVfDeviceID returned empty, or nic criteria we do not map yet such as
-	// NetFilter-only policies). The driver uses the same match-all rule for len(resourceFilters)==0,
-	// so an omitted list is not safer than [{}]—only avoids a redundant manifest entry.
-	// DeviceAttributesSelector selects which DeviceAttributes CRs to merge onto devices; it does
-	// not restrict which VFs are advertised. Valid policies via admission webhook normally
-	// include vendor/deviceID/pfNames/rootDevices/netFilter so at least one filter field is set.
+	// NetFilter-only policies are skipped earlier; when nothing else mapped (e.g. GetVfDeviceID
+	// returned empty), omit ResourceFilters rather than emitting a match-all filter entry.
 	if !equality.Semantic.DeepEqual(resourceFilter, sriovdrav1alpha1.ResourceFilter{}) {
 		config.ResourceFilters = append(config.ResourceFilters, resourceFilter)
 	}
 
-	return config, nil
+	return config, false, nil
 }
 
 // buildExtendedResourceName returns the extended resource name: ResourcePrefix/resourceName.
@@ -629,7 +635,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 			continue
 		}
 		if err := r.Create(ctx, desired); err != nil {
-			if errors.IsAlreadyExists(err) {
+			if apierrors.IsAlreadyExists(err) {
 				logger.V(1).Info("Adopting existing DeviceClass after managed-label drift", "name", res.deviceClassName)
 				existing := &resourceapi.DeviceClass{}
 				if err := r.Get(ctx, client.ObjectKeyFromObject(desired), existing); err != nil {
@@ -649,7 +655,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 		item := &list.Items[i]
 		resourceName := item.Labels[dra.DeviceClassResourceNameLabel]
 		if _, desired := retainedResourceNames[resourceName]; !desired {
-			if err := r.Delete(ctx, item); err != nil && !errors.IsNotFound(err) {
+			if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
 		}
@@ -686,7 +692,7 @@ func (r *SriovNetworkNodePolicyReconciler) cleanupExtendedResourceDeviceClasses(
 		return err
 	}
 	for i := range list.Items {
-		if err := r.Delete(ctx, &list.Items[i]); err != nil && !errors.IsNotFound(err) {
+		if err := r.Delete(ctx, &list.Items[i]); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
@@ -710,7 +716,7 @@ func (r *SriovNetworkNodePolicyReconciler) cleanupSriovResourcePoliciesAndDevice
 		}
 	} else {
 		for i := range policyList.Items {
-			if err := r.Delete(ctx, &policyList.Items[i]); err != nil && !errors.IsNotFound(err) {
+			if err := r.Delete(ctx, &policyList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
 		}
@@ -724,7 +730,7 @@ func (r *SriovNetworkNodePolicyReconciler) cleanupSriovResourcePoliciesAndDevice
 		}
 	} else {
 		for i := range attrList.Items {
-			if err := r.Delete(ctx, &attrList.Items[i]); err != nil && !errors.IsNotFound(err) {
+			if err := r.Delete(ctx, &attrList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
 		}
