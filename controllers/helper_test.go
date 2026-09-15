@@ -39,6 +39,7 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/apply"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
@@ -125,15 +126,17 @@ var _ = Describe("Helper DRA", func() {
 			roleBinding := &rbacv1.RoleBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverPodAccessRoleBindingName, Namespace: testNamespace},
 			}
+			managedLabels := dra.OperatorGeneratedByLabels()
 			clusterRole := &rbacv1.ClusterRole{
-				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName, Labels: managedLabels},
 			}
 			clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName, Labels: managedLabels},
 			}
 			dc := &unstructured.Unstructured{}
 			dc.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
 			dc.SetName(consts.DRADriverBaseDeviceClassName)
+			dc.SetLabels(managedLabels)
 
 			client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 				ds, sa, role, roleBinding, clusterRole, clusterRoleBinding, dc,
@@ -152,6 +155,27 @@ var _ = Describe("Helper DRA", func() {
 		It("succeeds when DRA driver DaemonSet does not exist", func() {
 			client = fake.NewClientBuilder().WithScheme(scheme).Build()
 			Expect(cleanupDRADriverObjs(ctx, client)).To(Succeed())
+		})
+
+		It("does not delete cluster-scoped DRA objects without the operator management marker", func() {
+			clusterRole := &rbacv1.ClusterRole{
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName},
+			}
+			clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverClusterRBACName},
+			}
+			dc := &unstructured.Unstructured{}
+			dc.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
+			dc.SetName(consts.DRADriverBaseDeviceClassName)
+
+			client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				clusterRole, clusterRoleBinding, dc,
+			).Build()
+			Expect(cleanupDRADriverObjs(ctx, client)).To(Succeed())
+
+			Expect(client.Get(ctx, types.NamespacedName{Name: consts.DRADriverClusterRBACName}, &rbacv1.ClusterRole{})).To(Succeed())
+			Expect(client.Get(ctx, types.NamespacedName{Name: consts.DRADriverClusterRBACName}, &rbacv1.ClusterRoleBinding{})).To(Succeed())
+			Expect(client.Get(ctx, types.NamespacedName{Name: consts.DRADriverBaseDeviceClassName}, dc)).To(Succeed())
 		})
 	})
 

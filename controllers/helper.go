@@ -47,6 +47,7 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
@@ -323,7 +324,52 @@ func syncDRADriverObjs(ctx context.Context,
 
 func deleteIgnoringNotFound(ctx context.Context, c k8sclient.Client, obj k8sclient.Object) error {
 	if err := c.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete %T %s: %w", obj, k8sclient.ObjectKeyFromObject(obj), err)
+	}
+	return nil
+}
+
+func objectHasOperatorManagedLabel(obj metav1.Object) bool {
+	if obj == nil {
+		return false
+	}
+	labels := obj.GetLabels()
+	return labels != nil && labels[dra.GeneratedByLabel] == constants.SriovNetworkOperatorIdentifier
+}
+
+func mergeOperatorManagedLabels(obj *uns.Unstructured) {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for k, v := range dra.OperatorGeneratedByLabels() {
+		labels[k] = v
+	}
+	obj.SetLabels(labels)
+}
+
+// deleteOperatorManagedIgnoringNotFound deletes obj only when it exists and carries the operator management marker.
+func deleteOperatorManagedIgnoringNotFound(ctx context.Context, c k8sclient.Client, obj k8sclient.Object) error {
+	key := k8sclient.ObjectKeyFromObject(obj)
+	existing := obj.DeepCopyObject().(k8sclient.Object)
+	if err := c.Get(ctx, key, existing); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
 		return err
+	}
+	if !objectHasOperatorManagedLabel(existing) {
+		log.Log.WithName("deleteOperatorManagedIgnoringNotFound").V(1).Info(
+			"Skipping delete of object without operator management marker",
+			"Kind", existing.GetObjectKind().GroupVersionKind().Kind, "Name", existing.GetName())
+		return nil
+	}
+	preconditions := metav1.NewUIDPreconditions(string(existing.GetUID()))
+	if err := c.Delete(ctx, existing, &k8sclient.DeleteOptions{Preconditions: preconditions}); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete %T %s: %w", obj, key, err)
 	}
 	return nil
 }
@@ -342,7 +388,7 @@ func cleanupDRADriverObjs(ctx context.Context, client k8sclient.Client) error {
 		logger.Error(err, "Failed to delete DRA driver DaemonSet")
 		return err
 	}
-	if err := deleteIgnoringNotFound(ctx, client, &rbacv1.ClusterRoleBinding{
+	if err := deleteOperatorManagedIgnoringNotFound(ctx, client, &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: constants.DRADriverClusterRBACName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver ClusterRoleBinding")
@@ -354,7 +400,7 @@ func cleanupDRADriverObjs(ctx context.Context, client k8sclient.Client) error {
 		logger.Error(err, "Failed to delete DRA driver RoleBinding")
 		return err
 	}
-	if err := deleteIgnoringNotFound(ctx, client, &rbacv1.ClusterRole{
+	if err := deleteOperatorManagedIgnoringNotFound(ctx, client, &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: constants.DRADriverClusterRBACName},
 	}); err != nil {
 		logger.Error(err, "Failed to delete DRA driver ClusterRole")
@@ -376,7 +422,7 @@ func cleanupDRADriverObjs(ctx context.Context, client k8sclient.Client) error {
 	baseDC := &uns.Unstructured{}
 	baseDC.SetGroupVersionKind(schema.GroupVersionKind{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass"})
 	baseDC.SetName(constants.DRADriverBaseDeviceClassName)
-	if err := deleteIgnoringNotFound(ctx, client, baseDC); err != nil {
+	if err := deleteOperatorManagedIgnoringNotFound(ctx, client, baseDC); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			logger.V(1).Info("DeviceClass CRD not available, skipping base DeviceClass cleanup")
 		} else {
@@ -453,11 +499,13 @@ func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.
 		}
 	case clusterRoleResourceName, clusterRoleBindingResourceName:
 		// ClusterRole/ClusterRoleBinding are cluster-scoped; do not set controller reference from namespaced dc.
+		mergeOperatorManagedLabels(obj)
 		if err := applyFn(ctx, client, obj); err != nil {
 			logger.Error(err, "Fail to sync", "Kind", kind)
 			return err
 		}
 	case deviceClassResourceName:
+		mergeOperatorManagedLabels(obj)
 		if err := applyFn(ctx, client, obj); err != nil {
 			if apimeta.IsNoMatchError(err) {
 				return fmt.Errorf("DeviceClass API is unavailable: %w", err)
