@@ -903,6 +903,11 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		return err
 	}
 
+	existingAttrsByName := make(map[string]*sriovdrav1alpha1.DeviceAttributes, len(attrList.Items))
+	for i := range attrList.Items {
+		existingAttrsByName[attrList.Items[i].Name] = &attrList.Items[i]
+	}
+
 	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceAttributes") {
 		name := res.deviceClassName + "-attrs"
 		desired := buildDeviceAttributesCR(name, res.resourceName)
@@ -910,14 +915,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 			logger.Error(err, "Failed to set controller reference on DeviceAttributes", "name", name)
 			return err
 		}
-		var existing *sriovdrav1alpha1.DeviceAttributes
-		for i := range attrList.Items {
-			if attrList.Items[i].Name == name {
-				existing = &attrList.Items[i]
-				break
-			}
-		}
-		if existing != nil {
+		if existing, ok := existingAttrsByName[name]; ok {
 			if err := reconcileDeviceAttributes(ctx, r, dc, logger, desired, existing); err != nil {
 				logger.Error(err, "Failed to reconcile DeviceAttributes", "name", name)
 				return err
@@ -943,18 +941,16 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 			return err
 		}
 	}
+
+	desiredPools := make(map[string]struct{}, len(desiredResourceNames))
+	for resourceName := range desiredResourceNames {
+		desiredPools[dra.ResourceNameToDeviceClassName(resourceName)] = struct{}{}
+	}
+
 	for i := range attrList.Items {
 		item := &attrList.Items[i]
 		pool := item.Labels[draResourcePoolLabel]
-		// Match by resource-pool label: desired set uses resourceNameToDeviceClassName(rn) as pool
-		found := false
-		for resourceName := range desiredResourceNames {
-			if dra.ResourceNameToDeviceClassName(resourceName) == pool {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, found := desiredPools[pool]; !found {
 			logger.V(1).Info("Deleting obsolete DeviceAttributes", "name", item.Name)
 			if err := r.Delete(ctx, item); err != nil && !errors.IsNotFound(err) {
 				logger.Error(err, "Failed to delete DeviceAttributes", "name", item.Name)
@@ -1017,42 +1013,40 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 		return err
 	}
 
+	existingPoliciesByName := make(map[string]*sriovdrav1alpha1.SriovResourcePolicy, len(policyList.Items))
+	for i := range policyList.Items {
+		existingPoliciesByName[policyList.Items[i].Name] = &policyList.Items[i]
+	}
+
 	for nodeName, desired := range desiredPolicies {
-		found := false
-		for i := range policyList.Items {
-			existing := &policyList.Items[i]
-			if existing.Name == desired.Name {
-				found = true
-				if err := reconcileSriovResourcePolicy(ctx, r, dc, logger, desired, existing); err != nil {
-					logger.Error(err, "Failed to reconcile SriovResourcePolicy", "name", desired.Name, "node", nodeName)
+		if existing, ok := existingPoliciesByName[desired.Name]; ok {
+			if err := reconcileSriovResourcePolicy(ctx, r, dc, logger, desired, existing); err != nil {
+				logger.Error(err, "Failed to reconcile SriovResourcePolicy", "name", desired.Name, "node", nodeName)
+				return err
+			}
+			continue
+		}
+		logger.V(1).Info("Creating SriovResourcePolicy", "name", desired.Name, "node", nodeName)
+		if err := controllerutil.SetControllerReference(dc, desired, r.Scheme); err != nil {
+			logger.Error(err, "Failed to set controller reference", "name", desired.Name)
+			return err
+		}
+		if err := r.Create(ctx, desired); err != nil {
+			if errors.IsAlreadyExists(err) {
+				logger.V(1).Info("Adopting existing SriovResourcePolicy after managed-label drift", "name", desired.Name, "node", nodeName)
+				existing := &sriovdrav1alpha1.SriovResourcePolicy{}
+				if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing); err != nil {
+					logger.Error(err, "Failed to get existing SriovResourcePolicy for adoption", "name", desired.Name)
 					return err
 				}
-				break
-			}
-		}
-		if !found {
-			logger.V(1).Info("Creating SriovResourcePolicy", "name", desired.Name, "node", nodeName)
-			if err := controllerutil.SetControllerReference(dc, desired, r.Scheme); err != nil {
-				logger.Error(err, "Failed to set controller reference", "name", desired.Name)
-				return err
-			}
-			if err := r.Create(ctx, desired); err != nil {
-				if errors.IsAlreadyExists(err) {
-					logger.V(1).Info("Adopting existing SriovResourcePolicy after managed-label drift", "name", desired.Name, "node", nodeName)
-					existing := &sriovdrav1alpha1.SriovResourcePolicy{}
-					if err := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing); err != nil {
-						logger.Error(err, "Failed to get existing SriovResourcePolicy for adoption", "name", desired.Name)
-						return err
-					}
-					if err := reconcileSriovResourcePolicy(ctx, r, dc, logger, desired, existing); err != nil {
-						logger.Error(err, "Failed to adopt SriovResourcePolicy", "name", desired.Name)
-						return err
-					}
-					continue
+				if err := reconcileSriovResourcePolicy(ctx, r, dc, logger, desired, existing); err != nil {
+					logger.Error(err, "Failed to adopt SriovResourcePolicy", "name", desired.Name)
+					return err
 				}
-				logger.Error(err, "Failed to create SriovResourcePolicy", "name", desired.Name)
-				return err
+				continue
 			}
+			logger.Error(err, "Failed to create SriovResourcePolicy", "name", desired.Name)
+			return err
 		}
 	}
 
@@ -1221,9 +1215,18 @@ func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 		}
 	}
 
-	// Skip an empty filter: a zero ResourceFilter matches every device and
-	// would advertise the whole node as this resource pool. Selection then
-	// relies on DeviceAttributesSelector (resource-pool label) alone.
+	// Do not append a zero-valued ResourceFilter: in dra-driver-sriov, deviceMatchesFilter
+	// treats every unset field as a wildcard, so {} matches all devices on the node.
+	//
+	// TODO: Add NetFilter support.
+	// We still return config with DeviceAttributesSelector set and resourceFilters omitted
+	// when nothing from the SriovNetworkNodePolicy mapped into resourceFilter (e.g. webhook
+	// disabled, GetVfDeviceID returned empty, or nic criteria we do not map yet such as
+	// NetFilter-only policies). The driver uses the same match-all rule for len(resourceFilters)==0,
+	// so an omitted list is not safer than [{}]—only avoids a redundant manifest entry.
+	// DeviceAttributesSelector selects which DeviceAttributes CRs to merge onto devices; it does
+	// not restrict which VFs are advertised. Valid policies via admission webhook normally
+	// include vendor/deviceID/pfNames/rootDevices/netFilter so at least one filter field is set.
 	if !equality.Semantic.DeepEqual(resourceFilter, sriovdrav1alpha1.ResourceFilter{}) {
 		config.ResourceFilters = append(config.ResourceFilters, resourceFilter)
 	}
@@ -1278,18 +1281,17 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 		}
 		return err
 	}
+
+	existingDCByName := make(map[string]*unstructured.Unstructured, len(list.Items))
+	for i := range list.Items {
+		existingDCByName[list.Items[i].GetName()] = &list.Items[i]
+	}
+
 	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceClass") {
 		desired := buildDeviceClassUnstructured(res.deviceClassName, res.resourceName, buildExtendedResourceName(res.resourceName), buildDeviceClassCEL(res.resourceName))
 		// Do not set controller reference: DeviceClass is cluster-scoped and dc (SriovOperatorConfig) is namespaced.
 		// Operator-created DeviceClasses are identified by label and cleaned up in cleanupExtendedResourceDeviceClasses when DRA is disabled.
-		var existing *unstructured.Unstructured
-		for i := range list.Items {
-			if list.Items[i].GetName() == res.deviceClassName {
-				existing = &list.Items[i]
-				break
-			}
-		}
-		if existing != nil {
+		if existing, ok := existingDCByName[res.deviceClassName]; ok {
 			if err := reconcileExtendedDeviceClass(ctx, r.Client, desired, existing); err != nil {
 				logger.Error(err, "Failed to reconcile DeviceClass", "name", res.deviceClassName)
 				return err
