@@ -66,7 +66,7 @@ type draPolicyResource struct {
 // Distinct policy resourceNames that normalize to the same device class name cannot coexist in DRA mode.
 // validateDRAResourceNameCollision in the admission webhook rejects such policies at apply time; collisions
 // skipped here are logged as a reconciliation fallback (e.g. webhook disabled or objects changed out of band).
-func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[string]struct{}, objectKind string) []draPolicyResource {
+func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[string]struct{}) []draPolicyResource {
 	keys := make([]string, 0, len(resourceNames))
 	for name := range resourceNames {
 		keys = append(keys, name)
@@ -78,8 +78,8 @@ func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[s
 	for _, resourceName := range keys {
 		deviceClassName := dra.ResourceNameToDeviceClassName(resourceName)
 		if _, dup := seen[deviceClassName]; dup {
-			logger.Error(nil, "Skipping "+objectKind+" with colliding normalized name",
-				"name", deviceClassName, "resourceName", resourceName)
+			logger.Error(nil, "Skipping policy resource name with colliding normalized device class",
+				"deviceClassName", deviceClassName, "resourceName", resourceName)
 			continue
 		}
 		seen[deviceClassName] = struct{}{}
@@ -89,6 +89,30 @@ func filterDRAResourceNamesByDeviceClass(logger logr.Logger, resourceNames map[s
 		})
 	}
 	return filtered
+}
+
+// retainedDRAPolicyResources returns resource names kept after normalized device-class deduplication.
+// Use the same result for DeviceAttributes, DeviceClass, and SriovResourcePolicy configs.
+func retainedDRAPolicyResources(logger logr.Logger, pl *sriovnetworkv1.SriovNetworkNodePolicyList) []draPolicyResource {
+	return filterDRAResourceNamesByDeviceClass(logger, collectDRAPolicyResourceNames(pl))
+}
+
+// draResourceNameSet returns a set of resource names from a list of draPolicyResource.
+func draResourceNameSet(resources []draPolicyResource) map[string]struct{} {
+	set := make(map[string]struct{}, len(resources))
+	for _, res := range resources {
+		set[res.resourceName] = struct{}{}
+	}
+	return set
+}
+
+// draDeviceClassPoolSet returns a set of device class names from a list of draPolicyResource.
+func draDeviceClassPoolSet(resources []draPolicyResource) map[string]struct{} {
+	set := make(map[string]struct{}, len(resources))
+	for _, res := range resources {
+		set[res.deviceClassName] = struct{}{}
+	}
+	return set
 }
 
 // ensureControllerOwner sets SriovOperatorConfig as controller owner when it is not already.
@@ -197,7 +221,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 	logger := log.Log.WithName("syncDeviceAttributes")
 	logger.V(1).Info("Start to sync DeviceAttributes CRs")
 
-	desiredResourceNames := collectDRAPolicyResourceNames(pl)
+	retainedPolicyResources := retainedDRAPolicyResources(logger, pl)
 
 	attrList := &sriovdrav1alpha1.DeviceAttributesList{}
 	if err := r.List(ctx, attrList, client.InNamespace(vars.Namespace),
@@ -215,7 +239,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		existingAttrsByName[attrList.Items[i].Name] = &attrList.Items[i]
 	}
 
-	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceAttributes") {
+	for _, res := range retainedPolicyResources {
 		name := res.deviceClassName + "-attrs"
 		desired := buildDeviceAttributesCR(name, res.resourceName)
 		if err := controllerutil.SetControllerReference(dc, desired, r.Scheme); err != nil {
@@ -249,10 +273,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		}
 	}
 
-	desiredPools := make(map[string]struct{}, len(desiredResourceNames))
-	for resourceName := range desiredResourceNames {
-		desiredPools[dra.ResourceNameToDeviceClassName(resourceName)] = struct{}{}
-	}
+	desiredPools := draDeviceClassPoolSet(retainedPolicyResources)
 
 	for i := range attrList.Items {
 		item := &attrList.Items[i]
@@ -296,9 +317,11 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 	logger := log.Log.WithName("syncSriovResourcePolicies")
 	logger.V(1).Info("Start to sync SriovResourcePolicy CRs")
 
+	retainedPolicyResources := retainedDRAPolicyResources(logger, pl)
+	retainedResourceNames := draResourceNameSet(retainedPolicyResources)
 	desiredPolicies := make(map[string]*sriovdrav1alpha1.SriovResourcePolicy)
 	for _, node := range nl.Items {
-		policy, err := r.renderSriovResourcePolicyForNode(ctx, pl, &node)
+		policy, err := r.renderSriovResourcePolicyForNode(ctx, pl, &node, retainedResourceNames)
 		if err != nil {
 			logger.Error(err, "Failed to render SriovResourcePolicy for node", "node", node.Name)
 			return err
@@ -401,7 +424,8 @@ func sriovResourcePolicyNodeSelectorForHostname(hostname string) *corev1.NodeSel
 // renderSriovResourcePolicyForNode generates a SriovResourcePolicy CR for a specific node.
 func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx context.Context,
 	pl *sriovnetworkv1.SriovNetworkNodePolicyList,
-	node *corev1.Node) (*sriovdrav1alpha1.SriovResourcePolicy, error) {
+	node *corev1.Node,
+	retainedResourceNames map[string]struct{}) (*sriovdrav1alpha1.SriovResourcePolicy, error) {
 	logger := log.Log.WithName("renderSriovResourcePolicyForNode")
 	logger.V(1).Info("Start to render SriovResourcePolicy for node", "node", node.Name)
 
@@ -451,12 +475,24 @@ func (r *SriovNetworkNodePolicyReconciler) renderSriovResourcePolicyForNode(ctx 
 		return nil, err
 	}
 	for _, p := range applicablePolicies {
+		if p.Spec.ResourceName != "" {
+			if _, ok := retainedResourceNames[p.Spec.ResourceName]; !ok {
+				logger.V(1).Info("Skipping policy config for filtered DRA resource name",
+					"policy", p.Name, "resourceName", p.Spec.ResourceName)
+				continue
+			}
+		}
 		config, err := buildPolicyConfig(p, nodeState)
 		if err != nil {
 			logger.Error(err, "Failed to build policy config", "policy", p.Name)
 			return nil, err
 		}
 		policy.Spec.Configs = append(policy.Spec.Configs, *config)
+	}
+
+	if len(policy.Spec.Configs) == 0 {
+		logger.V(1).Info("No policy configs for node, skipping policy creation", "node", node.Name)
+		return nil, nil
 	}
 	return policy, nil
 }
@@ -565,7 +601,8 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	pl *sriovnetworkv1.SriovNetworkNodePolicyList) error {
 	logger := log.Log.WithName("syncExtendedResourceDeviceClasses")
 	logger.V(1).Info("Start to sync extended resource DeviceClasses")
-	desiredResourceNames := collectDRAPolicyResourceNames(pl)
+	retainedPolicyResources := retainedDRAPolicyResources(logger, pl)
+	retainedResourceNames := draResourceNameSet(retainedPolicyResources)
 	list := &resourceapi.DeviceClassList{}
 	if err := r.List(ctx, list, client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
 		if deviceClassAPIUnavailable(err) {
@@ -580,7 +617,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 		existingDCByName[list.Items[i].Name] = &list.Items[i]
 	}
 
-	for _, res := range filterDRAResourceNamesByDeviceClass(logger, desiredResourceNames, "DeviceClass") {
+	for _, res := range retainedPolicyResources {
 		desired := buildExtendedResourceDeviceClass(res.deviceClassName, res.resourceName, buildExtendedResourceName(res.resourceName), buildDeviceClassCEL(res.resourceName))
 		// Do not set controller reference: DeviceClass is cluster-scoped and dc (SriovOperatorConfig) is namespaced.
 		// Operator-created DeviceClasses are identified by label and cleaned up in cleanupExtendedResourceDeviceClasses when DRA is disabled.
@@ -611,7 +648,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	for i := range list.Items {
 		item := &list.Items[i]
 		resourceName := item.Labels[dra.DeviceClassResourceNameLabel]
-		if _, desired := desiredResourceNames[resourceName]; !desired {
+		if _, desired := retainedResourceNames[resourceName]; !desired {
 			if err := r.Delete(ctx, item); err != nil && !errors.IsNotFound(err) {
 				return err
 			}

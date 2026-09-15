@@ -82,7 +82,7 @@ func TestFilterDRAResourceNamesByDeviceClass(t *testing.T) {
 		"INTEL_NIC": {},
 		"mlx5":      {},
 	}
-	got := filterDRAResourceNamesByDeviceClass(log.Log, names, "DeviceClass")
+	got := filterDRAResourceNamesByDeviceClass(log.Log, names)
 	if len(got) != 2 {
 		t.Fatalf("filterDRAResourceNamesByDeviceClass() returned %d names, want 2", len(got))
 	}
@@ -721,6 +721,54 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
 			Expect(attrList.Items).To(HaveLen(1))
 			Expect(attrList.Items[0].Name).To(Equal("intel-nic-attrs"))
+		})
+
+		It("syncSriovResourcePolicies skips colliding normalized names in the same pass", func() {
+			nodeName := "worker-0"
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: nodeName,
+					Labels: map[string]string{
+						"node-role.kubernetes.io/worker": "",
+						"kubernetes.io/hostname":         nodeName,
+					},
+				},
+			}
+			nodeState := &sriovnetworkv1.SriovNetworkNodeState{
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName, Namespace: testNamespace},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
+					Interfaces: sriovnetworkv1.InterfaceExts{
+						{Vendor: "8086", Driver: "i40e", PciAddress: "0000:86:00.0"},
+					},
+				},
+			}
+			beforeEachDRA(node, nodeState)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: testNamespace},
+						Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+							ResourceName: "intel_nic",
+							NodeSelector: map[string]string{"node-role.kubernetes.io/worker": ""},
+							NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{Vendor: "8086"},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "policy2", Namespace: testNamespace},
+						Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+							ResourceName: "INTEL_NIC",
+							NodeSelector: map[string]string{"node-role.kubernetes.io/worker": ""},
+							NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{Vendor: "8086"},
+						},
+					},
+				},
+			}
+			nl := &corev1.NodeList{Items: []corev1.Node{*node}}
+			Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+			policy := &sriovdrav1alpha1.SriovResourcePolicy{}
+			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: nodeName}, policy)).To(Succeed())
+			Expect(policy.Spec.Configs).To(HaveLen(1))
+			Expect(policy.Spec.Configs[0].DeviceAttributesSelector.MatchLabels[drapkg.ResourcePoolLabel]).To(Equal("intel-nic"))
 		})
 
 		It("syncDeviceAttributes removes DeviceAttributes when resource name no longer in policies", func() {
