@@ -763,6 +763,9 @@ func (dn *NodeReconciler) waitForDevicePluginPodAndTryUnblock(ctx context.Contex
 func (dn *NodeReconciler) rebootNode() error {
 	funcLog := log.Log.WithName("rebootNode")
 	funcLog.Info("trigger node reboot")
+
+	// Chroot flushes the async file-log buffer via vars.RunBeforeChroot before entering
+	// the chroot window (see utils.Chroot / log.InitLog).
 	exit, err := dn.hostHelpers.Chroot(consts.Host)
 	if err != nil {
 		funcLog.Error(err, "chroot command failed")

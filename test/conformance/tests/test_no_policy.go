@@ -178,6 +178,89 @@ var _ = Describe("[sriov] operator", Ordered, ContinueOnFailure, func() {
 			})
 		})
 
+		Context("LogConfig persistent file logging", func() {
+			It("writes host log file and keeps it across config-daemon pod restart", func() {
+				if discovery.Enabled() {
+					Skip("Test unsuitable to be run in discovery mode")
+				}
+
+				initialLogConfig := getOperatorConfigLogConfig()
+				DeferCleanup(func() {
+					By("Restore LogConfig to its initial value")
+					setOperatorConfigLogConfig(initialLogConfig)
+				})
+
+				By("Enable persistent logging with defaults")
+				enabled := true
+				setOperatorConfigLogConfig(&sriovv1.LogConfig{Enabled: &enabled})
+
+				By("Selecting a worker node that runs the config daemon")
+				allNodes, err := clients.CoreV1Interface.Nodes().List(context.Background(), metav1.ListOptions{
+					LabelSelector: "node-role.kubernetes.io/worker",
+				})
+				Expect(err).ToNot(HaveOccurred())
+				selectedNodes, err := nodes.MatchingOptionalSelector(clients, allNodes.Items)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(len(selectedNodes)).To(BeNumerically(">", 0), "There must be at least one worker")
+				nodeName := selectedNodes[0].Name
+
+				const logPath = "/host/var/log/sriov-network-config-daemon/config-daemon.log"
+
+				By("Assert the host log file exists and is non-empty")
+				Eventually(func(g Gomega) {
+					out, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+						"test -s "+logPath+" && wc -c < "+logPath)
+					g.Expect(err).ToNot(HaveOccurred(), stderr)
+					g.Expect(strings.TrimSpace(out)).ToNot(BeEmpty())
+					g.Expect(strings.TrimSpace(out)).ToNot(Equal("0"))
+				}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+				By("Assert log file contains structured JSON entries")
+				out, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+					"tail -n 5 "+logPath)
+				Expect(err).ToNot(HaveOccurred(), stderr)
+				Expect(out).To(ContainSubstring(`"msg"`))
+
+				By("Restart the config-daemon pod on the node")
+				configDaemonPod, err := getConfigDaemonPod(nodeName)
+				Expect(err).ToNot(HaveOccurred())
+				oldPodName := configDaemonPod.Name
+				grace := int64(0)
+				err = clients.Pods(operatorNamespace).Delete(context.Background(), configDaemonPod.Name, metav1.DeleteOptions{
+					GracePeriodSeconds: &grace,
+				})
+				Expect(err).ToNot(HaveOccurred())
+
+				By("Waiting for the replacement config-daemon pod to be running")
+				Eventually(func() bool {
+					newPod, err := getConfigDaemonPod(nodeName)
+					if err != nil || newPod.Name == oldPodName {
+						return false
+					}
+					return newPod.Status.Phase == "Running"
+				}, 3*time.Minute, 5*time.Second).Should(BeTrue())
+
+				By("Assert the host log file still exists after pod restart")
+				Eventually(func(g Gomega) {
+					out, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+						"test -s "+logPath+" && wc -c < "+logPath)
+					g.Expect(err).ToNot(HaveOccurred(), stderr)
+					sizeAfter := strings.TrimSpace(out)
+					g.Expect(sizeAfter).ToNot(Equal("0"))
+				}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+				By("Disable persistent logging via LogConfig")
+				disabled := false
+				setOperatorConfigLogConfig(&sriovv1.LogConfig{Enabled: &disabled})
+				Eventually(func(g Gomega) {
+					cfg := getOperatorConfigLogConfig()
+					g.Expect(cfg).ToNot(BeNil())
+					g.Expect(cfg.Enabled).ToNot(BeNil())
+					g.Expect(*cfg.Enabled).To(BeFalse())
+				}, 1*time.Minute, 5*time.Second).Should(Succeed())
+			})
+		})
+
 		Context("SriovNetworkMetricsExporter", func() {
 			BeforeEach(func() {
 				if discovery.Enabled() {
