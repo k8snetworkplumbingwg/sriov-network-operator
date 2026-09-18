@@ -223,11 +223,12 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					reqLogger.Error(err, "failed to get DRA driver pods")
 					return ctrl.Result{}, err
 				}
-				if len(desiredNodeState.Spec.Interfaces) > 0 {
-					if err := dn.tryUnblockDRADriver(ctx, desiredNodeState, draDriverPods); err != nil {
-						reqLogger.Error(err, "failed to unblock DRA driver")
-						return ctrl.Result{}, err
-					}
+				// Unblock even when there are no interfaces. The DRA init container
+				// always waits, and a node with no policy would otherwise stay in Init
+				// and block DaemonSet rollout.
+				if err := dn.tryUnblockDRADriver(ctx, draDriverPods); err != nil {
+					reqLogger.Error(err, "failed to unblock DRA driver")
+					return ctrl.Result{}, err
 				}
 			} else if vars.FeatureGate.IsEnabled(consts.BlockDevicePluginUntilConfiguredFeatureGate) &&
 				len(desiredNodeState.Spec.Interfaces) > 0 {
@@ -444,13 +445,11 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 
 	// After apply, unblock device plugin or DRA driver (remove wait-for-config annotation).
 	if vars.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
-		if len(desiredNodeState.Spec.Interfaces) == 0 {
-			reqLogger.Info("no interfaces in desired state, skipping DRA driver wait")
-		} else {
-			if err := dn.waitForDRADriverPodAndTryUnblock(ctx, desiredNodeState); err != nil {
-				reqLogger.Error(err, "failed to wait for DRA driver pod and try unblock")
-				return ctrl.Result{}, err
-			}
+		// Always unblock. An empty interface list means there is nothing to configure,
+		// not that the init container should wait forever.
+		if err := dn.waitForDRADriverPodAndTryUnblock(ctx); err != nil {
+			reqLogger.Error(err, "failed to wait for DRA driver pod and try unblock")
+			return ctrl.Result{}, err
 		}
 	} else if vars.FeatureGate.IsEnabled(consts.BlockDevicePluginUntilConfiguredFeatureGate) {
 		if len(desiredNodeState.Spec.Interfaces) == 0 {
@@ -525,15 +524,12 @@ func (dn *NodeReconciler) tryUnblockDevicePlugin(ctx context.Context,
 }
 
 // tryUnblockDRADriver removes the wait-for-config annotation from DRA driver pods so their init container can exit.
-// Same semantics as tryUnblockDevicePlugin but for DRA driver pods (same wait-for-config mechanism).
-func (dn *NodeReconciler) tryUnblockDRADriver(ctx context.Context,
-	desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, draDriverPods []corev1.Pod) error {
+// Unlike the device plugin, DRA always runs this init container, including on nodes with no
+// SriovNetworkNodePolicy. Those nodes have nothing to wait for, so the annotation is removed
+// whether or not the desired state lists interfaces.
+func (dn *NodeReconciler) tryUnblockDRADriver(ctx context.Context, draDriverPods []corev1.Pod) error {
 	funcLog := log.Log.WithName("tryUnblockDRADriver")
-	funcLog.Info("check if we need to remove the wait-for-config annotation from DRA driver pods")
-	if len(desiredNodeState.Spec.Interfaces) == 0 {
-		funcLog.Info("desired node state has no interfaces, keep the wait-for-config annotation")
-		return nil
-	}
+	funcLog.Info("removing the wait-for-config annotation from DRA driver pods")
 	for _, pod := range draDriverPods {
 		if err := utils.RemoveAnnotationFromObject(ctx, &pod,
 			consts.DevicePluginWaitConfigAnnotation, dn.client); err != nil {
@@ -859,7 +855,7 @@ func (dn *NodeReconciler) waitForDevicePluginPodAndTryUnblock(ctx context.Contex
 
 // waitForDRADriverPodAndTryUnblock waits for a DRA driver pod to have the wait-for-config annotation then removes it.
 // Same pattern as waitForDevicePluginPodAndTryUnblock but for DRA driver pods.
-func (dn *NodeReconciler) waitForDRADriverPodAndTryUnblock(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) error {
+func (dn *NodeReconciler) waitForDRADriverPodAndTryUnblock(ctx context.Context) error {
 	funcLog := log.Log.WithName("waitForDRADriverPodAndTryUnblock")
 	funcLog.Info("waiting for DRA driver pod to set wait-for-config annotation", "annotation", consts.DevicePluginWaitConfigAnnotation)
 	var draDriverPods []corev1.Pod
@@ -892,7 +888,7 @@ func (dn *NodeReconciler) waitForDRADriverPodAndTryUnblock(ctx context.Context, 
 		return nil
 	}
 	if len(draDriverPods) > 0 {
-		if err := dn.tryUnblockDRADriver(ctx, desiredNodeState, draDriverPods); err != nil {
+		if err := dn.tryUnblockDRADriver(ctx, draDriverPods); err != nil {
 			return err
 		}
 	}
