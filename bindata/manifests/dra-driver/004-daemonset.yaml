@@ -122,8 +122,7 @@ spec:
           mountPath: /sys
         - name: host-dev
           mountPath: /dev
-        - name: cri-socket
-          mountPath: /var/run/nri/nri.sock
+        # NRI socket is STANDALONE-only; MULTUS mode does not start the NRI plugin
         - name: netns
           mountPath: /var/run/netns
           mountPropagation: HostToContainer
@@ -152,10 +151,6 @@ spec:
         hostPath:
           path: /dev
           type: Directory
-      - name: cri-socket
-        hostPath:
-          path: /var/run/nri/nri.sock
-          type: Socket
       - name: netns
         hostPath:
           path: /var/run/netns
