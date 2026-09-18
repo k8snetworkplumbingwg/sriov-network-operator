@@ -668,7 +668,12 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
-		resourceName := item.Labels[dra.DeviceClassResourceNameLabel]
+		// Skip the base DeviceClass from bindata (generated-by only, no resource-name label).
+		// That object is owned by syncDRADriverObjs / cleanupDRADriverObjs.
+		resourceName, ok := item.Labels[dra.DeviceClassResourceNameLabel]
+		if !ok || resourceName == "" {
+			continue
+		}
 		if _, desired := retainedResourceNames[resourceName]; !desired {
 			if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
 				return err
@@ -707,7 +712,12 @@ func (r *SriovNetworkNodePolicyReconciler) cleanupExtendedResourceDeviceClasses(
 		return err
 	}
 	for i := range list.Items {
-		if err := r.Delete(ctx, &list.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+		item := &list.Items[i]
+		// Leave the base DeviceClass to cleanupDRADriverObjs (no resource-name label).
+		if resourceName := item.Labels[dra.DeviceClassResourceNameLabel]; resourceName == "" {
+			continue
+		}
+		if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}

@@ -1036,10 +1036,12 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 		})
 
 		It("cleanupExtendedResourceDeviceClasses deletes operator-created DeviceClasses", func() {
+			labels := drapkg.OperatorGeneratedByLabels()
+			labels[drapkg.DeviceClassResourceNameLabel] = "intel_nic"
 			deviceClass := &resourceapi.DeviceClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   "intel-nic",
-					Labels: drapkg.OperatorGeneratedByLabels(),
+					Labels: labels,
 				},
 			}
 			beforeEachDRA(deviceClass)
@@ -1047,6 +1049,42 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			dcList := &resourceapi.DeviceClassList{}
 			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
 			Expect(dcList.Items).To(BeEmpty())
+		})
+
+		It("syncExtendedResourceDeviceClasses does not delete the base DeviceClass", func() {
+			base := &resourceapi.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   consts.DRADriverBaseDeviceClassName,
+					Labels: drapkg.OperatorGeneratedByLabels(),
+				},
+			}
+			beforeEachDRA(base)
+			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
+				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: testNamespace},
+						Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+					},
+				},
+			}
+			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+			got := &resourceapi.DeviceClass{}
+			Expect(r.Get(ctx, types.NamespacedName{Name: consts.DRADriverBaseDeviceClassName}, got)).To(Succeed())
+			Expect(got.Labels[drapkg.GeneratedByLabel]).To(Equal(consts.SriovNetworkOperatorIdentifier))
+			Expect(got.Labels).NotTo(HaveKey(drapkg.DeviceClassResourceNameLabel))
+		})
+
+		It("cleanupExtendedResourceDeviceClasses leaves the base DeviceClass", func() {
+			base := &resourceapi.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   consts.DRADriverBaseDeviceClassName,
+					Labels: drapkg.OperatorGeneratedByLabels(),
+				},
+			}
+			beforeEachDRA(base)
+			Expect(r.cleanupExtendedResourceDeviceClasses(ctx)).To(Succeed())
+			got := &resourceapi.DeviceClass{}
+			Expect(r.Get(ctx, types.NamespacedName{Name: consts.DRADriverBaseDeviceClassName}, got)).To(Succeed())
 		})
 
 		It("syncExtendedResourceDeviceClasses skips gracefully when DeviceClass CRD is not available", func() {
