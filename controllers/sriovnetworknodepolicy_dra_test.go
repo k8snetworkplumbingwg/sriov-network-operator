@@ -21,6 +21,7 @@ import (
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -1165,3 +1166,68 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 	})
 
 })
+
+// TestReconcileCleansDRAObjectsWhenFeatureGateDisabled verifies that Reconcile
+// refreshes FeatureGate from SriovOperatorConfig before choosing the DRA path,
+// so a config update that disables DRA cleans DeviceAttributes even when the
+// in-memory gate was still true (config-watch race).
+func TestReconcileCleansDRAObjectsWhenFeatureGateDisabled(t *testing.T) {
+	ctx := context.Background()
+	nsSaved := vars.Namespace
+	prefixSaved := vars.ResourcePrefix
+	vars.Namespace = testNamespace
+	vars.ResourcePrefix = "openshift.io"
+	defer func() {
+		vars.Namespace = nsSaved
+		vars.ResourcePrefix = prefixSaved
+	}()
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(sriovnetworkv1.AddToScheme(scheme))
+	utilruntime.Must(sriovdrav1alpha1.AddToScheme(scheme))
+	utilruntime.Must(corev1.AddToScheme(scheme))
+	utilruntime.Must(resourceapi.AddToScheme(scheme))
+
+	dc := &sriovnetworkv1.SriovOperatorConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace},
+		Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+			FeatureGates: map[string]bool{consts.DynamicResourceAllocationFeatureGate: false},
+		},
+	}
+	attr := &sriovdrav1alpha1.DeviceAttributes{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "intel-nic-attrs",
+			Namespace: testNamespace,
+			Labels:    drapkg.OperatorGeneratedByLabels(),
+		},
+	}
+	policy := &sriovdrav1alpha1.SriovResourcePolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-0",
+			Namespace: testNamespace,
+			Labels:    drapkg.OperatorGeneratedByLabels(),
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dc, attr, policy).Build()
+	fg := featuregate.New()
+	fg.Init(map[string]bool{consts.DynamicResourceAllocationFeatureGate: true})
+	r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme, FeatureGate: fg}
+
+	if !r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		t.Fatal("precondition: FeatureGate should still report DRA enabled")
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: nodePolicySyncEventName}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		t.Fatal("expected FeatureGate refreshed from SriovOperatorConfig to disable DRA")
+	}
+	gotAttr := &sriovdrav1alpha1.DeviceAttributes{}
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "intel-nic-attrs"}, gotAttr); !errors.IsNotFound(err) {
+		t.Fatalf("expected DeviceAttributes deleted, get err=%v", err)
+	}
+	gotPolicy := &sriovdrav1alpha1.SriovResourcePolicy{}
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "worker-0"}, gotPolicy); !errors.IsNotFound(err) {
+		t.Fatalf("expected SriovResourcePolicy deleted, get err=%v", err)
+	}
+}

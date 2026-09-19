@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrl_builder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -93,6 +94,12 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 		}
 		return reconcile.Result{}, err
 	}
+
+	// Keep feature-gate state aligned with the config we just fetched. The config
+	// controller also calls Init; refreshing here avoids racing a stale in-memory
+	// gate when this reconciler is woken by a SriovOperatorConfig watch.
+	r.FeatureGate.Init(defaultOpConf.Spec.FeatureGates)
+	reqLogger.Info("enabled featureGates", "featureGates", r.FeatureGate.String())
 
 	// Fetch the SriovNetworkNodePolicyList
 	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
@@ -229,6 +236,8 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Watches(&corev1.Node{}, nodeEvenHandler).
 		Watches(&sriovnetworkv1.SriovNetworkNodePolicy{}, delayedEventHandler).
 		Watches(&sriovnetworkv1.SriovNetworkPoolConfig{}, delayedEventHandler).
+		Watches(&sriovnetworkv1.SriovOperatorConfig{}, delayedEventHandler,
+			ctrl_builder.WithPredicates(defaultConfigPredicate())).
 		WatchesRawSource(source.Channel(eventChan, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
