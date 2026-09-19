@@ -52,15 +52,25 @@ const (
 	OperatorWebHookName                = "sriov-operator-webhook-config"
 	DeprecatedOperatorWebHookName      = "operator-webhook-config"
 	PluginPath                         = "./bindata/manifests/plugins"
-	DaemonPath                         = "./bindata/manifests/daemon"
-	DefaultPolicyName                  = "default"
-	ConfigMapName                      = "device-plugin-config"
-	DaemonSet                          = "DaemonSet"
-	Role                               = "Role"
-	RoleBinding                        = "RoleBinding"
-	ServiceAccount                     = "ServiceAccount"
-	DPConfigFileName                   = "config.json"
-	OVSHWOLMachineConfigNameSuffix     = "ovs-hw-offload"
+	DRADriverPath                      = "./bindata/manifests/dra-driver"
+
+	// DRA bindata resource names — keep in sync with bindata/manifests/dra-driver/.
+	DRADriverDaemonSetName            = "sriov-dra-driver"
+	DRADriverServiceAccountName       = "sriov-dra-driver"
+	DRADriverClusterRBACName          = "sriov-dra-driver"
+	DRADriverPodAccessRoleName        = "sriov-dra-driver-pod-access"
+	DRADriverPodAccessRoleBindingName = "sriov-dra-driver-pod-access"
+	DRADriverBaseDeviceClassName      = "sriovnetwork.k8snetworkplumbingwg.io"
+
+	DaemonPath                     = "./bindata/manifests/daemon"
+	DefaultPolicyName              = "default"
+	ConfigMapName                  = "device-plugin-config"
+	DaemonSet                      = "DaemonSet"
+	Role                           = "Role"
+	RoleBinding                    = "RoleBinding"
+	ServiceAccount                 = "ServiceAccount"
+	DPConfigFileName               = "config.json"
+	OVSHWOLMachineConfigNameSuffix = "ovs-hw-offload"
 
 	LinkTypeEthernet   = "ether"
 	LinkTypeInfiniband = "infiniband"
@@ -203,6 +213,9 @@ const (
 
 	// MellanoxFirmwareResetFeatureGate: enables the firmware reset via mstfwreset before a reboot
 	MellanoxFirmwareResetFeatureGate = "mellanoxFirmwareReset"
+
+	// DynamicResourceAllocationFeatureGate: enables DRA driver instead of device plugin
+	DynamicResourceAllocationFeatureGate = "dynamicResourceAllocation"
 
 	// The path to the file on the host filesystem that contains the IB GUID distribution for IB VFs
 	InfinibandGUIDConfigFilePath = SriovConfBasePath + "/infiniband/guids"

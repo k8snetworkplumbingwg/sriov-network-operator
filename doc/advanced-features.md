@@ -27,7 +27,7 @@ spec:
     parallelNicConfig: true
 ```
 
-**Impact**: 
+**Impact**:
 - Faster node configuration updates
 - Reduced maintenance windows
 - Higher resource usage during configuration
@@ -118,6 +118,35 @@ spec:
 ```
 
 **Warning**: This feature may extend reboot times and should be tested thoroughly.
+
+#### 6. Dynamic Resource Allocation (`dynamicResourceAllocation`)
+
+**Description**: Enables the Dynamic Resource Allocation (DRA) driver instead of the traditional SR-IOV device plugin. When enabled, the operator deploys the DRA driver DaemonSet and creates SriovResourcePolicy and DeviceAttributes resources so SR-IOV VFs are advertised via Kubernetes **ResourceSlices** and **ResourceClaims** (the default DRA allocation path), not via node extended resources unless the cluster **`DRAExtendedResource`** gate is enabled.
+
+**Default**: Disabled (operator uses the SR-IOV device plugin)
+
+**Use Case**: Clusters that want to use the DRA API for SR-IOV device allocation (e.g. ResourceClaimTemplate in pods) or that rely on DRA for scheduling and lifecycle.
+
+```yaml
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovOperatorConfig
+metadata:
+  name: default
+  namespace: sriov-network-operator
+spec:
+  featureGates:
+    dynamicResourceAllocation: true
+```
+
+**When enabled**:
+- The SR-IOV device plugin is not deployed; the DRA driver runs on the same nodes instead.
+- The operator creates per-node SriovResourcePolicy and per-resource-pool DeviceAttributes from SriovNetworkNodePolicy.
+- A cluster **basic** DeviceClass (`sriovnetwork.k8snetworkplumbingwg.io`) supports ResourceClaim-based allocation; per-`resourceName` DeviceClasses (name from `resourceNameToDeviceClassName()`) include **`extendedResourceName`** for optional extended-resource requests when `DRAExtendedResource` is enabled on the cluster.
+- Config daemon coordinates with the DRA driver (wait-for-config init) so the driver starts after SR-IOV configuration is applied.
+
+If the Kubernetes **DRAExtendedResource** feature gate is enabled on the cluster, per-resourceName DeviceClasses can also be requested via pod `resources.limits` using their **`extendedResourceName`** (same values as device-plugin mode), in addition to ResourceClaimTemplate.
+
+**Requirements**: Kubernetes **1.34+** with DRA (`resource.k8s.io` APIs); **Multus CNI** with DRA integration; container runtime with **CDI** and **NRI** support; **`dra-driver-sriov`** image configured (e.g. `images.sriovDraDriver` in Helm). The operator does not enforce cluster version or runtime capabilities. See [DRA integration design](design/DRA-integration.md#dependencies) for prerequisites, upstream Multus/driver changes, and constraints.
 
 ### Feature Gate Best Practices
 
@@ -565,6 +594,6 @@ kubectl describe sriovnetworkpoolconfig <pool-name> -n sriov-network-operator
 ## Next Steps
 
 - [Pool Configuration](api/pool-config-api.md) - Detailed pool management
-- [RDMA Configuration](rdma-configuration.md) - RDMA-specific features  
+- [RDMA Configuration](rdma-configuration.md) - RDMA-specific features
 - [Monitoring Guide](monitoring.md) - Comprehensive monitoring setup
 - [Troubleshooting](troubleshooting.md) - Advanced troubleshooting techniques

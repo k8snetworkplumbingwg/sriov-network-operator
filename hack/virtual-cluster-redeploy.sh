@@ -96,7 +96,6 @@ if [ $CLUSTER_TYPE == "openshift" ]; then
   echo "## deploying SRIOV Network Operator"
   hack/deploy-setup.sh $NAMESPACE
 else
-  export HELM_MODE=upgrade
   hack/deploy-operator-helm.sh
 fi
 
