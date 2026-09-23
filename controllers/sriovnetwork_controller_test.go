@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -759,7 +760,7 @@ func generateExpectedNetConfig(cr *sriovnetworkv1.SriovNetwork) string {
 	state := getLinkState(cr.Spec.LinkState)
 
 	if cr.Spec.IPAM != "" {
-		ipam = cr.Spec.IPAM
+		ipam = sortJSONKeys(cr.Spec.IPAM)
 	}
 	vlanQoS := cr.Spec.VlanQoS
 
@@ -780,4 +781,18 @@ func generateExpectedNetConfig(cr *sriovnetworkv1.SriovNetwork) string {
 		panic(err)
 	}
 	return configStr
+}
+
+// sortJSONKeys re-serializes JSON so expected controller configuration matches
+// RenderNetAttDef's render-time JSON canonicalization.
+func sortJSONKeys(s string) string {
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return s
+	}
+	return string(b)
 }
