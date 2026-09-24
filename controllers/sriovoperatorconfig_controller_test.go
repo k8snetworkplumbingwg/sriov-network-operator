@@ -6,11 +6,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/go-logr/logr"
 	"go.uber.org/mock/gomock"
 	admv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -32,6 +34,7 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	orchestratorMock "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator/mock"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
@@ -39,6 +42,85 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
 )
+
+func TestConfigDeletionCleansGeneratedDeviceClasses(t *testing.T) {
+	for _, failure := range []string{"", "list", "delete"} {
+		t.Run("cleanup_"+failure, func(t *testing.T) {
+			ctx := context.Background()
+			scheme := runtime.NewScheme()
+			for _, add := range []func(*runtime.Scheme) error{
+				sriovnetworkv1.AddToScheme, admv1.AddToScheme, resourceapi.AddToScheme,
+			} {
+				if err := add(scheme); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{
+				Name: consts.DefaultConfigName, Namespace: testNamespace,
+				Finalizers:        []string{sriovnetworkv1.OPERATORCONFIGFINALIZERNAME},
+				DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+			}}
+			generated := &resourceapi.DeviceClass{ObjectMeta: metav1.ObjectMeta{
+				Name: "intel-nic", Labels: dra.OperatorGeneratedByLabels(),
+			}}
+			base := &resourceapi.DeviceClass{ObjectMeta: metav1.ObjectMeta{
+				Name: consts.DRADriverBaseDeviceClassName, Labels: dra.OperatorGeneratedByLabels(),
+			}}
+			foreign := &resourceapi.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: "user-managed"}}
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, generated, base, foreign).
+				WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						if _, ok := list.(*resourceapi.DeviceClassList); ok && failure == "list" {
+							return fmt.Errorf("DeviceClass list failed")
+						}
+						return c.List(ctx, list, opts...)
+					},
+					Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+						if obj.GetName() == generated.Name && failure == "delete" {
+							return fmt.Errorf("DeviceClass delete failed")
+						}
+						return c.Delete(ctx, obj, opts...)
+					},
+				}).Build()
+			r := &SriovOperatorConfigReconciler{Client: cl, Scheme: scheme,
+				renderManifestFn: func(_ string, _ *render.RenderData) ([]*unstructured.Unstructured, error) {
+					// The driver inventory contains the base class, not generated classes.
+					return []*unstructured.Unstructured{{Object: map[string]interface{}{
+						"apiVersion": "resource.k8s.io/v1", "kind": "DeviceClass",
+						"metadata": map[string]interface{}{"name": base.Name},
+					}}}, nil
+				},
+			}
+			_, err := r.handleSriovOperatorConfigDeletion(ctx, config.DeepCopy(), logr.Discard())
+			if failure != "" {
+				if err == nil {
+					t.Fatal("expected cleanup failure to block finalization")
+				}
+				found := &sriovnetworkv1.SriovOperatorConfig{}
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(config), found); err != nil {
+					t.Fatal(err)
+				}
+				if !sriovnetworkv1.StringInArray(sriovnetworkv1.OPERATORCONFIGFINALIZERNAME, found.Finalizers) {
+					t.Fatal("cleanup failure removed config finalizer")
+				}
+				// A retry must finish cleanup once the API recovers.
+				failure = ""
+				_, err = r.handleSriovOperatorConfigDeletion(ctx, found, logr.Discard())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, obj := range []client.Object{config, generated, base} {
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), obj); !errors.IsNotFound(err) {
+					t.Errorf("expected %T %s deleted, got %v", obj, obj.GetName(), err)
+				}
+			}
+			if err := cl.Get(ctx, client.ObjectKeyFromObject(foreign), foreign); err != nil {
+				t.Fatalf("unrelated DeviceClass was removed: %v", err)
+			}
+		})
+	}
+}
 
 var _ = Describe("Device plugin ConfigMap transition cleanup", func() {
 	DescribeTable("reconciles the ConfigMap with the provider transition", func(draEnabled, pluginExists, configMapExists bool, failure string) {

@@ -734,6 +734,10 @@ func (r *SriovOperatorConfigReconciler) handleSriovOperatorConfigDeletion(ctx co
 		}
 		// Clean up cluster-scoped DRA objects (DeviceClass, ClusterRole/Binding) that
 		// are not garbage-collected when this namespaced config is removed.
+		if err = cleanupExtendedResourceDeviceClasses(ctx, r.Client); err != nil {
+			logger.Error(err, "Failed to cleanup extended resource DeviceClasses")
+			return reconcile.Result{}, err
+		}
 		if err = cleanupDRADriverObjs(ctx, r.Client, defaultConfig, r.renderManifests); err != nil {
 			logger.Error(err, "Failed to cleanup DRA driver objects")
 			return reconcile.Result{}, err
