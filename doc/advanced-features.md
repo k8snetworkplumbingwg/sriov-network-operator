@@ -27,7 +27,7 @@ spec:
     parallelNicConfig: true
 ```
 
-**Impact**: 
+**Impact**:
 - Faster node configuration updates
 - Reduced maintenance windows
 - Higher resource usage during configuration
@@ -121,11 +121,13 @@ spec:
 
 #### 6. Dynamic Resource Allocation (`dynamicResourceAllocation`)
 
-**Description**: Enables the Dynamic Resource Allocation (DRA) driver instead of the traditional SR-IOV device plugin. When enabled, the operator deploys the DRA driver DaemonSet and creates SriovResourcePolicy and DeviceAttributes resources so SR-IOV VFs are advertised via Kubernetes ResourceSlices and ResourceClaims instead of extended resources on the node.
+**Description**: Enables the Dynamic Resource Allocation (DRA) driver instead of the traditional SR-IOV device plugin. When enabled, the operator deploys the DRA driver DaemonSet and creates SriovResourcePolicy and DeviceAttributes resources so SR-IOV VFs are advertised via Kubernetes **ResourceSlices** and **ResourceClaims** (the default DRA allocation path), not via node extended resources unless the cluster **`DRAExtendedResource`** gate is enabled.
 
 **Default**: Disabled (operator uses the SR-IOV device plugin)
 
 **Use Case**: Clusters that want to use the DRA API for SR-IOV device allocation (e.g. ResourceClaimTemplate in pods) or that rely on DRA for scheduling and lifecycle.
+
+**Mode-switch restriction**: The webhook rejects enabling or disabling DRA while any non-default `SriovNetworkNodePolicy` exists in the operator namespace. Removing the gate or the entire `featureGates` map also disables DRA. Stop affected SR-IOV workloads and prevent their recreation, save and remove those policies, and wait for policy cleanup and node reconfiguration before switching. When leaving DRA, also release the affected SR-IOV ResourceClaims while the DRA driver is still running. Then reapply policies compatible with the selected mode and recreate workloads. The webhook checks policy presence; it does not verify workload termination or cleanup completion. Updates that leave the mode unchanged remain allowed; policies using `nicSelector.netFilter` are unsupported and rejected in DRA mode.
 
 ```yaml
 apiVersion: sriovnetwork.openshift.io/v1
@@ -141,12 +143,16 @@ spec:
 **When enabled**:
 - The SR-IOV device plugin is not deployed; the DRA driver runs on the same nodes instead.
 - The operator creates per-node SriovResourcePolicy and per-resource-pool DeviceAttributes from SriovNetworkNodePolicy.
-- DeviceClasses are created so workloads can request SR-IOV resources via ResourceClaimTemplate.
+- A cluster **basic** DeviceClass (`sriovnetwork.k8snetworkplumbingwg.io`) supports ResourceClaim-based allocation; per-`resourceName` DeviceClasses (name from `resourceNameToDeviceClassName()`) include **`extendedResourceName`** for optional extended-resource requests when `DRAExtendedResource` is enabled on the cluster.
 - Config daemon coordinates with the DRA driver (wait-for-config init) so the driver starts after SR-IOV configuration is applied.
 
-If the Kubernetes **DRAExtendedResource** feature gate is enabled on the cluster, the same DeviceClass can be used to request SR-IOV resources via pod `resources.limits` (extended resource name) in addition to ResourceClaimTemplate.
+**Interaction with `blockDevicePluginUntilConfigured`**: That gate controls only the traditional device plugin. In DRA mode, the driver always uses the wait-for-config init container, even when `blockDevicePluginUntilConfigured` is `false`. The config daemon restarts the DRA driver before applying configuration and removes its wait annotation afterward. On nodes with no configured interfaces, the daemon still clears the annotation so the driver can start.
 
-**Requirements**: Kubernetes cluster with DRA support; DRA driver image configured (e.g. `images.sriovDraDriver` in Helm).
+If the Kubernetes **DRAExtendedResource** feature gate is enabled on the cluster, per-resourceName DeviceClasses can also be requested via pod `resources.limits` using their **`extendedResourceName`** (same values as device-plugin mode), in addition to ResourceClaimTemplate.
+
+**Current limitation — VF ranges**: DRA mode does not support VF ranges in `spec.nicSelector.pfNames` (for example, `ens1f0#2-5`). The operator preserves the range suffix, but the current `dra-driver-sriov` matches PF names literally, so a ranged entry matches no VFs. Use whole PF names such as `ens1f0` in DRA mode. Keep device-plugin mode when partitioning a PF into VF ranges; DRA range support is deferred until the driver supports it natively.
+
+**Requirements**: Kubernetes **1.34+** with DRA (`resource.k8s.io` APIs); **Multus CNI** with DRA integration; container runtime with **CDI** and **NRI** support; **`dra-driver-sriov`** image configured (e.g. `images.sriovDraDriver` in Helm). The operator does not enforce cluster version or runtime capabilities. See [DRA integration design](design/DRA-integration.md#dependencies) for prerequisites, upstream Multus/driver changes, and constraints.
 
 ### Feature Gate Best Practices
 
@@ -594,6 +600,6 @@ kubectl describe sriovnetworkpoolconfig <pool-name> -n sriov-network-operator
 ## Next Steps
 
 - [Pool Configuration](api/pool-config-api.md) - Detailed pool management
-- [RDMA Configuration](rdma-configuration.md) - RDMA-specific features  
+- [RDMA Configuration](rdma-configuration.md) - RDMA-specific features
 - [Monitoring Guide](monitoring.md) - Comprehensive monitoring setup
 - [Troubleshooting](troubleshooting.md) - Advanced troubleshooting techniques
