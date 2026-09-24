@@ -739,6 +739,37 @@ func TestValidatePoliciesWithDifferentNumVfForTheSameResourceAndTheSameRootDevic
 	g.Expect(err).To(MatchError("root device 0000:86:00.1 is overlapped with existing policy previousPolicy"))
 }
 
+func TestValidateDRAResourceNameCollision(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	existing := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-a", Namespace: vars.Namespace},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+	}
+	npList := &SriovNetworkNodePolicyList{Items: []SriovNetworkNodePolicy{*existing}}
+
+	colliding := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-b", Namespace: vars.Namespace},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
+	}
+	err := validateDRAResourceNameCollision(colliding, npList)
+	g.Expect(err).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
+
+	unique := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-c", Namespace: vars.Namespace},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "mlx_nic"},
+	}
+	err = validateDRAResourceNameCollision(unique, npList)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	outOfNamespace := &SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy-other-ns", Namespace: "other-namespace"},
+		Spec:       SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"},
+	}
+	err = validateDRAResourceNameCollision(outOfNamespace, npList)
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
 func TestValidateResourceName(t *testing.T) {
 	cases := []struct {
 		name      string

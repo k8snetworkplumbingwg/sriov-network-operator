@@ -18,6 +18,7 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
@@ -53,8 +54,43 @@ func validateSriovOperatorConfig(cr *sriovnetworkv1.SriovOperatorConfig, operati
 	if err != nil {
 		return false, warnings, err
 	}
+	if err := validateDRAModeChange(cr, operation); err != nil {
+		return false, warnings, err
+	}
 
 	return true, warnings, nil
+}
+
+// validateDRAModeChange requires removing existing policies before switching providers.
+// This does not verify that workloads have stopped or node reconfiguration has completed.
+func validateDRAModeChange(cr *sriovnetworkv1.SriovOperatorConfig, operation v1.Operation) error {
+	enabled := cr.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate]
+	previouslyEnabled := false
+	if operation == v1.Update {
+		previousConfig := &sriovnetworkv1.SriovOperatorConfig{}
+		if err := client.Get(context.Background(), runtimeclient.ObjectKeyFromObject(cr), previousConfig); err != nil {
+			if !k8serrors.IsNotFound(err) {
+				return fmt.Errorf("can't validate DRA mode change against the previous config: %w", err)
+			}
+		} else {
+			previouslyEnabled = previousConfig.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate]
+		}
+	}
+	if enabled == previouslyEnabled {
+		// Allow unrelated config updates in either mode.
+		return nil
+	}
+	policies := &sriovnetworkv1.SriovNetworkNodePolicyList{}
+	if err := client.List(context.Background(), policies, runtimeclient.InNamespace(vars.Namespace)); err != nil {
+		return fmt.Errorf("can't validate DRA mode change: %w", err)
+	}
+	for _, policy := range policies.Items {
+		if policy.Name != consts.DefaultPolicyName {
+			return fmt.Errorf("can't change %s from %t to %t while SriovNetworkNodePolicy %s/%s exists; remove non-default policies before switching providers",
+				consts.DynamicResourceAllocationFeatureGate, previouslyEnabled, enabled, policy.Namespace, policy.Name)
+		}
+	}
+	return nil
 }
 
 // validateSriovOperatorConfigDisableDrain checks if the user is setting `.Spec.DisableDrain` from false to true while
@@ -141,6 +177,9 @@ func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, o
 	if err != nil {
 		return admit, warnings, err
 	}
+	if err := validateDRAPolicyNetFilter(cr); err != nil {
+		return false, warnings, err
+	}
 
 	admit, err = dynamicValidateSriovNetworkNodePolicy(cr)
 	if err != nil {
@@ -148,6 +187,28 @@ func validateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy, o
 	}
 
 	return admit, warnings, nil
+}
+
+// validateDRAPolicyNetFilter reads the persisted gate rather than a process-local feature-gate cache.
+func validateDRAPolicyNetFilter(cr *sriovnetworkv1.SriovNetworkNodePolicy) error {
+	if cr.Namespace != vars.Namespace || cr.Spec.NicSelector.NetFilter == "" {
+		return nil
+	}
+	config := &sriovnetworkv1.SriovOperatorConfig{}
+	if err := client.Get(context.Background(), runtimeclient.ObjectKey{
+		Namespace: vars.Namespace, Name: consts.DefaultConfigName,
+	}, config); err != nil {
+		if k8serrors.IsNotFound(err) {
+			// Without an operator config, DRA defaults to disabled.
+			return nil
+		}
+		return fmt.Errorf("can't validate policy %s/%s netFilter compatibility with DRA: %w", cr.Namespace, cr.Name, err)
+	}
+	if config.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate] {
+		return fmt.Errorf("policy %s/%s: spec.nicSelector.netFilter is not supported when %s is enabled",
+			cr.Namespace, cr.Name, consts.DynamicResourceAllocationFeatureGate)
+	}
+	return nil
 }
 
 // resourceNameMaxLen is the maximum length of a resource name, matching the
@@ -288,6 +349,37 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	return true, nil
 }
 
+// validateDRAResourceNameCollision rejects policies whose resourceName normalizes to the same
+// DRA device class name as another policy with a different resourceName.
+func validateDRAResourceNameCollision(cr *sriovnetworkv1.SriovNetworkNodePolicy, npList *sriovnetworkv1.SriovNetworkNodePolicyList) error {
+	if cr.GetNamespace() != vars.Namespace {
+		return nil
+	}
+	if cr.Spec.ResourceName == "" {
+		return nil
+	}
+
+	normalized := dra.ResourceNameToDeviceClassName(cr.Spec.ResourceName)
+	for i := range npList.Items {
+		other := &npList.Items[i]
+		if other.GetName() == cr.GetName() || other.GetName() == consts.DefaultPolicyName {
+			continue
+		}
+		if other.GetNamespace() != vars.Namespace {
+			continue
+		}
+		if other.Spec.ResourceName == "" || other.Spec.ResourceName == cr.Spec.ResourceName {
+			continue
+		}
+		if dra.ResourceNameToDeviceClassName(other.Spec.ResourceName) == normalized {
+			return fmt.Errorf(
+				"resourceName %q cannot be used in policy %q: it normalizes to the same DRA device class name %q as policy %q resourceName %q",
+				cr.Spec.ResourceName, cr.GetName(), normalized, other.GetName(), other.Spec.ResourceName)
+		}
+	}
+	return nil
+}
+
 func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePolicy) (bool, error) {
 	nodesSelected = false
 	interfaceSelected = false
@@ -307,6 +399,9 @@ func dynamicValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePo
 	npList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
 	err = client.List(context.Background(), npList, &runtimeclient.ListOptions{Namespace: namespace})
 	if err != nil {
+		return false, err
+	}
+	if err := validateDRAResourceNameCollision(cr, npList); err != nil {
 		return false, err
 	}
 	for _, node := range nodeList.Items {
