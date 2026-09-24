@@ -2,12 +2,15 @@ package tests
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -258,6 +261,95 @@ var _ = Describe("[sriov] operator", Ordered, ContinueOnFailure, func() {
 					g.Expect(cfg.Enabled).ToNot(BeNil())
 					g.Expect(*cfg.Enabled).To(BeFalse())
 				}, 1*time.Minute, 5*time.Second).Should(Succeed())
+			})
+		})
+
+		Context("Device plugin persistent file logging", func() {
+			It("writes host log file and keeps previous run across device-plugin pod restart", func() {
+				if discovery.Enabled() {
+					Skip("Test unsuitable to be run in discovery mode")
+				}
+
+				By("Selecting a worker node that runs the device plugin")
+				allNodes, err := clients.CoreV1Interface.Nodes().List(context.Background(), metav1.ListOptions{
+					LabelSelector: "node-role.kubernetes.io/worker",
+				})
+				Expect(err).ToNot(HaveOccurred())
+				selectedNodes, err := nodes.MatchingOptionalSelector(clients, allNodes.Items)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(len(selectedNodes)).To(BeNumerically(">", 0), "There must be at least one worker")
+
+				var nodeName string
+				var devicePluginPod *corev1.Pod
+				for _, n := range selectedNodes {
+					p, err := getDevicePluginPod(n.Name)
+					if err != nil {
+						continue
+					}
+					if p.Status.Phase == corev1.PodRunning {
+						nodeName = n.Name
+						devicePluginPod = p
+						break
+					}
+				}
+				if devicePluginPod == nil {
+					Skip("No running sriov-device-plugin pod found on a selected worker")
+				}
+
+				const logPath = "/host/var/log/sriovdp/sriovdp.log"
+
+				By("Assert the host log file exists and is non-empty")
+				Eventually(func(g Gomega) {
+					out, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+						"test -s "+logPath+" && wc -c < "+logPath)
+					g.Expect(err).ToNot(HaveOccurred(), stderr)
+					g.Expect(strings.TrimSpace(out)).ToNot(BeEmpty())
+					g.Expect(strings.TrimSpace(out)).ToNot(Equal("0"))
+				}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+				marker := fmt.Sprintf("e2e-device-plugin-log-marker-%d", time.Now().UnixNano())
+				By("Writing a pre-restart marker into the host log")
+				_, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+					fmt.Sprintf(`printf '%%s\n' %q >> %s`, marker, logPath))
+				Expect(err).ToNot(HaveOccurred(), stderr)
+
+				out, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+					"wc -c < "+logPath)
+				Expect(err).ToNot(HaveOccurred(), stderr)
+				sizeBeforeRestart, err := strconv.Atoi(strings.TrimSpace(out))
+				Expect(err).ToNot(HaveOccurred())
+
+				By("Restart the device-plugin pod on the node")
+				oldPodName := devicePluginPod.Name
+				grace := int64(0)
+				err = clients.Pods(operatorNamespace).Delete(context.Background(), devicePluginPod.Name, metav1.DeleteOptions{
+					GracePeriodSeconds: &grace,
+				})
+				Expect(err).ToNot(HaveOccurred())
+
+				By("Waiting for the replacement device-plugin pod to be running")
+				Eventually(func() bool {
+					newPod, err := getDevicePluginPod(nodeName)
+					if err != nil || newPod.Name == oldPodName {
+						return false
+					}
+					return newPod.Status.Phase == corev1.PodRunning
+				}, 3*time.Minute, 5*time.Second).Should(BeTrue())
+
+				By("Assert marker survived and the host log grew after pod restart")
+				Eventually(func(g Gomega) {
+					out, stderr, err := runCommandOnConfigDaemon(nodeName, "sh", "-c",
+						fmt.Sprintf("grep -F %q %s", marker, logPath))
+					g.Expect(err).ToNot(HaveOccurred(), stderr)
+					g.Expect(out).To(ContainSubstring(marker))
+
+					out, stderr, err = runCommandOnConfigDaemon(nodeName, "sh", "-c",
+						"wc -c < "+logPath)
+					g.Expect(err).ToNot(HaveOccurred(), stderr)
+					sizeAfter, err := strconv.Atoi(strings.TrimSpace(out))
+					g.Expect(err).ToNot(HaveOccurred())
+					g.Expect(sizeAfter).To(BeNumerically(">", sizeBeforeRestart))
+				}, 2*time.Minute, 5*time.Second).Should(Succeed())
 			})
 		})
 

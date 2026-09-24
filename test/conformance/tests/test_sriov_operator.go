@@ -2086,6 +2086,26 @@ func getConfigDaemonPod(nodeName string) (*corev1.Pod, error) {
 	return &pods.Items[0], nil
 }
 
+func getDevicePluginPod(nodeName string) (*corev1.Pod, error) {
+	pods := &corev1.PodList{}
+	label, err := labels.Parse("app=sriov-device-plugin")
+	if err != nil {
+		return nil, err
+	}
+	field, err := fields.ParseSelector(fmt.Sprintf("spec.nodeName=%s", nodeName))
+	if err != nil {
+		return nil, err
+	}
+	err = clients.List(context.Background(), pods, &runtimeclient.ListOptions{Namespace: operatorNamespace, LabelSelector: label, FieldSelector: field})
+	if err != nil {
+		return nil, err
+	}
+	if len(pods.Items) != 1 {
+		return nil, fmt.Errorf("expected 1 device-plugin pod on node %s, got %d", nodeName, len(pods.Items))
+	}
+	return &pods.Items[0], nil
+}
+
 func runCommandOnConfigDaemon(nodeName string, command ...string) (string, string, error) {
 	daemonPod, err := getConfigDaemonPod(nodeName)
 	if err != nil {
