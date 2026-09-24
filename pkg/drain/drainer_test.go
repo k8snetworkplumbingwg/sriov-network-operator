@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"go.uber.org/mock/gomock"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -183,6 +184,96 @@ var _ = Describe("Drainer", Ordered, func() {
 			_, err := drn.DrainNode(ctx, n, true, false, drain.DrainErrorNoop)
 			Expect(err).To(HaveOccurred())
 		})
+
+		DescribeTable("should select device consumers and wait for termination during a partial drain",
+			func(claim *corev1.PodResourceClaim, extendedResource string, daemonSet, wantDrain bool) {
+				n, _ := createNode("node-dra")
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "consumer", Namespace: testNamespace,
+						Finalizers: []string{"sriov-operator.io/test"},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: n.Name, TerminationGracePeriodSeconds: ptr.To[int64](0),
+						Containers: []corev1.Container{{Name: "app", Image: "test"}},
+					},
+				}
+				if claim != nil {
+					pod.Spec.ResourceClaims = []corev1.PodResourceClaim{*claim}
+					pod.Spec.Containers[0].Resources.Claims = []corev1.ResourceClaim{{Name: claim.Name}}
+				}
+				if extendedResource != "" {
+					if extendedResource == "sriov" {
+						extendedResource = vars.ResourcePrefix + "/vf"
+					}
+					resources := corev1.ResourceList{corev1.ResourceName(extendedResource): resource.MustParse("1")}
+					pod.Spec.Containers[0].Resources.Requests = resources
+					pod.Spec.Containers[0].Resources.Limits = resources
+				}
+				if daemonSet {
+					ds := &appsv1.DaemonSet{
+						ObjectMeta: metav1.ObjectMeta{Name: "dra-daemon", Namespace: testNamespace},
+						Spec: appsv1.DaemonSetSpec{
+							Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "dra-daemon"}},
+							Template: corev1.PodTemplateSpec{
+								ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "dra-daemon"}},
+								Spec:       pod.Spec,
+							},
+						},
+					}
+					Expect(k8sClient.Create(ctx, ds)).To(Succeed())
+					DeferCleanup(func() { Expect(k8sClient.Delete(context.Background(), ds)).To(Succeed()) })
+					pod.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(ds, appsv1.SchemeGroupVersion.WithKind("DaemonSet"))}
+				}
+				Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+				key := client.ObjectKeyFromObject(pod)
+				DeferCleanup(func() {
+					remaining := &corev1.Pod{}
+					if err := k8sClient.Get(context.Background(), key, remaining); !errors.IsNotFound(err) {
+						Expect(err).NotTo(HaveOccurred())
+						remaining.Finalizers = nil
+						Expect(k8sClient.Update(context.Background(), remaining)).To(Succeed())
+					}
+				})
+				pod.Status.Phase = corev1.PodRunning
+				Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+				originalTimeout := drain.DrainTimeOut
+				drain.DrainTimeOut = time.Second
+				DeferCleanup(func() { drain.DrainTimeOut = originalTimeout })
+				orchestrator.EXPECT().BeforeDrainNode(ctx, n).Return(true, nil)
+				completed, err := drn.DrainNode(ctx, n, false, false, drain.DrainErrorNoop)
+				if !wantDrain {
+					Expect(err).NotTo(HaveOccurred())
+					Expect(completed).To(BeTrue())
+					Expect(k8sClient.Get(ctx, key, pod)).To(Succeed())
+					Expect(pod.DeletionTimestamp).To(BeNil())
+					return
+				}
+
+				// Eviction alone must not allow provider restart or VF reconfiguration.
+				Expect(err).To(HaveOccurred())
+				Expect(completed).To(BeFalse())
+				Expect(k8sClient.Get(ctx, key, pod)).To(Succeed())
+				Expect(pod.DeletionTimestamp).NotTo(BeNil())
+
+				// Simulate termination; envtest has no kubelet to finish pod deletion.
+				pod.Finalizers = nil
+				Expect(k8sClient.Update(ctx, pod)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: ptr.To[int64](0)})).To(SatisfyAny(Succeed(), WithTransform(errors.IsNotFound, BeTrue())))
+				Expect(errors.IsNotFound(k8sClient.Get(ctx, key, &corev1.Pod{}))).To(BeTrue())
+				orchestrator.EXPECT().BeforeDrainNode(ctx, n).Return(true, nil)
+				completed, err = drn.DrainNode(ctx, n, false, false, drain.DrainErrorNoop)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(completed).To(BeTrue())
+			},
+			Entry("named DRA claim", &corev1.PodResourceClaim{Name: "vf", ResourceClaimName: ptr.To("vf-claim")}, "", false, true),
+			Entry("DRA claim template", &corev1.PodResourceClaim{Name: "vf", ResourceClaimTemplateName: ptr.To("vf-template")}, "", false, true),
+			Entry("SR-IOV extended resource", nil, "sriov", false, true),
+			Entry("ordinary pod", nil, "", false, false),
+			Entry("unrelated extended resource", nil, "other.example.com/device", false, false),
+			Entry("DRA DaemonSet", &corev1.PodResourceClaim{Name: "vf", ResourceClaimName: ptr.To("vf-claim")}, "", true, false),
+		)
 
 		It("should remove pods with sriov devices only if a full drain is not requested", func() {
 			n, _ := createNode("node1")

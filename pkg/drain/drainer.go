@@ -143,7 +143,7 @@ func (d *Drainer) CompleteDrainNode(ctx context.Context, node *corev1.Node) (boo
 }
 
 // createDrainHelper function to create a drain helper
-// if fullDrain is false we only remove pods that have the resourcePrefix
+// if fullDrain is false we only remove pods with DRA claims or the resourcePrefix
 // if not we remove all the pods in the node
 // onError callback is called immediately when pod eviction/deletion errors occur
 func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, fullDrain bool, onError DrainErrorCallback) *drain.Helper {
@@ -191,9 +191,19 @@ func createDrainHelper(kubeClient kubernetes.Interface, ctx context.Context, ful
 		}},
 	}
 
-	// when we just want to drain and not reboot we can only remove the pods using sriov devices
+	// Without a reboot, drain device consumers while preserving ordinary workloads.
 	if !fullDrain {
 		deleteFunction := func(p corev1.Pod) drain.PodDeleteStatus {
+			// Native DRA consumers do not have extended-resource requests. Until
+			// claims are resolved to their drivers, conservatively drain all pods
+			// declaring claims before reconfiguring devices on the node.
+			if len(p.Spec.ResourceClaims) > 0 {
+				return drain.PodDeleteStatus{
+					Delete:  true,
+					Reason:  "pod uses DRA resources",
+					Message: "SR-IOV network operator draining the node",
+				}
+			}
 			for _, c := range p.Spec.Containers {
 				if c.Resources.Requests != nil {
 					for r := range c.Resources.Requests {
