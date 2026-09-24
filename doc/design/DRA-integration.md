@@ -2,11 +2,12 @@
 title: DRA (Dynamic Resource Allocation) Integration
 authors:
   - rollandf
+  - wizhaoredhat
 reviewers:
   - SchSeba
   - adrianchiris
 creation-date: 11-02-2026
-last-updated: 23-07-2026
+last-updated: 24-09-2026
 ---
 
 # DRA (Dynamic Resource Allocation) Integration
@@ -17,7 +18,7 @@ This design proposes integrating Kubernetes Dynamic Resource Allocation (DRA) fr
 
 This will be implemented as an opt-in feature controlled by a feature flag, allowing gradual adoption and testing while maintaining backward compatibility with existing device plugin-based deployments.
 
-## Implementation Status (2026-07-23)
+## Implementation Status (2026-09-24)
 
 Core DRA integration is **implemented** behind `featureGates.dynamicResourceAllocation` in:
 - `controllers/sriovoperatorconfig_controller.go` — deploy DRA driver or device plugin
@@ -33,7 +34,7 @@ The Kubernetes Device Plugin framework has several limitations that the Dynamic 
 
 1. **Limited Resource Modeling**: Device plugins can only expose simple countable resources (e.g., `intel.com/sriov: 10`). They cannot express complex device characteristics, NUMA topology, or filtering criteria.
 
-2. **Static Allocation**: Device plugin resource allocation happens before pod scheduling decisions are made, leading to potential scheduling inefficiencies and race conditions.
+2. **Static Allocation**: Device plugins advertise extended resources so the scheduler can filter nodes, but actual device assignment happens in the kubelet during container creation (device plugin `Allocate` RPC) after the pod is scheduled - not as a pre-scheduling allocation step.
 
 3. **No Resource Sharing**: Device plugins don't support controlled sharing or partitioning of resources across multiple containers or pods.
 
@@ -219,7 +220,7 @@ When `featureGates.dynamicResourceAllocation: true`:
 - Operator creates/manages DRA-related resources (DeviceClass, ServiceAccount, RBAC, etc.)
 - Operator auto-generates `SriovResourcePolicy` and `DeviceAttributes` CRs from policies
 - DRA driver only advertises devices that match a `SriovResourcePolicy` (opt-in model)
-- `SriovNetwork` CRs still work but users must use ResourceClaims instead of device plugin resources
+- Workloads request SR-IOV devices via **ResourceClaim** / **ResourceClaimTemplate** by default (not node extended resources). If the cluster enables the Kubernetes **`DRAExtendedResource`** feature gate, pods may instead use `resources.limits` with the same extended resource names as device-plugin mode (see [Extended Resource Allocation Support](#extended-resource-allocation-support-optional-enhancement)).
 
 ### API Extensions
 
@@ -633,7 +634,7 @@ metadata:
   name: sriovnetwork.k8snetworkplumbingwg.io
 spec:
   selectors:
-  - cel: 
+  - cel:
       expression: "device.driver == 'sriovnetwork.k8snetworkplumbingwg.io'"
 ```
 
@@ -733,7 +734,7 @@ initContainers:
 3. **Signal:**
    - Pod annotation `sriovnetwork.openshift.io/device-plugin-wait-config`: init container sets it; config daemon removes it when configuration is done (same as device plugin). No node label or kubectl in the wait path.
 
-**Implementation (as built):** see `buildDeviceAttributesCR()`, `buildPolicyConfig()`, and `renderSriovResourcePolicyForNode()` in `controllers/sriovnetworknodepolicy_controller.go`.
+**Implementation (as built):** see `buildDeviceAttributesCR()`, `buildPolicyConfig()`, and `renderSriovResourcePolicyForNode()` in `controllers/sriovnetworknodepolicy_dra.go`.
 
 ```go
 // buildDeviceAttributesCR(name, resourceName) — one DeviceAttributes per unique resourceName
@@ -818,7 +819,8 @@ When Policy Changes:
 - **Requires:** DRA driver with Multus integration ([dra-driver-sriov#7](https://github.com/k8snetworkplumbingwg/dra-driver-sriov/pull/7))
 
 **6. Metrics and Monitoring**
-- DRA driver provides its own health check endpoints
+- The upstream DRA driver can expose a gRPC health service when `HEALTHCHECK_PORT` is set to a positive port
+- **Operator deployment:** `HEALTHCHECK_PORT` stays `-1` (health service off) and the DaemonSet has no liveness/readiness probes. The driver pod runs with `hostNetwork: true` (same as the SR-IOV device plugin). Binding a fixed health port on the host network namespace risks port conflicts with other hostNetwork workloads on the node (config daemon, device plugin, node services); the operator does not coordinate per-node port assignment or enforce non-overlap at admission time
 - *(Not yet implemented)* Operator DRA-specific metrics (CR counts, allocation events, etc.)
 
 **7. RBAC Requirements**
@@ -848,7 +850,7 @@ When Policy Changes:
 #### Dependencies
 
 - Kubernetes 1.34+ (stable DRA support; cluster admin prerequisite — not enforced by operator)
-- Operator builds against `k8s.io/api` v0.35.x; validate against your cluster version
+- Operator builds against `k8s.io/api` v0.36.x; validate against your cluster version
 - `dra-driver-sriov` container image (operator `go.mod` pins a pseudo-version; Helm default is `:latest` — pin both for production)
 - Container runtime with CDI support (containerd, CRI-O)
 - Container runtime with NRI support
@@ -944,19 +946,21 @@ When Policy Changes:
 Kubernetes 1.34 introduces an alpha feature called **Extended Resource Allocation by DRA** (controlled by the `DRAExtendedResource` feature gate). This feature allows `DeviceClass` resources to specify an `extendedResourceName`, enabling pods to request DRA-managed devices using traditional extended resource syntax instead of `ResourceClaim` objects.
 
 **Key Benefits:**
-- **Backward compatibility**: Existing pod specs using `resources.limits` can work with DRA without modification
-- **Seamless migration**: Users can switch from device plugin to DRA without rewriting pod specifications
-- **Coexistence**: Same extended resource name can be provided by device plugin on some nodes and DRA on others
+- **Backward compatibility**: Existing pod specs using `resources.limits` can work with DRA without modification when the cluster `DRAExtendedResource` feature gate is enabled
+- **Seamless migration**: Users can switch from device plugin to DRA cluster-wide without rewriting pod specifications
+- **Consistent resource names**: Per-resourceName DeviceClasses use the same `extendedResourceName` values as device plugin mode (`ResourcePrefix/resourceName`)
+
+**Cluster mode:** Device plugin and DRA driver are mutually exclusive at the cluster level (`dynamicResourceAllocation` feature gate). Per-node mixed mode (device plugin on some nodes, DRA on others) is not supported; see **Documentation and Migration** below and Open Questions item 2.
 
 #### Kubernetes Feature Details
 
-**Feature State:** Kubernetes v1.34 [alpha] (disabled by default)
+**Feature state (Kubernetes `DRAExtendedResource` gate):** alpha in v1.34–v1.35, beta in v1.36, stable in v1.37 (disabled by default until stable).
 
-**Requirements:**
-- Enable `DRAExtendedResource` feature gate in:
-  - kube-apiserver
-  - kube-scheduler
-  - kubelet
+**Requirements:** Enable `DRAExtendedResource` on:
+- kube-apiserver
+- kube-scheduler
+- kube-controller-manager
+- kubelet
 
 **Two Usage Patterns:**
 
@@ -1102,7 +1106,8 @@ func buildDeviceClassCEL(resourceName string) string {
 
 **4. Conflict Prevention**
 
-- *(Not yet implemented)* Validate that `extendedResourceName` doesn't conflict with actual device plugin resources on mixed-mode clusters
+- **Implemented:** The admission webhook rejects `SriovNetworkNodePolicy` objects whose `resourceName` normalizes to the same DeviceClass name as another policy (`resourceNameToDeviceClassName()`), regardless of whether the `dynamicResourceAllocation` feature gate is enabled. The policy controller skips colliding names as a fallback if validation is bypassed (for example when the webhook is disabled).
+- *(Not yet implemented)* Validate during mode transitions that `extendedResourceName` values do not conflict with lingering device plugin state before DRA is fully active
 - *(Not yet implemented)* Add status field to indicate if DeviceClass creation succeeded or failed due to conflicts
 
 **5. Documentation and Migration**
@@ -1147,9 +1152,9 @@ Per-resourceName DeviceClasses with `extendedResourceName` are **implemented** w
 #### Implemented Unit Tests
 
 Coverage exists in:
-- `controllers/sriovnetworknodepolicy_controller_test.go` — `buildPolicyConfig` (including `linkType`), `buildDeviceAttributesCR`, `buildDeviceClassCEL`, `syncDeviceAttributes`, `syncSriovResourcePolicies`, `syncExtendedResourceDeviceClasses`, cleanup paths
+- `controllers/sriovnetworknodepolicy_dra_test.go` — `buildPolicyConfig` (including `linkType`), `buildDeviceAttributesCR`, `buildDeviceClassCEL`, `syncDeviceAttributes`, `syncSriovResourcePolicies`, `syncExtendedResourceDeviceClasses`, cleanup paths
 - `controllers/helper_test.go` — `syncDRADriverObjs`, DRA driver node selector
-- `pkg/daemon/daemon_dra_test.go` — DRA driver pod annotation unblock/restart/wait logic
+- `pkg/daemon/daemon_test.go` — DRA driver pod annotation unblock/restart/wait logic
 
 Key behaviors covered:
 1. Feature gate default state (`dynamicResourceAllocation: false`)
