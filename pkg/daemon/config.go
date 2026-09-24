@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -22,7 +23,10 @@ type OperatorConfigNodeReconcile struct {
 
 // NewOperatorConfigNodeReconcile creates a new instance of OperatorConfigNodeReconcile with the given client.
 func NewOperatorConfigNodeReconcile(client client.Client) *OperatorConfigNodeReconcile {
-	return &OperatorConfigNodeReconcile{client: client, latestFeatureGates: make(map[string]bool)}
+	return &OperatorConfigNodeReconcile{
+		client:             client,
+		latestFeatureGates: make(map[string]bool),
+	}
 }
 
 // Reconcile reconciles the OperatorConfig resource. It updates log level and feature gates as necessary.
@@ -39,8 +43,8 @@ func (oc *OperatorConfigNodeReconcile) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	// update log level
 	snolog.SetLogLevel(operatorConfig.Spec.LogLevel)
+	oc.reconcileLogConfig(reqLogger, operatorConfig.Spec.LogConfig)
 
 	newDisableDrain := operatorConfig.Spec.DisableDrain
 	if vars.DisableDrain != newDisableDrain {
@@ -62,4 +66,17 @@ func (oc *OperatorConfigNodeReconcile) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovOperatorConfig{}).
 		Complete(oc)
+}
+
+// reconcileLogConfig applies LogConfig changes to the file logger.
+func (oc *OperatorConfigNodeReconcile) reconcileLogConfig(reqLogger logr.Logger, lc *sriovnetworkv1.LogConfig) {
+	newCfg, err := sriovnetworkv1.GetEffectiveLogConfig(lc)
+	if err != nil {
+		reqLogger.Error(err, "invalid log configuration, skipping update")
+		return
+	}
+	vars.SetLogCfg(newCfg)
+	if err := snolog.InitLogWithFile(); err != nil {
+		reqLogger.Error(err, "failed to reconfigure file logging after LogConfig update, will retry on next reconcile")
+	}
 }

@@ -70,6 +70,7 @@ spec:
       - name: sriov-device-plugin
         image: {{.SRIOVDevicePluginImage}}
         args:
+        - --log_dir=/var/log/sriovdp
         - --log-level=10
         - --resource-prefix={{.ResourcePrefix}}
         - --config-file=/etc/pcidp/$(NODE_NAME)
@@ -95,6 +96,8 @@ spec:
         - name: plugins-registry
           mountPath: /var/lib/kubelet/plugins_registry
           readOnly: false
+        - name: log
+          mountPath: /var/log
         - name: config-volume
           mountPath: /etc/pcidp/
           readOnly: true
@@ -111,6 +114,10 @@ spec:
         - name: plugins-registry
           hostPath:
             path: /var/lib/kubelet/plugins_registry
+        - name: log
+          hostPath:
+            path: /var/log
+            type: DirectoryOrCreate
         - name: config-volume
           configMap:
             name: device-plugin-config

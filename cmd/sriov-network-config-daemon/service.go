@@ -126,8 +126,16 @@ func runServiceCmd(cmd *cobra.Command, args []string) error {
 
 	// Mark that we are running on host
 	vars.UsingSystemdMode = true
-	vars.InChroot = true
+	vars.InChroot.Store(true)
 	vars.Destdir = "/tmp"
+
+	// Persistent host logs use production defaults. LogConfig from SriovOperatorConfig
+	// is applied by the container daemon
+	vars.SetLogCfg(vars.DefaultLogCfg())
+	if err := snolog.InitLogWithFile(); err != nil {
+		setupLog.Error(err, "failed to initialize file logging, continuing with console only")
+	}
+	defer snolog.CloseFileLogger()
 
 	sc, err := newServiceConfig(setupLog)
 	if err != nil {

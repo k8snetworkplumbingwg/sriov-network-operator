@@ -283,11 +283,22 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// init log level
 	if err := initLogLevel(operatorConfig); err != nil {
 		setupLog.Error(err, "failed to initialize log level")
 		return err
 	}
+
+	// file logging (host path under /var/log)
+	logCfg, logCfgErr := sriovnetworkv1.GetEffectiveLogConfig(operatorConfig.Spec.LogConfig)
+	if logCfgErr != nil {
+		setupLog.Error(logCfgErr, "invalid log configuration, using defaults")
+		logCfg = vars.DefaultLogCfg()
+	}
+	vars.SetLogCfg(logCfg)
+	if err := snolog.InitLogWithFile(); err != nil {
+		setupLog.Error(err, "failed to initialize file logging, continuing with console only")
+	}
+	defer snolog.CloseFileLogger()
 
 	// init disable drain
 	vars.DisableDrain = operatorConfig.Spec.DisableDrain
@@ -315,6 +326,7 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create manager")
+		snolog.CloseFileLogger()
 		os.Exit(1)
 	}
 
@@ -328,18 +340,21 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	// Init Daemon configuration on the node
 	if err = dm.Init(startOpts.disabledPlugins); err != nil {
 		setupLog.Error(err, "unable to initialize daemon")
+		snolog.CloseFileLogger()
 		os.Exit(1)
 	}
 
 	// Setup reconcile loop with manager
 	if err = dm.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to setup daemon with manager for SriovNetworkNodeState")
+		snolog.CloseFileLogger()
 		os.Exit(1)
 	}
 
 	// Setup reconcile loop with manager
 	if err = daemon.NewOperatorConfigNodeReconcile(kClient).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create setup daemon manager for OperatorConfig")
+		snolog.CloseFileLogger()
 		os.Exit(1)
 	}
 

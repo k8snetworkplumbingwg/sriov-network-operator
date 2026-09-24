@@ -3,6 +3,8 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -780,6 +782,243 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					Expect(err.Error()).To(ContainSubstring(
 						"excludeTopology[false] field conflicts with policy [test-exclude-topology-true-res-xxx].ExcludeTopology[true]" +
 							" as they target the same resource[resourceXXX]"))
+				})
+			})
+
+			Context("Persistent file logging", func() {
+				BeforeEach(func() {
+					if discovery.Enabled() {
+						Skip("Test unsuitable to be run in discovery mode")
+					}
+				})
+
+				It("keeps config-daemon host log across policy apply and policy change", func() {
+					initialLogConfig := getOperatorConfigLogConfig()
+					DeferCleanup(func() {
+						By("Restore LogConfig to its initial value")
+						setOperatorConfigLogConfig(initialLogConfig)
+					})
+
+					By("Enable persistent logging with defaults")
+					enabled := true
+					setOperatorConfigLogConfig(&sriovv1.LogConfig{Enabled: &enabled})
+
+					node := sriovInfos.Nodes[0]
+					intf, err := sriovInfos.FindOneSriovDevice(node)
+					Expect(err).ToNot(HaveOccurred())
+					By("Using device " + intf.Name + " on node " + node)
+
+					const logPath = "/host/var/log/sriov-network-config-daemon/config-daemon.log"
+
+					By("Assert the host log file exists and is non-empty")
+					Eventually(func(g Gomega) {
+						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+							"test -s "+logPath+" && wc -c < "+logPath)
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						g.Expect(strings.TrimSpace(out)).ToNot(Equal("0"))
+					}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+					marker := fmt.Sprintf("e2e-config-daemon-log-marker-%d", time.Now().UnixNano())
+					By("Writing a pre-apply marker into the host log")
+					_, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+						fmt.Sprintf(`printf '%%s\n' '{"msg":"%s","level":"info","src":"e2e-persistent-logging"}' >> %s`, marker, logPath))
+					Expect(err).ToNot(HaveOccurred(), stderr)
+
+					By("creating a node policy")
+					policy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, intf.Name, node, 5, "logpersistcd", "netdevice")
+					Expect(err).ToNot(HaveOccurred())
+
+					By("waiting for the node state to be updated")
+					Eventually(func() sriovv1.Interfaces {
+						nodeState := &sriovv1.SriovNetworkNodeState{}
+						err := clients.Get(context.Background(), runtimeclient.ObjectKey{Namespace: operatorNamespace, Name: node}, nodeState)
+						Expect(err).ToNot(HaveOccurred())
+						return nodeState.Spec.Interfaces
+					}, 1*time.Minute, 1*time.Second).Should(ContainElement(MatchFields(
+						IgnoreExtras,
+						Fields{
+							"Name":   Equal(intf.Name),
+							"NumVfs": Equal(5),
+						})))
+
+					By("waiting the sriov to be stable on the node")
+					WaitForSRIOVStable()
+
+					By("Assert marker survived policy apply")
+					Eventually(func(g Gomega) {
+						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+							fmt.Sprintf("grep -F %q %s", marker, logPath))
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						g.Expect(out).To(ContainSubstring(marker))
+					}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+					By("changing the node policy Spec.NumVfs")
+					Eventually(func(g Gomega) {
+						current := &sriovv1.SriovNetworkNodePolicy{}
+						err := clients.Get(context.Background(), runtimeclient.ObjectKey{
+							Namespace: policy.Namespace,
+							Name:      policy.Name,
+						}, current)
+						g.Expect(err).ToNot(HaveOccurred())
+						current.Spec.NumVfs = 7
+						err = clients.Update(context.Background(), current)
+						g.Expect(err).ToNot(HaveOccurred())
+					}, 1*time.Minute, 5*time.Second).Should(Succeed())
+
+					By("waiting for the node state to be updated")
+					Eventually(func() sriovv1.Interfaces {
+						nodeState := &sriovv1.SriovNetworkNodeState{}
+						err := clients.Get(context.Background(), runtimeclient.ObjectKey{Namespace: operatorNamespace, Name: node}, nodeState)
+						Expect(err).ToNot(HaveOccurred())
+						return nodeState.Spec.Interfaces
+					}, 1*time.Minute, 1*time.Second).Should(ContainElement(MatchFields(
+						IgnoreExtras,
+						Fields{
+							"Name":   Equal(intf.Name),
+							"NumVfs": Equal(7),
+						})))
+
+					By("waiting the sriov to be stable on the node")
+					WaitForSRIOVStable()
+
+					By("Assert marker survived policy change")
+					Eventually(func(g Gomega) {
+						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+							fmt.Sprintf("grep -F %q %s", marker, logPath))
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						g.Expect(out).To(ContainSubstring(marker))
+					}, 2*time.Minute, 5*time.Second).Should(Succeed())
+				})
+
+				It("keeps device-plugin previous run across policy apply and policy change", func() {
+					node := sriovInfos.Nodes[0]
+					intf, err := sriovInfos.FindOneSriovDevice(node)
+					Expect(err).ToNot(HaveOccurred())
+					By("Using device " + intf.Name + " on node " + node)
+
+					const logPath = "/host/var/log/sriovdp/sriovdp.log"
+
+					By("Assert the host log file exists and is non-empty")
+					Eventually(func(g Gomega) {
+						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+							"test -s "+logPath+" && wc -c < "+logPath)
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						g.Expect(strings.TrimSpace(out)).ToNot(Equal("0"))
+					}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+					marker := fmt.Sprintf("e2e-device-plugin-log-marker-%d", time.Now().UnixNano())
+					By("Writing a pre-apply marker into the host log")
+					_, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+						fmt.Sprintf(`printf '%%s\n' %q >> %s`, marker, logPath))
+					Expect(err).ToNot(HaveOccurred(), stderr)
+
+					out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+						"wc -c < "+logPath)
+					Expect(err).ToNot(HaveOccurred(), stderr)
+					sizeBeforeApply, err := strconv.Atoi(strings.TrimSpace(out))
+					Expect(err).ToNot(HaveOccurred())
+
+					dpBeforeApply, err := getDevicePluginPod(node)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("creating a node policy")
+					policy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, intf.Name, node, 5, "logpersistdp", "netdevice")
+					Expect(err).ToNot(HaveOccurred())
+
+					By("waiting for the node state to be updated")
+					Eventually(func() sriovv1.Interfaces {
+						nodeState := &sriovv1.SriovNetworkNodeState{}
+						err := clients.Get(context.Background(), runtimeclient.ObjectKey{Namespace: operatorNamespace, Name: node}, nodeState)
+						Expect(err).ToNot(HaveOccurred())
+						return nodeState.Spec.Interfaces
+					}, 1*time.Minute, 1*time.Second).Should(ContainElement(MatchFields(
+						IgnoreExtras,
+						Fields{
+							"Name":   Equal(intf.Name),
+							"NumVfs": Equal(5),
+						})))
+
+					By("waiting the sriov to be stable on the node")
+					WaitForSRIOVStable()
+
+					By("Assert device-plugin restarted, marker survived, and the host log grew")
+					Eventually(func(g Gomega) {
+						p, err := getDevicePluginPod(node)
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(p.Name).ToNot(Equal(dpBeforeApply.Name))
+						g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning))
+					}, 3*time.Minute, 5*time.Second).Should(Succeed())
+					Eventually(func(g Gomega) {
+						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+							fmt.Sprintf("grep -F %q %s", marker, logPath))
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						g.Expect(out).To(ContainSubstring(marker))
+
+						out, stderr, err = runCommandOnConfigDaemon(node, "sh", "-c",
+							"wc -c < "+logPath)
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						sizeAfter, err := strconv.Atoi(strings.TrimSpace(out))
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(sizeAfter).To(BeNumerically(">", sizeBeforeApply))
+					}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+					out, stderr, err = runCommandOnConfigDaemon(node, "sh", "-c",
+						"wc -c < "+logPath)
+					Expect(err).ToNot(HaveOccurred(), stderr)
+					sizeBeforeChange, err := strconv.Atoi(strings.TrimSpace(out))
+					Expect(err).ToNot(HaveOccurred())
+					dpBeforeChange, err := getDevicePluginPod(node)
+					Expect(err).ToNot(HaveOccurred())
+
+					By("changing the node policy Spec.NumVfs")
+					Eventually(func(g Gomega) {
+						current := &sriovv1.SriovNetworkNodePolicy{}
+						err := clients.Get(context.Background(), runtimeclient.ObjectKey{
+							Namespace: policy.Namespace,
+							Name:      policy.Name,
+						}, current)
+						g.Expect(err).ToNot(HaveOccurred())
+						current.Spec.NumVfs = 7
+						err = clients.Update(context.Background(), current)
+						g.Expect(err).ToNot(HaveOccurred())
+					}, 1*time.Minute, 5*time.Second).Should(Succeed())
+
+					By("waiting for the node state to be updated")
+					Eventually(func() sriovv1.Interfaces {
+						nodeState := &sriovv1.SriovNetworkNodeState{}
+						err := clients.Get(context.Background(), runtimeclient.ObjectKey{Namespace: operatorNamespace, Name: node}, nodeState)
+						Expect(err).ToNot(HaveOccurred())
+						return nodeState.Spec.Interfaces
+					}, 1*time.Minute, 1*time.Second).Should(ContainElement(MatchFields(
+						IgnoreExtras,
+						Fields{
+							"Name":   Equal(intf.Name),
+							"NumVfs": Equal(7),
+						})))
+
+					By("waiting the sriov to be stable on the node")
+					WaitForSRIOVStable()
+
+					By("Assert device-plugin restarted again, marker survived, and the host log grew")
+					Eventually(func(g Gomega) {
+						p, err := getDevicePluginPod(node)
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(p.Name).ToNot(Equal(dpBeforeChange.Name))
+						g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning))
+					}, 3*time.Minute, 5*time.Second).Should(Succeed())
+					Eventually(func(g Gomega) {
+						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+							fmt.Sprintf("grep -F %q %s", marker, logPath))
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						g.Expect(out).To(ContainSubstring(marker))
+
+						out, stderr, err = runCommandOnConfigDaemon(node, "sh", "-c",
+							"wc -c < "+logPath)
+						g.Expect(err).ToNot(HaveOccurred(), stderr)
+						sizeAfter, err := strconv.Atoi(strings.TrimSpace(out))
+						g.Expect(err).ToNot(HaveOccurred())
+						g.Expect(sizeAfter).To(BeNumerically(">", sizeBeforeChange))
+					}, 3*time.Minute, 5*time.Second).Should(Succeed())
 				})
 			})
 		})
