@@ -223,11 +223,12 @@ func (dn *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					reqLogger.Error(err, "failed to get DRA driver pods")
 					return ctrl.Result{}, err
 				}
-				if len(desiredNodeState.Spec.Interfaces) > 0 {
-					if err := dn.tryUnblockDRADriver(ctx, desiredNodeState, draDriverPods); err != nil {
-						reqLogger.Error(err, "failed to unblock DRA driver")
-						return ctrl.Result{}, err
-					}
+				// Unblock even when there are no interfaces. The DRA init container
+				// always waits, and a node with no policy would otherwise stay in Init
+				// and block DaemonSet rollout.
+				if err := dn.tryUnblockDRADriver(ctx, draDriverPods); err != nil {
+					reqLogger.Error(err, "failed to unblock DRA driver")
+					return ctrl.Result{}, err
 				}
 			} else if vars.FeatureGate.IsEnabled(consts.BlockDevicePluginUntilConfiguredFeatureGate) &&
 				len(desiredNodeState.Spec.Interfaces) > 0 {
@@ -444,13 +445,11 @@ func (dn *NodeReconciler) apply(ctx context.Context, desiredNodeState *sriovnetw
 
 	// After apply, unblock device plugin or DRA driver (remove wait-for-config annotation).
 	if vars.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
-		if len(desiredNodeState.Spec.Interfaces) == 0 {
-			reqLogger.Info("no interfaces in desired state, skipping DRA driver wait")
-		} else {
-			if err := dn.waitForDRADriverPodAndTryUnblock(ctx, desiredNodeState); err != nil {
-				reqLogger.Error(err, "failed to wait for DRA driver pod and try unblock")
-				return ctrl.Result{}, err
-			}
+		// Always unblock. An empty interface list means there is nothing to configure,
+		// not that the init container should wait forever.
+		if err := dn.waitForDRADriverPodAndTryUnblock(ctx); err != nil {
+			reqLogger.Error(err, "failed to wait for DRA driver pod and try unblock")
+			return ctrl.Result{}, err
 		}
 	} else if vars.FeatureGate.IsEnabled(consts.BlockDevicePluginUntilConfiguredFeatureGate) {
 		if len(desiredNodeState.Spec.Interfaces) == 0 {
@@ -525,15 +524,12 @@ func (dn *NodeReconciler) tryUnblockDevicePlugin(ctx context.Context,
 }
 
 // tryUnblockDRADriver removes the wait-for-config annotation from DRA driver pods so their init container can exit.
-// Same semantics as tryUnblockDevicePlugin but for DRA driver pods (same wait-for-config mechanism).
-func (dn *NodeReconciler) tryUnblockDRADriver(ctx context.Context,
-	desiredNodeState *sriovnetworkv1.SriovNetworkNodeState, draDriverPods []corev1.Pod) error {
+// Unlike the device plugin, DRA always runs this init container, including on nodes with no
+// SriovNetworkNodePolicy. Those nodes have nothing to wait for, so the annotation is removed
+// whether or not the desired state lists interfaces.
+func (dn *NodeReconciler) tryUnblockDRADriver(ctx context.Context, draDriverPods []corev1.Pod) error {
 	funcLog := log.Log.WithName("tryUnblockDRADriver")
-	funcLog.Info("check if we need to remove the wait-for-config annotation from DRA driver pods")
-	if len(desiredNodeState.Spec.Interfaces) == 0 {
-		funcLog.Info("desired node state has no interfaces, keep the wait-for-config annotation")
-		return nil
-	}
+	funcLog.Info("removing the wait-for-config annotation from DRA driver pods")
 	for _, pod := range draDriverPods {
 		if err := utils.RemoveAnnotationFromObject(ctx, &pod,
 			consts.DevicePluginWaitConfigAnnotation, dn.client); err != nil {
@@ -699,6 +695,20 @@ func (dn *NodeReconciler) getDevicePluginPodsForNode(ctx context.Context) ([]cor
 	return pods.Items, nil
 }
 
+// IsManagedDRADriverPod reports whether pod is the operator-managed sriov-dra-driver DaemonSet pod.
+func IsManagedDRADriverPod(pod *corev1.Pod) bool {
+	if pod.Spec.ServiceAccountName != consts.DRADriverServiceAccountName {
+		return false
+	}
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "DaemonSet" && ref.Name == consts.DRADriverDaemonSetName &&
+			ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
 // getDRADriverPodsForNode returns the DRA driver pods running on this node
 func (dn *NodeReconciler) getDRADriverPodsForNode(ctx context.Context) ([]corev1.Pod, error) {
 	funcLog := log.Log.WithName("getDRADriverPodsForNode")
@@ -710,124 +720,86 @@ func (dn *NodeReconciler) getDRADriverPodsForNode(ctx context.Context) ([]corev1
 		}})
 	if err != nil {
 		funcLog.Error(err, "failed to list DRA driver pods")
-		return []corev1.Pod{}, err
+		return []corev1.Pod{}, fmt.Errorf("list DRA driver pods in namespace %s on node %s: %w",
+			vars.Namespace, vars.NodeName, err)
 	}
-	if len(pods.Items) == 0 {
-		return []corev1.Pod{}, nil
+	matched := make([]corev1.Pod, 0, len(pods.Items))
+	for i := range pods.Items {
+		if IsManagedDRADriverPod(&pods.Items[i]) {
+			matched = append(matched, pods.Items[i])
+		}
 	}
-	return pods.Items, nil
+	return matched, nil
 }
 
-// restartDevicePluginPod restarts the device plugin pod on the specified node.
-//
-// The function checks if the pod exists, deletes it if found, and waits for it to be deleted successfully.
-func (dn *NodeReconciler) restartDevicePluginPod(ctx context.Context) error {
-	funcLog := log.Log.WithName("restartDevicePluginPod")
-	funcLog.V(2).Info("try to restart device plugin pod")
-	devicePluginPods, err := dn.getDevicePluginPodsForNode(ctx)
-	if err != nil {
-		return err
-	}
-	if len(devicePluginPods) == 0 {
-		funcLog.V(2).Info("no device plugin pods found during restart attempt")
+// restartPods deletes the given pods and waits until each is gone or recreated by its DaemonSet.
+func (dn *NodeReconciler) restartPods(ctx context.Context, component string, pods []corev1.Pod) error {
+	funcLog := log.Log.WithName("restartPods")
+	funcLog.V(2).Info("try to restart pods", "component", component)
+	if len(pods) == 0 {
+		funcLog.V(2).Info("no pods found during restart attempt", "component", component)
 		return nil
 	}
-	for _, pod := range devicePluginPods {
+	for _, pod := range pods {
 		podUID := pod.UID
-		funcLog.V(2).Info("Found device plugin pod, deleting it",
-			"pod-name", pod.Name, "pod-uid", podUID)
-		err = dn.client.Delete(ctx, &pod)
+		funcLog.V(2).Info("Found pod, deleting it",
+			"component", component, "pod-name", pod.Name, "pod-uid", podUID)
+		err := dn.client.Delete(ctx, &pod)
 		if errors.IsNotFound(err) {
-			funcLog.Info("pod to delete not found")
+			funcLog.Info("pod to delete not found", "component", component)
 			continue
 		}
 		if err != nil {
-			funcLog.Error(err, "Failed to delete device plugin pod")
-			return err
+			funcLog.Error(err, "Failed to delete pod", "component", component)
+			return fmt.Errorf("delete %s pod %s/%s: %w", component, pod.Namespace, pod.Name, err)
 		}
 		newPod := &corev1.Pod{}
 		if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
 			err := dn.client.Get(ctx, client.ObjectKeyFromObject(&pod), newPod)
 			if errors.IsNotFound(err) {
-				funcLog.Info("device plugin pod exited")
+				funcLog.Info("pod exited", "component", component)
 				return true, nil
 			}
 			if err != nil {
-				return false, fmt.Errorf("failed to get device plugin pod: %w", err)
+				return false, fmt.Errorf("failed to get %s pod: %w", component, err)
 			}
 			// Check if the pod was recreated (different UID means it's a new pod)
 			if newPod.UID != podUID {
-				funcLog.Info("device plugin pod was recreated",
-					"old-uid", podUID, "new-uid", newPod.UID)
+				funcLog.Info("pod was recreated",
+					"component", component, "old-uid", podUID, "new-uid", newPod.UID)
 				return true, nil
 			}
-			funcLog.Info("waiting for device plugin pod to exit",
-				"pod-name", pod.Name, "pod-uid", newPod.UID)
+			funcLog.Info("waiting for pod to exit",
+				"component", component, "pod-name", pod.Name, "pod-uid", newPod.UID)
 			return false, nil
 		}); err != nil {
 			if stdErrors.Is(err, context.DeadlineExceeded) {
-				err = fmt.Errorf("timed out waiting for device plugin pod to restart: pod=%s uid=%s: %w", pod.Name, podUID, err)
+				err = fmt.Errorf("timed out waiting for %s pod to restart: pod=%s uid=%s: %w",
+					component, pod.Name, podUID, err)
 			}
-			funcLog.Error(err, "failed to wait device plugin pod to exit")
+			funcLog.Error(err, "failed to wait for pod to exit", "component", component)
 			return err
 		}
 	}
 	return nil
 }
 
-// restartDRADriverPod restarts the DRA driver pod on the specified node.
-//
-// The function checks if the pod exists, deletes it if found, and waits for it to be deleted successfully.
-// The DRA driver pod will be recreated by the DaemonSet and its init container will wait for node to be ready.
-func (dn *NodeReconciler) restartDRADriverPod(ctx context.Context) error {
-	funcLog := log.Log.WithName("restartDRADriverPod")
-	funcLog.V(2).Info("try to restart DRA driver pod")
-	draDriverPods, err := dn.getDRADriverPodsForNode(ctx)
+// restartDevicePluginPod restarts the device plugin pod on the specified node.
+func (dn *NodeReconciler) restartDevicePluginPod(ctx context.Context) error {
+	pods, err := dn.getDevicePluginPodsForNode(ctx)
 	if err != nil {
 		return err
 	}
-	if len(draDriverPods) == 0 {
-		funcLog.V(2).Info("no DRA driver pods found during restart attempt")
-		return nil
+	return dn.restartPods(ctx, "SR-IOV device plugin", pods)
+}
+
+// restartDRADriverPod restarts the DRA driver SR-IOV pod on the specified node.
+func (dn *NodeReconciler) restartDRADriverPod(ctx context.Context) error {
+	pods, err := dn.getDRADriverPodsForNode(ctx)
+	if err != nil {
+		return err
 	}
-	for _, pod := range draDriverPods {
-		podUID := pod.UID
-		funcLog.V(2).Info("Found DRA driver pod, deleting it",
-			"pod-name", pod.Name, "pod-uid", podUID)
-		err = dn.client.Delete(ctx, &pod)
-		if errors.IsNotFound(err) {
-			funcLog.Info("pod to delete not found")
-			continue
-		}
-		if err != nil {
-			funcLog.Error(err, "Failed to delete DRA driver pod")
-			return err
-		}
-		newPod := &corev1.Pod{}
-		if err := wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
-			err := dn.client.Get(ctx, client.ObjectKeyFromObject(&pod), newPod)
-			if errors.IsNotFound(err) {
-				funcLog.Info("DRA driver pod exited")
-				return true, nil
-			}
-			if err != nil {
-				return false, fmt.Errorf("failed to get DRA driver pod: %w", err)
-			}
-			// Check if the pod was recreated (different UID means it's a new pod)
-			if newPod.UID != podUID {
-				funcLog.Info("DRA driver pod was recreated",
-					"old-uid", podUID, "new-uid", newPod.UID)
-				return true, nil
-			}
-			funcLog.Info("waiting for DRA driver pod to exit",
-				"pod-name", pod.Name, "pod-uid", newPod.UID)
-			return false, nil
-		}); err != nil {
-			funcLog.Error(err, "failed to wait DRA driver pod to exit")
-			return err
-		}
-	}
-	return nil
+	return dn.restartPods(ctx, "DRA driver SR-IOV", pods)
 }
 
 // waitForDevicePluginPodAndTryUnblock waits for the new device plugin pod to start and set the wait-for-config annotation. This allows us to unblock
@@ -883,7 +855,7 @@ func (dn *NodeReconciler) waitForDevicePluginPodAndTryUnblock(ctx context.Contex
 
 // waitForDRADriverPodAndTryUnblock waits for a DRA driver pod to have the wait-for-config annotation then removes it.
 // Same pattern as waitForDevicePluginPodAndTryUnblock but for DRA driver pods.
-func (dn *NodeReconciler) waitForDRADriverPodAndTryUnblock(ctx context.Context, desiredNodeState *sriovnetworkv1.SriovNetworkNodeState) error {
+func (dn *NodeReconciler) waitForDRADriverPodAndTryUnblock(ctx context.Context) error {
 	funcLog := log.Log.WithName("waitForDRADriverPodAndTryUnblock")
 	funcLog.Info("waiting for DRA driver pod to set wait-for-config annotation", "annotation", consts.DevicePluginWaitConfigAnnotation)
 	var draDriverPods []corev1.Pod
@@ -916,7 +888,7 @@ func (dn *NodeReconciler) waitForDRADriverPodAndTryUnblock(ctx context.Context, 
 		return nil
 	}
 	if len(draDriverPods) > 0 {
-		if err := dn.tryUnblockDRADriver(ctx, desiredNodeState, draDriverPods); err != nil {
+		if err := dn.tryUnblockDRADriver(ctx, draDriverPods); err != nil {
 			return err
 		}
 	}

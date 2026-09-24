@@ -73,6 +73,8 @@ type SriovOperatorConfigReconciler struct {
 	renderManifestFn renderManifestFunc
 	applyManifestFn  applyManifestFunc
 	deleteManifestFn applyManifestFunc
+	// ensureProviderRolloutFn overrides provider DaemonSet rollout checks (envtest has no DS controller).
+	ensureProviderRolloutFn func(ctx context.Context, daemonSetName string) error
 }
 
 // renderManifests renders operator manifests using a reconciler-scoped renderer
@@ -103,6 +105,13 @@ func (r *SriovOperatorConfigReconciler) deleteManifest(ctx context.Context, c cl
 	}
 
 	return apply.DeleteObject(ctx, c, obj)
+}
+
+func (r *SriovOperatorConfigReconciler) ensureProviderDaemonSetRolledOut(ctx context.Context, name string) error {
+	if r.ensureProviderRolloutFn != nil {
+		return r.ensureProviderRolloutFn(ctx, name)
+	}
+	return ensureDaemonSetRolledOut(ctx, r.Client, name)
 }
 
 // getTLSTemplateData retrieves TLS configuration data for manifest rendering.
@@ -251,25 +260,46 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	// Deploy either DRA driver or device plugin based on feature gate
+	// Deploy either DRA driver or device plugin based on feature gate.
+	// Sync the replacement provider before cleaning up the old one so a failed
+	// switch does not leave the cluster without either provider. Wait for
+	// rollout only while the previous (stale) provider DaemonSet is still
+	// present; keep sync and cleanup unconditional so residual RBAC and
+	// related objects are still removed when the stale DaemonSet is already gone.
 	if r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
 		logger.Info("DRA feature gate enabled, deploying DRA driver instead of device plugin")
-		// Clean up device plugin if it exists
+		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
+			return reconcile.Result{}, fmt.Errorf("sync DRA driver objects: %w", err)
+		}
+		staleDevicePlugin, err := daemonSetExists(ctx, r.Client, devicePluginDaemonSetName)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("check device plugin DaemonSet: %w", err)
+		}
+		if staleDevicePlugin {
+			if err = r.ensureProviderDaemonSetRolledOut(ctx, consts.DRADriverDaemonSetName); err != nil {
+				return reconcile.Result{}, fmt.Errorf("wait for DRA driver rollout: %w", err)
+			}
+		}
 		if err = cleanupDevicePluginObjs(ctx, r.Client); err != nil {
 			logger.Error(err, "Failed to cleanup device plugin objects")
-			return reconcile.Result{}, err
-		}
-		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
-			return reconcile.Result{}, err
+			return reconcile.Result{}, fmt.Errorf("cleanup device plugin objects: %w", err)
 		}
 	} else {
-		// Clean up DRA driver if it exists
+		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
+			return reconcile.Result{}, fmt.Errorf("sync device plugin objects: %w", err)
+		}
+		staleDRADriver, err := daemonSetExists(ctx, r.Client, consts.DRADriverDaemonSetName)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("check DRA driver DaemonSet: %w", err)
+		}
+		if staleDRADriver {
+			if err = r.ensureProviderDaemonSetRolledOut(ctx, devicePluginDaemonSetName); err != nil {
+				return reconcile.Result{}, fmt.Errorf("wait for device plugin rollout: %w", err)
+			}
+		}
 		if err = cleanupDRADriverObjs(ctx, r.Client); err != nil {
 			logger.Error(err, "Failed to cleanup DRA driver objects")
-			return reconcile.Result{}, err
-		}
-		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
-			return reconcile.Result{}, err
+			return reconcile.Result{}, fmt.Errorf("cleanup DRA driver objects: %w", err)
 		}
 	}
 
@@ -693,6 +723,12 @@ func (r *SriovOperatorConfigReconciler) handleSriovOperatorConfigDeletion(ctx co
 		// make sure webhooks objects are deleted prior of removing finalizer
 		err = r.deleteAllWebhooks(ctx)
 		if err != nil {
+			return reconcile.Result{}, err
+		}
+		// Clean up cluster-scoped DRA objects (DeviceClass, ClusterRole/Binding) that
+		// are not garbage-collected when this namespaced config is removed.
+		if err = cleanupDRADriverObjs(ctx, r.Client); err != nil {
+			logger.Error(err, "Failed to cleanup DRA driver objects")
 			return reconcile.Result{}, err
 		}
 		// remove our finalizer from the list and update it.

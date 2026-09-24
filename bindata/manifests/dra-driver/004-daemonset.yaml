@@ -23,6 +23,8 @@ spec:
         component: network
         type: infra
         openshift.io/component: network
+      annotations:
+        openshift.io/required-scc: privileged
     spec:
       hostNetwork: true
       nodeSelector:
@@ -58,6 +60,13 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        resources:
+          requests:
+            cpu: 10m
+            memory: 10Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
       containers:
       - name: sriov-dra-driver
         image: {{.SRIOVDRADriverImage}}
@@ -88,10 +97,22 @@ spec:
           value: "dra-driver-sriov"
         - name: NRI_PLUGIN_IDX
           value: "00"
+        # gRPC health (HEALTHCHECK_PORT > 0) is disabled: the pod uses hostNetwork, so the
+        # listen port is on the node network namespace. A fixed port can collide with other
+        # hostNetwork SR-IOV pods or host services on the same node; we do not assign
+        # per-node ports or run admission to prevent conflicts. No HTTP/gRPC probes are
+        # defined for the same reason (device-plugin DaemonSet follows the same pattern).
         - name: HEALTHCHECK_PORT
           value: "-1"
         - name: CONFIGURATION_MODE
           value: "MULTUS"
+        resources:
+          requests:
+            cpu: 10m
+            memory: 50Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         volumeMounts:
         - name: kubelet-plugins-registry
           mountPath: /var/lib/kubelet/plugins_registry
@@ -103,8 +124,7 @@ spec:
           mountPath: /sys
         - name: host-dev
           mountPath: /dev
-        - name: cri-socket
-          mountPath: /var/run/nri/nri.sock
+        # NRI socket is STANDALONE-only; MULTUS mode does not start the NRI plugin
         - name: netns
           mountPath: /var/run/netns
           mountPropagation: HostToContainer
@@ -133,10 +153,6 @@ spec:
         hostPath:
           path: /dev
           type: Directory
-      - name: cri-socket
-        hostPath:
-          path: /var/run/nri/nri.sock
-          type: Socket
       - name: netns
         hostPath:
           path: /var/run/netns
