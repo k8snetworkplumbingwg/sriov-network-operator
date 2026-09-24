@@ -211,6 +211,7 @@ export OPERATOR_NAMESPACE=$NAMESPACE
 export MULTUS_NAMESPACE="openshift-multus"
 export OPERATOR_EXEC=kubectl
 export CLUSTER_TYPE=openshift
+export CNI_BIN_PATH=${CNI_BIN_PATH:-/var/lib/cni/bin}
 export DEV_MODE=TRUE
 export CLUSTER_HAS_EMULATED_PF=TRUE
 export METRICS_EXPORTER_PROMETHEUS_OPERATOR_ENABLED=true
@@ -405,7 +406,11 @@ podman logout $registry
 
 echo "## apply CRDs"
 kubectl apply -f $root/config/crd/bases
-
+# Vendored CRDs (DRA DeviceAttributes/SriovResourcePolicy, Multus NAD) live in the
+# Helm chart. The k8s virtual lane installs them via helm; the OCP lane uses
+# deploy-setup and must apply them explicitly or the DRA driver crash-loops
+# watching missing DeviceAttributes/SriovResourcePolicy APIs.
+kubectl apply -f "$root/deployment/sriov-network-operator-chart/crds/"
 
 cat <<EOF | kubectl apply -f -
 apiVersion: sriovnetwork.openshift.io/v1
