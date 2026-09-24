@@ -157,8 +157,6 @@ images:
 draDriver:
   # CDI root directory for device specification
   cdiRoot: "/var/run/cdi"
-  # Default interface prefix for VF naming
-  defaultInterfacePrefix: "net"
 
 imagePullSecrets: []
 extraDeploy: []

@@ -79,8 +79,6 @@ spec:
               value: {{ .Values.images.sriovDraDriver | default "ghcr.io/k8snetworkplumbingwg/dra-driver-sriov:latest" }}
             - name: DRA_DRIVER_CDI_ROOT
               value: {{ .Values.draDriver.cdiRoot | default "/var/run/cdi" }}
-            - name: DRA_DRIVER_DEFAULT_INTERFACE_PREFIX
-              value: {{ .Values.draDriver.defaultInterfacePrefix | default "net" }}
             - name: NETWORK_RESOURCES_INJECTOR_IMAGE
               value: {{ .Values.images.resourcesInjector }}
             - name: OPERATOR_NAME
