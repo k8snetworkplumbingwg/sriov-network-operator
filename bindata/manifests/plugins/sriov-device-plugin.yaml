@@ -97,7 +97,7 @@ spec:
           mountPath: /var/lib/kubelet/plugins_registry
           readOnly: false
         - name: log
-          mountPath: /var/log
+          mountPath: /var/log/sriovdp
         - name: config-volume
           mountPath: /etc/pcidp/
           readOnly: true
@@ -116,7 +116,7 @@ spec:
             path: /var/lib/kubelet/plugins_registry
         - name: log
           hostPath:
-            path: /var/log
+            path: /var/log/sriovdp
             type: DirectoryOrCreate
         - name: config-volume
           configMap:

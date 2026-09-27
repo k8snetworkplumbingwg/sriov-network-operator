@@ -898,30 +898,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 
 					const logPath = "/host/var/log/sriovdp/sriovdp.log"
 
-					By("Assert the host log file exists and is non-empty")
-					Eventually(func(g Gomega) {
-						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
-							"test -s "+logPath+" && wc -c < "+logPath)
-						g.Expect(err).ToNot(HaveOccurred(), stderr)
-						g.Expect(strings.TrimSpace(out)).ToNot(Equal("0"))
-					}, 3*time.Minute, 5*time.Second).Should(Succeed())
-
-					marker := fmt.Sprintf("e2e-device-plugin-log-marker-%d", time.Now().UnixNano())
-					By("Writing a pre-apply marker into the host log")
-					_, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
-						fmt.Sprintf(`printf '%%s\n' %q >> %s`, marker, logPath))
-					Expect(err).ToNot(HaveOccurred(), stderr)
-
-					out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
-						"wc -c < "+logPath)
-					Expect(err).ToNot(HaveOccurred(), stderr)
-					sizeBeforeApply, err := strconv.Atoi(strings.TrimSpace(out))
-					Expect(err).ToNot(HaveOccurred())
-
-					dpBeforeApply, err := getDevicePluginPod(node)
-					Expect(err).ToNot(HaveOccurred())
-
-					By("creating a node policy")
+					By("creating an initial node policy to bring up the device-plugin pod")
 					policy, err := network.CreateSriovPolicy(clients, "test-policy-", operatorNamespace, intf.Name, node, 5, "logpersistdp", "netdevice")
 					Expect(err).ToNot(HaveOccurred())
 
@@ -941,32 +918,33 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					By("waiting the sriov to be stable on the node")
 					WaitForSRIOVStable()
 
-					By("Assert device-plugin restarted, marker survived, and the host log grew")
+					By("waiting for the device-plugin pod to be running")
 					Eventually(func(g Gomega) {
 						p, err := getDevicePluginPod(node)
 						g.Expect(err).ToNot(HaveOccurred())
-						g.Expect(p.Name).ToNot(Equal(dpBeforeApply.Name))
 						g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning))
 					}, 3*time.Minute, 5*time.Second).Should(Succeed())
+
+					By("Assert the host log file exists and is non-empty")
 					Eventually(func(g Gomega) {
 						out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
-							fmt.Sprintf("grep -F %q %s", marker, logPath))
+							"test -s "+logPath+" && wc -c < "+logPath)
 						g.Expect(err).ToNot(HaveOccurred(), stderr)
-						g.Expect(out).To(ContainSubstring(marker))
-
-						out, stderr, err = runCommandOnConfigDaemon(node, "sh", "-c",
-							"wc -c < "+logPath)
-						g.Expect(err).ToNot(HaveOccurred(), stderr)
-						sizeAfter, err := strconv.Atoi(strings.TrimSpace(out))
-						g.Expect(err).ToNot(HaveOccurred())
-						g.Expect(sizeAfter).To(BeNumerically(">", sizeBeforeApply))
+						g.Expect(strings.TrimSpace(out)).ToNot(Equal("0"))
 					}, 3*time.Minute, 5*time.Second).Should(Succeed())
 
-					out, stderr, err = runCommandOnConfigDaemon(node, "sh", "-c",
+					marker := fmt.Sprintf("e2e-device-plugin-log-marker-%d", time.Now().UnixNano())
+					By("Writing a pre-change marker into the host log")
+					_, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
+						fmt.Sprintf(`printf '%%s\n' %q >> %s`, marker, logPath))
+					Expect(err).ToNot(HaveOccurred(), stderr)
+
+					out, stderr, err := runCommandOnConfigDaemon(node, "sh", "-c",
 						"wc -c < "+logPath)
 					Expect(err).ToNot(HaveOccurred(), stderr)
 					sizeBeforeChange, err := strconv.Atoi(strings.TrimSpace(out))
 					Expect(err).ToNot(HaveOccurred())
+
 					dpBeforeChange, err := getDevicePluginPod(node)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -999,7 +977,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 					By("waiting the sriov to be stable on the node")
 					WaitForSRIOVStable()
 
-					By("Assert device-plugin restarted again, marker survived, and the host log grew")
+					By("Assert device-plugin restarted, marker survived, and the host log grew")
 					Eventually(func(g Gomega) {
 						p, err := getDevicePluginPod(node)
 						g.Expect(err).ToNot(HaveOccurred())
