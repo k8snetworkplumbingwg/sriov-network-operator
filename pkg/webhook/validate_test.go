@@ -253,6 +253,22 @@ func TestValidateSriovNetworkPoolConfigWithParallelAndHWOffload(t *testing.T) {
 	g.Expect(ok).To(BeFalse())
 }
 
+func TestValidateSriovNetworkPoolConfigDeprecatedHWOffloadName(t *testing.T) {
+	g := NewGomegaWithT(t)
+
+	config := &SriovNetworkPoolConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-pool"},
+		Spec: SriovNetworkPoolConfigSpec{
+			OvsHardwareOffloadConfig: OvsHardwareOffloadConfig{Name: "worker"},
+		},
+	}
+
+	ok, warnings, err := validateSriovNetworkPoolConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(BeTrue())
+	g.Expect(warnings).To(ContainElement(ContainSubstring("OvsHardwareOffloadConfig.Name is deprecated")))
+}
+
 func TestValidateSriovNetworkNodePolicyWithDefaultPolicy(t *testing.T) {
 	var err error
 	var ok bool

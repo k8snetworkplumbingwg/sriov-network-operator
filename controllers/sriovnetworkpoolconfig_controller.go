@@ -2,12 +2,10 @@ package controllers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
 
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,9 +17,6 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 // SriovNetworkPoolConfigReconciler reconciles a SriovNetworkPoolConfig object
@@ -50,14 +45,6 @@ const (
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.6.4/pkg/reconcile
 func (r *SriovNetworkPoolConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("sriovnetworkpoolconfig", req.NamespacedName)
-
-	isHypershift := false
-	if r.Orchestrator.ClusterType() == constants.ClusterTypeOpenshift &&
-		r.Orchestrator.Flavor() == constants.ClusterFlavorHypershift {
-		isHypershift = true
-		logger = logger.WithValues("isHypershift", isHypershift)
-	}
-
 	logger.Info("Reconciling")
 
 	// Fetch SriovNetworkPoolConfig
@@ -75,56 +62,33 @@ func (r *SriovNetworkPoolConfigReconciler) Reconcile(ctx context.Context, req ct
 		return reconcile.Result{}, err
 	}
 
-	// we don't need a finalizer for pools that doesn't use the ovs hardware offload feature
+	// OvsHardwareOffloadConfig.Name is deprecated. Hardware offload is applied by the
+	// config daemon on switchdev nodes. Pools that still set Name are excluded from
+	// node selection and only exist so leftover MachineConfigs can be deleted.
 	if instance.Spec.OvsHardwareOffloadConfig.Name == "" {
 		return ctrl.Result{}, nil
 	}
 
-	// examine DeletionTimestamp to determine if object is under deletion
-	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		// The object is not being deleted, so if it does not have our finalizer,
-		// then lets add the finalizer and update the object. This is equivalent
-		// registering our finalizer.
-		if !sriovnetworkv1.StringInArray(sriovnetworkv1.POOLCONFIGFINALIZERNAME, instance.ObjectMeta.Finalizers) {
-			instance.ObjectMeta.Finalizers = append(instance.ObjectMeta.Finalizers, sriovnetworkv1.POOLCONFIGFINALIZERNAME)
+	logger.Info("OvsHardwareOffloadConfig.Name is deprecated and ignored",
+		"name", instance.Spec.OvsHardwareOffloadConfig.Name)
+
+	if r.shouldDeleteOvsHardwareOffloadMachineConfig() {
+		if err = r.deleteOvsHardwareOffloadMachineConfig(ctx, instance); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
+	if sriovnetworkv1.StringInArray(sriovnetworkv1.POOLCONFIGFINALIZERNAME, instance.ObjectMeta.Finalizers) {
+		var found bool
+		instance.ObjectMeta.Finalizers, found = sriovnetworkv1.RemoveString(sriovnetworkv1.POOLCONFIGFINALIZERNAME, instance.ObjectMeta.Finalizers)
+		if found {
 			if err := r.Update(ctx, instance); err != nil {
 				return reconcile.Result{}, err
 			}
 		}
-		if vars.ClusterType == constants.ClusterTypeOpenshift {
-			if !isHypershift {
-				if err = r.syncOvsHardwareOffloadMachineConfigs(ctx, instance, false); err != nil {
-					return reconcile.Result{}, err
-				}
-			} else {
-				logger.Info("Ignoring request to enable HWOL (running on Hypershift)")
-			}
-		}
-	} else {
-		// The object is being deleted
-		if sriovnetworkv1.StringInArray(sriovnetworkv1.POOLCONFIGFINALIZERNAME, instance.ObjectMeta.Finalizers) {
-			// our finalizer is present, so lets handle any external dependency
-			logger.Info("delete SriovNetworkPoolConfig CR", "Namespace", instance.Namespace, "Name", instance.Name)
-			if vars.ClusterType == constants.ClusterTypeOpenshift && !isHypershift {
-				if err = r.syncOvsHardwareOffloadMachineConfigs(ctx, instance, true); err != nil {
-					// if fail to delete the external dependency here, return with error
-					// so that it can be retried
-					return reconcile.Result{}, err
-				}
-			}
-			// remove our finalizer from the list and update it.
-			var found bool
-			instance.ObjectMeta.Finalizers, found = sriovnetworkv1.RemoveString(sriovnetworkv1.POOLCONFIGFINALIZERNAME, instance.ObjectMeta.Finalizers)
-			if found {
-				if err := r.Update(ctx, instance); err != nil {
-					return reconcile.Result{}, err
-				}
-			}
-		}
-		return reconcile.Result{}, err
 	}
 
-	return reconcile.Result{RequeueAfter: constants.ResyncPeriod}, nil
+	return reconcile.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -134,88 +98,37 @@ func (r *SriovNetworkPoolConfigReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
-func (r *SriovNetworkPoolConfigReconciler) syncOvsHardwareOffloadMachineConfigs(ctx context.Context, nc *sriovnetworkv1.SriovNetworkPoolConfig, deletion bool) error {
-	logger := log.Log.WithName("syncOvsHardwareOffloadMachineConfigs")
+// shouldDeleteOvsHardwareOffloadMachineConfig reports whether leftover HWOL MachineConfigs
+// should be removed. Hypershift has no MachineConfig API for this object.
+func (r *SriovNetworkPoolConfigReconciler) shouldDeleteOvsHardwareOffloadMachineConfig() bool {
+	return r.Orchestrator.ClusterType() == constants.ClusterTypeOpenshift &&
+		r.Orchestrator.Flavor() != constants.ClusterFlavorHypershift
+}
+
+// deleteOvsHardwareOffloadMachineConfig removes a MachineConfig previously created for OVS hardware offload.
+func (r *SriovNetworkPoolConfigReconciler) deleteOvsHardwareOffloadMachineConfig(ctx context.Context, nc *sriovnetworkv1.SriovNetworkPoolConfig) error {
+	logger := log.Log.WithName("deleteOvsHardwareOffloadMachineConfig")
 
 	mcpName := nc.Spec.OvsHardwareOffloadConfig.Name
+	if mcpName == "" || mcpName == "master" {
+		logger.Info("skip leftover MachineConfig delete", "pool", nc.Name, "mcp", mcpName)
+		return nil
+	}
+
 	mcName := mcPriority + mcpName + "-" + constants.OVSHWOLMachineConfigNameSuffix
-
 	foundMC := &mcfgv1.MachineConfig{}
-	mcp := &mcfgv1.MachineConfigPool{}
-
-	if mcpName == "" {
-		logger.Info("MachineConfigPool name is not defined in SriovNetworkPoolConfig", nc.GetNamespace(), nc.GetName())
-		return nil
-	}
-
-	if mcpName == "master" {
-		logger.Info("Master nodes are selected by OvsHardwareOffloadConfig.Name, ignoring.")
-		return nil
-	}
-
-	err := r.Get(ctx, types.NamespacedName{Name: mcpName}, mcp)
+	err := r.Get(ctx, types.NamespacedName{Name: mcName}, foundMC)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return fmt.Errorf("machineConfigPool %s doesn't exist: %v", mcpName, err)
+			logger.Info("leftover MachineConfig already absent", "machineConfig", mcName)
+			return nil
 		}
+		return fmt.Errorf("failed to get MachineConfig %s: %w", mcName, err)
 	}
 
-	data := render.MakeRenderData()
-	externalIds, otherOvsConfig, err := utils.RenderOtherOvsConfigOption(nc.Spec.OvsHardwareOffloadConfig.OvsConfig)
-	if err != nil {
-		return err
+	logger.Info("deleting leftover OVS hardware offload MachineConfig", "machineConfig", mcName, "mcp", mcpName)
+	if err = r.Delete(ctx, foundMC); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("couldn't delete MachineConfig %s: %w", mcName, err)
 	}
-	data.Data["OtherOvsConfig"] = otherOvsConfig
-	data.Data["ExternalIds"] = externalIds
-	mc, err := render.GenerateMachineConfig("bindata/manifests/switchdev-config", mcName, mcpName, true, &data)
-	if err != nil {
-		return err
-	}
-
-	err = r.Get(ctx, types.NamespacedName{Name: mcName}, foundMC)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			if deletion {
-				logger.Info("MachineConfig has already been deleted")
-			} else {
-				err = r.Create(ctx, mc)
-				if err != nil {
-					return fmt.Errorf("couldn't create MachineConfig: %v", err)
-				}
-				logger.Info("Created MachineConfig CR in MachineConfigPool", mcName, mcpName)
-			}
-		} else {
-			return fmt.Errorf("failed to get MachineConfig: %v", err)
-		}
-	} else {
-		if deletion {
-			logger.Info("offload disabled, delete MachineConfig")
-			err = r.Delete(ctx, foundMC)
-			if err != nil {
-				return fmt.Errorf("couldn't delete MachineConfig: %v", err)
-			}
-		} else {
-			var foundIgn, renderedIgn interface{}
-			// The Raw config JSON string may have the fields reordered.
-			// For example the "path" field may come before the "contents"
-			// field in the rendered ignition JSON; while the found
-			// MachineConfig's ignition JSON would have it the other way around.
-			// Thus we need to unmarshal the JSON for both found and rendered
-			// ignition and compare.
-			json.Unmarshal(foundMC.Spec.Config.Raw, &foundIgn)
-			json.Unmarshal(mc.Spec.Config.Raw, &renderedIgn)
-			if !equality.Semantic.DeepEqual(foundIgn, renderedIgn) {
-				logger.Info("MachineConfig already exists, updating")
-				mc.SetResourceVersion(foundMC.GetResourceVersion())
-				err = r.Update(ctx, mc)
-				if err != nil {
-					return fmt.Errorf("couldn't update MachineConfig: %v", err)
-				}
-			} else {
-				logger.Info("No content change, skip updating MachineConfig")
-			}
-		}
-	}
-
 	return nil
 }

@@ -361,9 +361,9 @@ func (dn *NodeReconciler) CheckSystemdStatus() (*hosttypes.SriovResult, bool, er
 		return nil, false, err
 	}
 
-	// if the service doesn't exist we should continue to let the k8s plugin to create the service files
-	// this is only for k8s base environments, for openshift the sriov-operator creates a machine config to will apply
-	// the system service and reboot the node the config-daemon doesn't need to do anything.
+	// if the service doesn't exist we should continue to let the host config plugin create the service files
+	// this is only for kubernetes systemd mode. On OpenShift the operator still creates a MachineConfig
+	// for sriov-config.service and the config daemon must not write those units.
 	sriovResult := &hosttypes.SriovResult{SyncStatus: consts.SyncStatusFailed,
 		LastSyncError: fmt.Sprintf("some sriov systemd services are not available on node: "+
 			"sriov-config available:%t, sriov-config-post-network available:%t", serviceEnabled, postNetworkServiceEnabled)}

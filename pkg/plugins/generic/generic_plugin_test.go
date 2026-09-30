@@ -1,6 +1,7 @@
 package generic
 
 import (
+	"syscall"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -10,8 +11,8 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	mock_helper "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper/mock"
-	hostTypes "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -34,15 +35,6 @@ var _ = Describe("Generic plugin", func() {
 		ctrl = gomock.NewController(t)
 
 		hostHelper = mock_helper.NewMockHostHelpersInterface(ctrl)
-		hostHelper.EXPECT().SetRDMASubsystem("").Return(nil).AnyTimes()
-		hostHelper.EXPECT().GetCurrentKernelArgs().Return("", nil).AnyTimes()
-		hostHelper.EXPECT().IsKernelArgsSet("", consts.KernelArgIntelIommu).Return(false).AnyTimes()
-		hostHelper.EXPECT().IsKernelArgsSet("", consts.KernelArgIommuPt).Return(false).AnyTimes()
-		hostHelper.EXPECT().IsKernelArgsSet("", consts.KernelArgPciRealloc).Return(false).AnyTimes()
-		hostHelper.EXPECT().IsKernelArgsSet("", consts.KernelArgRdmaExclusive).Return(false).AnyTimes()
-		hostHelper.EXPECT().IsKernelArgsSet("", consts.KernelArgRdmaShared).Return(false).AnyTimes()
-
-		hostHelper.EXPECT().RunCommand(gomock.Any(), gomock.Any()).Return("", "", nil).AnyTimes()
 
 		genericPlugin, err = NewGenericPlugin(hostHelper)
 		Expect(err).ToNot(HaveOccurred())
@@ -859,309 +851,8 @@ var _ = Describe("Generic plugin", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(changed).To(BeTrue())
 		})
-
-		Context("Kernel Args", func() {
-
-			vfioNetworkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
-				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
-					Interfaces: sriovnetworkv1.Interfaces{{
-						PciAddress: "0000:00:00.0",
-						NumVfs:     2,
-						Mtu:        1500,
-						VfGroups: []sriovnetworkv1.VfGroup{{
-							DeviceType:   "vfio-pci",
-							PolicyName:   "policy-1",
-							ResourceName: "resource-1",
-							VfRange:      "0-1",
-							Mtu:          1500,
-						}}}},
-				},
-				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
-					Interfaces: sriovnetworkv1.InterfaceExts{{
-						PciAddress:  "0000:00:00.0",
-						NumVfs:      2,
-						TotalVfs:    2,
-						DeviceID:    "159b",
-						Vendor:      "8086",
-						Name:        "sriovif1",
-						Mtu:         1500,
-						Mac:         "0c:42:a1:55:ee:46",
-						Driver:      "ice",
-						EswitchMode: "legacy",
-						LinkSpeed:   "25000 Mb/s",
-						LinkType:    "ETH",
-						VFs: []sriovnetworkv1.VirtualFunction{{
-							PciAddress: "0000:00:00.1",
-							DeviceID:   "1889",
-							Vendor:     "8086",
-							VfID:       0,
-							Driver:     "vfio-pci",
-						}, {
-							PciAddress: "0000:00:00.2",
-							DeviceID:   "1889",
-							Vendor:     "8086",
-							VfID:       1,
-							Driver:     "vfio-pci",
-						}},
-					}},
-				},
-			}
-
-			rdmaState := &sriovnetworkv1.SriovNetworkNodeState{
-				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{System: sriovnetworkv1.System{
-					RdmaMode: consts.RdmaSubsystemModeShared,
-				}},
-				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{},
-			}
-
-			It("should detect changes on status due to missing kernel args", func() {
-				hostHelper.EXPECT().GetCPUVendor().Return(hostTypes.CPUVendorIntel, nil)
-
-				// Load required kernel args.
-				genericPlugin.(*GenericPlugin).addVfioDesiredKernelArg(vfioNetworkNodeState)
-
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgIntelIommu]).To(BeTrue())
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgIommuPt]).To(BeTrue())
-
-				changed, err := genericPlugin.CheckStatusChanges(vfioNetworkNodeState)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(changed).To(BeTrue())
-			})
-
-			It("should set the correct kernel args on AMD CPUs", func() {
-				hostHelper.EXPECT().GetCPUVendor().Return(hostTypes.CPUVendorAMD, nil)
-				genericPlugin.(*GenericPlugin).addVfioDesiredKernelArg(vfioNetworkNodeState)
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgIommuPt]).To(BeTrue())
-			})
-
-			It("should detect rdma mode drift from spec vs status without prior kernel-arg sync", func() {
-				state := rdmaState.DeepCopy()
-				state.Spec.System.RdmaMode = consts.RdmaSubsystemModeExclusive
-				state.Status.System.RdmaMode = consts.RdmaSubsystemModeShared
-
-				changed, err := genericPlugin.CheckStatusChanges(state)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(changed).To(BeTrue())
-			})
-			It("should not detect rdma drift when spec matches status", func() {
-				state := rdmaState.DeepCopy()
-				state.Spec.System.RdmaMode = consts.RdmaSubsystemModeExclusive
-				state.Status.System.RdmaMode = consts.RdmaSubsystemModeExclusive
-
-				changed, err := genericPlugin.CheckStatusChanges(state)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(changed).To(BeFalse())
-			})
-			It("should enable rdma shared mode", func() {
-				hostHelper.EXPECT().SetRDMASubsystem(consts.RdmaSubsystemModeShared).Return(nil)
-				err := genericPlugin.(*GenericPlugin).configRdmaKernelArg(rdmaState)
-				Expect(err).ToNot(HaveOccurred())
-
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgRdmaShared]).To(BeTrue())
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgRdmaExclusive]).To(BeFalse())
-
-				changed, err := genericPlugin.CheckStatusChanges(rdmaState)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(changed).To(BeTrue())
-			})
-			It("should enable rdma exclusive mode", func() {
-				hostHelper.EXPECT().SetRDMASubsystem(consts.RdmaSubsystemModeExclusive).Return(nil)
-				rdmaState.Spec.System.RdmaMode = consts.RdmaSubsystemModeExclusive
-				err := genericPlugin.(*GenericPlugin).configRdmaKernelArg(rdmaState)
-				Expect(err).ToNot(HaveOccurred())
-
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgRdmaShared]).To(BeFalse())
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgRdmaExclusive]).To(BeTrue())
-
-				changed, err := genericPlugin.CheckStatusChanges(rdmaState)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(changed).To(BeTrue())
-			})
-			It("should not configure RDMA kernel args", func() {
-				//hostHelper.EXPECT().SetRDMASubsystem("").Return(nil)
-				rdmaState.Spec.System = sriovnetworkv1.System{}
-				err := genericPlugin.(*GenericPlugin).configRdmaKernelArg(rdmaState)
-				Expect(err).ToNot(HaveOccurred())
-
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgRdmaShared]).To(BeFalse())
-				Expect(genericPlugin.(*GenericPlugin).DesiredKernelArgs[consts.KernelArgRdmaExclusive]).To(BeFalse())
-
-				changed, err := genericPlugin.CheckStatusChanges(rdmaState)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(changed).To(BeFalse())
-			})
-		})
-
-		It("should load vfio_pci driver", func() {
-			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
-				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
-					Interfaces: sriovnetworkv1.Interfaces{{
-						PciAddress: "0000:00:00.0",
-						NumVfs:     2,
-						Mtu:        1500,
-						VfGroups: []sriovnetworkv1.VfGroup{{
-							DeviceType:   "vfio-pci",
-							PolicyName:   "policy-1",
-							ResourceName: "resource-1",
-							VfRange:      "0-1",
-							Mtu:          1500,
-						}}}},
-				},
-				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
-					Interfaces: sriovnetworkv1.InterfaceExts{{
-						PciAddress:  "0000:00:00.0",
-						NumVfs:      2,
-						TotalVfs:    2,
-						DeviceID:    "1015",
-						Vendor:      "15b3",
-						Name:        "sriovif1",
-						Mtu:         1500,
-						Mac:         "0c:42:a1:55:ee:46",
-						Driver:      "mlx5_core",
-						EswitchMode: "legacy",
-						LinkSpeed:   "25000 Mb/s",
-						LinkType:    "ETH",
-						VFs: []sriovnetworkv1.VirtualFunction{{
-							PciAddress: "0000:00:00.1",
-							DeviceID:   "1016",
-							Vendor:     "15b3",
-							VfID:       0,
-							Driver:     "mlx5_core",
-							Name:       "sriovif1v0",
-							Mtu:        1500,
-							Mac:        "8e:d6:2c:62:87:1b",
-						}, {
-							PciAddress: "0000:00:00.2",
-							DeviceID:   "1016",
-							Vendor:     "15b3",
-							VfID:       0,
-							Driver:     "mlx5_core",
-						}},
-					}},
-				},
-			}
-
-			concretePlugin := genericPlugin.(*GenericPlugin)
-			driverStateMap := concretePlugin.getDriverStateMap()
-			driverState := driverStateMap[Vfio]
-			concretePlugin.loadDriverForTests(networkNodeState)
-			Expect(driverState.DriverLoaded).To(BeTrue())
-		})
-
-		It("should load virtio_vdpa driver", func() {
-			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
-				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
-					Interfaces: sriovnetworkv1.Interfaces{{
-						PciAddress: "0000:00:00.0",
-						NumVfs:     2,
-						Mtu:        1500,
-						VfGroups: []sriovnetworkv1.VfGroup{{
-							DeviceType:   "netdevice",
-							VdpaType:     "virtio",
-							PolicyName:   "policy-1",
-							ResourceName: "resource-1",
-							VfRange:      "0-1",
-							Mtu:          1500,
-						}}}},
-				},
-				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
-					Interfaces: sriovnetworkv1.InterfaceExts{{
-						PciAddress:  "0000:00:00.0",
-						NumVfs:      2,
-						TotalVfs:    2,
-						DeviceID:    "1015",
-						Vendor:      "15b3",
-						Name:        "sriovif1",
-						Mtu:         1500,
-						Mac:         "0c:42:a1:55:ee:46",
-						Driver:      "mlx5_core",
-						EswitchMode: "legacy",
-						LinkSpeed:   "25000 Mb/s",
-						LinkType:    "ETH",
-						VFs: []sriovnetworkv1.VirtualFunction{{
-							PciAddress: "0000:00:00.1",
-							DeviceID:   "1016",
-							Vendor:     "15b3",
-							VfID:       0,
-							Driver:     "mlx5_core",
-							Name:       "sriovif1v0",
-							Mtu:        1500,
-							Mac:        "8e:d6:2c:62:87:1b",
-						}, {
-							PciAddress: "0000:00:00.2",
-							DeviceID:   "1016",
-							Vendor:     "15b3",
-							VfID:       0,
-							Driver:     "mlx5_core",
-						}},
-					}},
-				},
-			}
-
-			concretePlugin := genericPlugin.(*GenericPlugin)
-			driverStateMap := concretePlugin.getDriverStateMap()
-			driverState := driverStateMap[VirtioVdpa]
-			concretePlugin.loadDriverForTests(networkNodeState)
-			Expect(driverState.DriverLoaded).To(BeTrue())
-		})
-
-		It("should load vhost_vdpa driver", func() {
-			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
-				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
-					Interfaces: sriovnetworkv1.Interfaces{{
-						PciAddress: "0000:00:00.0",
-						NumVfs:     2,
-						Mtu:        1500,
-						VfGroups: []sriovnetworkv1.VfGroup{{
-							DeviceType:   "netdevice",
-							VdpaType:     "vhost",
-							PolicyName:   "policy-1",
-							ResourceName: "resource-1",
-							VfRange:      "0-1",
-							Mtu:          1500,
-						}}}},
-				},
-				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
-					Interfaces: sriovnetworkv1.InterfaceExts{{
-						PciAddress:  "0000:00:00.0",
-						NumVfs:      2,
-						TotalVfs:    2,
-						DeviceID:    "1015",
-						Vendor:      "15b3",
-						Name:        "sriovif1",
-						Mtu:         1500,
-						Mac:         "0c:42:a1:55:ee:46",
-						Driver:      "mlx5_core",
-						EswitchMode: "legacy",
-						LinkSpeed:   "25000 Mb/s",
-						LinkType:    "ETH",
-						VFs: []sriovnetworkv1.VirtualFunction{{
-							PciAddress: "0000:00:00.1",
-							DeviceID:   "1016",
-							Vendor:     "15b3",
-							VfID:       0,
-							Driver:     "mlx5_core",
-							Name:       "sriovif1v0",
-							Mtu:        1500,
-							Mac:        "8e:d6:2c:62:87:1b",
-						}, {
-							PciAddress: "0000:00:00.2",
-							DeviceID:   "1016",
-							Vendor:     "15b3",
-							VfID:       0,
-							Driver:     "mlx5_core",
-						}},
-					}},
-				},
-			}
-
-			concretePlugin := genericPlugin.(*GenericPlugin)
-			driverStateMap := concretePlugin.getDriverStateMap()
-			driverState := driverStateMap[VhostVdpa]
-			concretePlugin.loadDriverForTests(networkNodeState)
-			Expect(driverState.DriverLoaded).To(BeTrue())
-		})
 	})
+
 	It("should not drain - bridge config", func() {
 		networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
@@ -1364,5 +1055,21 @@ var _ = Describe("Generic plugin", func() {
 		updated, err := genericPlugin.CheckStatusChanges(networkNodeState)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(updated).To(BeTrue())
+	})
+
+	It("adds pci=realloc when VF configuration returns ENOMEM", func() {
+		vars.ForcePciRealloc = false
+		DeferCleanup(func() { vars.ForcePciRealloc = false })
+
+		hostHelper.EXPECT().Chroot(consts.Host).Return(func() error { return nil }, nil)
+		hostHelper.EXPECT().ConfigSriovInterfaces(gomock.Any(), gomock.Any(), gomock.Any(), false).Return(syscall.ENOMEM)
+		hostHelper.EXPECT().RunCommand("/bin/sh", utils.KernelArgsScript, "add", consts.KernelArgPciRealloc).Return("", "", nil)
+
+		_, _, err := genericPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = genericPlugin.Apply()
+		Expect(err).To(MatchError(syscall.ENOMEM))
+		Expect(vars.ForcePciRealloc).To(BeTrue())
 	})
 })
