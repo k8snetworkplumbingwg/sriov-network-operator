@@ -1,10 +1,19 @@
 name: ovs-vswitchd.service
 dropins:
 - name: 10-hw-offload.conf
+  # Keep this command on a single line and free of backslashes and '$': systemd
+  # unescapes backslashes and expands variables in Exec* lines even inside single
+  # quotes, which would corrupt the script before bash sees it.
+  #
+  # ovs-vsctl quotes the owned-keys value whenever it holds more than one key
+  # ("doca-init hw-offload"), and --bare does not affect `get` output, so the
+  # previously owned keys go through xargs twice: the first pass drops the quotes,
+  # the second splits them into one `remove` per key. With no keys set, `get`
+  # writes nothing to stdout and `xargs -r` skips the removal entirely.
+  #
+  # Every modifying command needs --no-wait. ovs-vswitchd is by definition not
+  # running yet when ExecStartPre executes, and without --no-wait ovs-vsctl blocks
+  # waiting for it to acknowledge the change, then fails once the timeout expires.
   contents: |
     [Service]
-    ExecStartPre=/bin/bash -c '\
-      old=$(/bin/ovs-vsctl -t 5 get Open_vSwitch . external_ids:sriov-operator-owned-keys 2>/dev/null | tr -d "\"") ; \
-      [ -n "$old" ] && echo "$old" | xargs -n 1 /bin/ovs-vsctl --no-wait remove Open_vSwitch . other_config || true ; \
-      /bin/ovs-vsctl -t 5 set Open_vSwitch . external_ids:sriov-operator-owned-keys='"'"'{{ .ExternalIds }}'"'"' && \
-      /bin/ovs-vsctl --no-wait set Open_vSwitch . {{ .OtherOvsConfig }}'
+    ExecStartPre=/bin/bash -c '/bin/ovs-vsctl -t 5 get Open_vSwitch . external_ids:sriov-operator-owned-keys 2>/dev/null | xargs | xargs -r -n 1 /bin/ovs-vsctl --no-wait remove Open_vSwitch . other_config ; /bin/ovs-vsctl --no-wait -t 5 set Open_vSwitch . external_ids:sriov-operator-owned-keys="{{ .ExternalIds }}" && /bin/ovs-vsctl --no-wait set Open_vSwitch . {{ .OtherOvsConfig }}'

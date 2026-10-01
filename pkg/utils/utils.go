@@ -156,25 +156,76 @@ func WriteFileWithTimeout(path string, data []byte, perm os.FileMode, timeout ti
 	}
 }
 
-// ValidateOvsConfig checks that all OVS other_config keys and values are safe
-// for embedding in a shell command. Call this at admission time to surface
-// errors before they reach RenderOtherOvsConfigOption.
+// ValidateOvsConfig checks that all OVS other_config keys and values can be
+// represented in the ovs-vswitchd drop-in. Call this at admission time to
+// surface errors before they reach RenderOtherOvsConfigOption.
 func ValidateOvsConfig(ovsConfig map[string]string) error {
 	for key, value := range ovsConfig {
 		if !ovsKeyRegexp.MatchString(key) {
 			return fmt.Errorf("OVS config key %q is invalid: use only alphanumeric characters, underscores and hyphens", key)
 		}
-		if strings.Contains(value, "'") {
-			return fmt.Errorf("OVS config value for key %q must not contain a single quote", key)
+		// Everything else is escaped by escapeOvsValue, but these bytes cannot be
+		// carried inside the line at all: a line break ends the ExecStartPre line, and
+		// a NUL truncates it where systemd stops reading, leaving a partial command.
+		if strings.ContainsAny(value, "\n\r") {
+			return fmt.Errorf("OVS config value for key %q must not contain a line break", key)
+		}
+		if strings.ContainsRune(value, 0) {
+			return fmt.Errorf("OVS config value for key %q must not contain a NUL byte", key)
 		}
 	}
 	return nil
 }
 
-// RenderOtherOvsConfigOption formats ovsConfig entries for use in a shell
-// command. Keys must match [a-zA-Z0-9_-] and values must not contain single
-// quotes; both constraints prevent injection into the single-quoted bash -c
-// context where the output is embedded.
+// bashDoubleQuoteEscape makes value safe to embed in a bash double-quoted string,
+// the innermost of the two layers the value travels through.
+func bashDoubleQuoteEscape(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\\', '"', '$', '`':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// systemdExecEscape makes s survive systemd's parsing of an Exec* line, the
+// outermost layer. systemd unescapes backslashes even inside single quotes,
+// expands '$' variables and '%' specifiers, and ends the single-quoted command
+// at the first unescaped single quote.
+func systemdExecEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '$':
+			b.WriteString("$$")
+		case '%':
+			b.WriteString("%%")
+		case '\'':
+			b.WriteString(`\'`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// escapeOvsValue renders value as a bash double-quoted word for the
+// ovs-vswitchd drop-in. The value passes through systemd's Exec parser and then
+// bash before reaching ovs-vsctl, so it is escaped for both, innermost first.
+// For example `a$b` becomes `"a\\$$b"`, which systemd reduces to `"a\$b"` and
+// bash to `a$b`.
+func escapeOvsValue(value string) string {
+	return `"` + systemdExecEscape(bashDoubleQuoteEscape(value)) + `"`
+}
+
+// RenderOtherOvsConfigOption formats ovsConfig entries for use in the
+// ovs-vswitchd drop-in. Keys must match [a-zA-Z0-9_-] so that they are safe
+// unquoted; values are escaped for the systemd and bash layers they cross.
 func RenderOtherOvsConfigOption(ovsConfig map[string]string) (string, string, error) {
 	otherConfig := new(bytes.Buffer)
 	keys := make([]string, 0, len(ovsConfig))
@@ -191,7 +242,7 @@ func RenderOtherOvsConfigOption(ovsConfig map[string]string) (string, string, er
 	externalIds := make([]string, 0, len(keys))
 	for _, key := range keys {
 		value := ovsConfig[key]
-		fmt.Fprintf(otherConfig, "other_config:%s=%q ", key, value)
+		fmt.Fprintf(otherConfig, "other_config:%s=%s ", key, escapeOvsValue(value))
 		externalIds = append(externalIds, key)
 	}
 	return strings.Join(externalIds, " "), otherConfig.String(), nil
