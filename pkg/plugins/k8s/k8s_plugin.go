@@ -57,6 +57,9 @@ type k8sUpdateTarget struct {
 	sriovScript            updateTargetReq
 	sriovPostNetworkScript updateTargetReq
 	openVSwitch            updateTargetReq
+	// removeOpenVSwitchDropin requests removal of the OVS drop-in instead of
+	// writing it, used when the operator has no OVS config to apply anymore.
+	removeOpenVSwitchDropin bool
 }
 
 func (u *k8sUpdateTarget) String() string {
@@ -81,6 +84,7 @@ func (u *k8sUpdateTarget) reset() {
 	u.sriovScript = updateTargetReq{}
 	u.sriovPostNetworkScript = updateTargetReq{}
 	u.openVSwitch = updateTargetReq{}
+	u.removeOpenVSwitchDropin = false
 }
 
 const (
@@ -127,18 +131,17 @@ func (p *K8sPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState)
 
 	p.updateTarget.reset()
 	// TODO add check for enableOvsOffload in OperatorConfig later
-	// Update services if switchdev required
-	if !vars.UsingSystemdMode && !sriovnetworkv1.IsSwitchdevModeSpec(new.Spec) {
-		return
+	// The OVS drop-in only belongs on a node running in switchdev mode. Once
+	// switchdev is no longer requested there is nothing left to configure, so take
+	// the same path as an empty config to clean up a drop-in installed earlier.
+	ovsConfig := new.Spec.System.OvsConfig
+	if !sriovnetworkv1.IsSwitchdevModeSpec(new.Spec) {
+		ovsConfig = nil
 	}
-
-	if sriovnetworkv1.IsSwitchdevModeSpec(new.Spec) {
-		// Check services
-		err = p.ovsServiceStateUpdate()
-		if err != nil {
-			log.Log.Error(err, "k8s plugin OnNodeStateChange(): failed")
-			return
-		}
+	err = p.ovsServiceStateUpdate(ovsConfig)
+	if err != nil {
+		log.Log.Error(err, "k8s plugin OnNodeStateChange(): failed")
+		return
 	}
 
 	if vars.UsingSystemdMode {
@@ -258,7 +261,7 @@ func (p *K8sPlugin) updateSriovServices() error {
 	return nil
 }
 
-func (p *K8sPlugin) ovsServiceStateUpdate() error {
+func (p *K8sPlugin) ovsServiceStateUpdate(ovsConfig map[string]string) error {
 	// Check that the OVS service itself is installed (not the drop-in).
 	exist, err := p.hostHelper.IsServiceExist(ovsMainServicePath)
 	if err != nil {
@@ -267,6 +270,21 @@ func (p *K8sPlugin) ovsServiceStateUpdate() error {
 	if !exist {
 		log.Log.Info("k8s plugin systemServicesStateUpdate(): WARNING! openvswitch system service not found, skip update",
 			"service", p.openVSwitchService.Name)
+		return nil
+	}
+	if len(ovsConfig) == 0 {
+		// Nothing to configure for OVS. Don't install a drop-in that would set no
+		// other_config keys, and drop a stale one left by a previous configuration.
+		dropinExist, err := p.hostHelper.IsServiceExist(p.openVSwitchService.Path)
+		if err != nil {
+			return err
+		}
+		if dropinExist {
+			log.Log.Info("k8s plugin ovsServiceStateUpdate(): no OVS config, removing drop-in",
+				"path", p.openVSwitchService.Path)
+			p.updateTarget.removeOpenVSwitchDropin = true
+			p.updateTarget.openVSwitch.SetNeedUpdate()
+		}
 		return nil
 	}
 	if !p.isDropinNeedUpdate(p.openVSwitchService) {
@@ -298,13 +316,28 @@ func (p *K8sPlugin) isDropinNeedUpdate(service *hostTypes.Service) bool {
 }
 
 func (p *K8sPlugin) updateOVSService() error {
-	if p.updateTarget.openVSwitch.NeedUpdate() {
-		// Always write the drop-in so the file is in place before any reboot.
-		err := p.hostHelper.WriteServiceDropin(p.openVSwitchService)
-		if err != nil {
-			log.Log.Error(err, "k8s plugin updateOVSService(): failed to write OVS drop-in")
+	if !p.updateTarget.openVSwitch.NeedUpdate() {
+		return nil
+	}
+	if p.updateTarget.removeOpenVSwitchDropin {
+		// No reboot is requested for a removal, so reload systemd to pick it up.
+		// The OVS database is left as is: the operator is giving up ownership of
+		// those keys, not reverting them.
+		if err := p.hostHelper.RemoveServiceDropin(p.openVSwitchService); err != nil {
+			log.Log.Error(err, "k8s plugin updateOVSService(): failed to remove OVS drop-in")
 			return err
 		}
+		if err := p.hostHelper.ReloadServiceDaemon(); err != nil {
+			log.Log.Error(err, "k8s plugin updateOVSService(): failed to reload systemd unit files")
+			return err
+		}
+		return nil
+	}
+	// Always write the drop-in so the file is in place before any reboot.
+	err := p.hostHelper.WriteServiceDropin(p.openVSwitchService)
+	if err != nil {
+		log.Log.Error(err, "k8s plugin updateOVSService(): failed to write OVS drop-in")
+		return err
 	}
 	return nil
 }
