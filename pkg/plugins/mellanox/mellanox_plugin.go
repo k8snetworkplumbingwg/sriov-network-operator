@@ -44,6 +44,10 @@ func (p *MellanoxPlugin) Name() string {
 func (p *MellanoxPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState) (needDrain bool, needReboot bool, err error) {
 	log.Log.Info("mellanox plugin OnNodeStateChange()")
 
+	// Update generation for mstconfig query cache invalidation.
+	// If generation changed, the cache is automatically cleared.
+	p.helpers.SetGeneration(new.GetGeneration())
+
 	needDrain = false
 	needReboot = false
 	err = nil
