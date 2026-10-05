@@ -66,8 +66,13 @@ func validateSriovOperatorConfigLogConfig(cr *sriovnetworkv1.SriovOperatorConfig
 	if cr.Spec.LogConfig == nil {
 		return nil
 	}
-	if _, err := cr.GetEffectiveLogConfig(); err != nil {
-		return fmt.Errorf("invalid LogConfig: %w", err)
+	// Validate config-daemon effective config
+	if _, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(cr.Spec.LogConfig); err != nil {
+		return fmt.Errorf("invalid LogConfig for configDaemon: %w", err)
+	}
+	// Validate device-plugin effective config
+	if _, err := sriovnetworkv1.GetEffectiveDevicePluginLogConfig(cr.Spec.LogConfig); err != nil {
+		return fmt.Errorf("invalid LogConfig for devicePlugin: %w", err)
 	}
 	return nil
 }

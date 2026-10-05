@@ -40,12 +40,34 @@ func (pns PluginNameSlice) ToStringSlice() []string {
 	return ss
 }
 
-// LogConfig configures sriov-network-config-daemon log persistence on the host.
-// Logs are written under HostPath (default /var/log/sriov-network-config-daemon)
-// as config-daemon.log with lumberjack rotation. Unset LogConfig uses defaults
-// (enabled=true). Stdout/stderr logging is unchanged.
+// LogConfig configures persistent host log files for the sriov-network-config-daemon
+// and sriov-network-device-plugin. Global settings apply to both components unless
+// overridden by component-specific ConfigDaemon or DevicePlugin fields.
+// Unset LogConfig uses defaults (enabled=false). Stdout/stderr logging is unchanged.
+//
+// +structType=granular
 type LogConfig struct {
-	// Enabled turns host file logging on or off. Defaults to true when unset.
+	// ComponentLogConfig holds the global settings that apply to both components
+	// unless overridden per-component below.
+	ComponentLogConfig `json:",inline"`
+
+	// ConfigDaemon overrides global settings for the sriov-network-config-daemon only.
+	// Any field set here takes precedence over the corresponding global field.
+	// +optional
+	ConfigDaemon *ComponentLogConfig `json:"configDaemon,omitempty"`
+
+	// DevicePlugin overrides global settings for the sriov-network-device-plugin only.
+	// Any field set here takes precedence over the corresponding global field.
+	// +optional
+	DevicePlugin *ComponentLogConfig `json:"devicePlugin,omitempty"`
+}
+
+// ComponentLogConfig provides log configuration shared by LogConfig's global settings
+// and, when used via LogConfig.ConfigDaemon/DevicePlugin, as per-component overrides.
+// When used as an override, any field set here takes precedence over the
+// corresponding global LogConfig field.
+type ComponentLogConfig struct {
+	// Enabled turns persistent host file logging on or off. Defaults to false when unset.
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 
@@ -74,13 +96,8 @@ type LogConfig struct {
 	// +optional
 	MaxAgeDays *int `json:"maxAgeDays,omitempty"`
 
-	// Compress controls whether rotated log files are compressed using gzip.
-	// Defaults to true.
-	// +optional
-	Compress *bool `json:"compress,omitempty"`
-
-	// HostPath is the host log directory.
-	// Default: "/var/log/sriov-network-config-daemon".
+	// HostPath is the base host log directory.
+	// Default: "/var/log".
 	// Accepts a folder name ("my-logs" → /var/log/my-logs) or an absolute path
 	// under /var/log. Rejects "..", "~", paths outside /var/log, and symlink escapes.
 	// /var/log itself is allowed.
@@ -120,8 +137,9 @@ type SriovOperatorConfigSpec struct {
 	// ConfigDaemonEnvVars allows to specify custom environment variables
 	// for the sriov-network-config-daemon
 	ConfigDaemonEnvVars map[string]string `json:"configDaemonEnvVars,omitempty"`
-	// LogConfig contains configuration for config daemon log persistence.
-	// When unset, persistent logging is enabled with default values.
+	// LogConfig contains configuration for persistent host log files
+	// (both config daemon and device plugin).
+	// When unset, persistent logging is disabled.
 	// +optional
 	LogConfig *LogConfig `json:"logConfig,omitempty"`
 }

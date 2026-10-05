@@ -115,7 +115,8 @@ When `logConfig` is omitted, logging is **enabled** with the defaults below. Std
 | `compress` | bool | `true` | Gzip rotated files |
 | `hostPath` | string | `/var/log/sriov-network-config-daemon` | Host directory: folder name under `/var/log` or absolute path under `/var/log` |
 
-Active file: `<hostPath>/config-daemon.log`.
+Active file: `<hostPath>/config-daemon.log` for `sriov-network-config-daemon`, and
+`<hostPath>/sriovdp.log` for `sriov-network-device-plugin`.
 
 ```yaml
 spec:
@@ -141,6 +142,40 @@ spec:
   logConfig:
     enabled: true
     hostPath: sriov-daemon-logs
+```
+
+#### Per-component overrides
+
+The `configDaemon` and `devicePlugin` fields override the global settings above for
+`sriov-network-config-daemon` and `sriov-network-device-plugin` respectively. Only the
+fields set in the override take precedence; any field left unset falls back to the
+global value. Both accept the same `enabled`, `maxSizeMB`, `maxFiles`, `maxAgeDays`,
+and `hostPath` fields described above.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `configDaemon` | object | Overrides global LogConfig settings for `sriov-network-config-daemon` only |
+| `devicePlugin` | object | Overrides global LogConfig settings for `sriov-network-device-plugin` only |
+
+```yaml
+# Keep global logging enabled, but disable it only for the device plugin
+spec:
+  logConfig:
+    enabled: true
+    devicePlugin:
+      enabled: false
+```
+
+```yaml
+# Use a different host directory and rotation size for each component
+spec:
+  logConfig:
+    enabled: true
+    configDaemon:
+      hostPath: sriov-daemon-logs
+    devicePlugin:
+      hostPath: sriov-dp-logs
+      maxSizeMB: 50
 ```
 
 Design notes: [Persistent Log Storage for Config Daemon](../design/sriov-persistent-logging.md).

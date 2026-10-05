@@ -289,14 +289,23 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	// file logging (host path under /var/log)
-	logCfg, logCfgErr := sriovnetworkv1.GetEffectiveLogConfig(operatorConfig.Spec.LogConfig)
-	if logCfgErr != nil {
-		setupLog.Error(logCfgErr, "invalid log configuration, using defaults")
-		logCfg = vars.DefaultLogCfg()
+	logCfg, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(operatorConfig.Spec.LogConfig)
+	if err != nil {
+		setupLog.Error(err, "invalid log configuration",
+			"component", snolog.Component,
+			"subsystem", snolog.SubsystemPersistentFileLogging,
+			"node", vars.NodeName,
+		)
+		return err
 	}
 	vars.SetLogCfg(logCfg)
 	if err := snolog.InitLogWithFile(); err != nil {
-		setupLog.Error(err, "failed to initialize file logging, continuing with console only")
+		setupLog.Error(err, "failed to initialize persistent file logging",
+			"component", snolog.Component,
+			"subsystem", snolog.SubsystemPersistentFileLogging,
+			"node", vars.NodeName,
+		)
+		return err
 	}
 	defer snolog.CloseFileLogger()
 

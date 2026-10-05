@@ -116,7 +116,7 @@ var _ = Describe("Store", func() {
 	)
 
 	BeforeEach(func() {
-		vars.InChroot.Store(true)
+		vars.InChroot = true
 		vars.FilesystemRoot = tempDir
 		vars.Destdir = tempDir
 		vars.PlatformType = consts.Baremetal

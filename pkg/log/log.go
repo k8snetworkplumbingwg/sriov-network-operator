@@ -22,10 +22,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	zzap "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -33,27 +33,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
-// LogFileName is the rotating log file written under LogConfig.HostPath.
-const LogFileName = "config-daemon.log"
-
 const (
+	LogFileName                    = "config-daemon.log"
+	Component                      = "sriov-network-config-daemon"
+	SubsystemPersistentFileLogging = "persistent-file-logging"
+
 	lumberjackBackupTimeFormat = "2006-01-02T15-04-05.000"
 	lumberjackCompressSuffix   = ".gz"
+	startupHeaderWidth         = 80
 )
 
-type appliedFileLogState struct {
-	cfg  vars.LogFileSettings
-	path string
-}
-
-// appliedFileLog is the last successfully applied file-log config (under HostFSLock).
-var appliedFileLog atomic.Pointer[appliedFileLogState]
-
-// Options stores controller-runtime (zap) log config
+// Options stores controller-runtime (zap) log config.
 var Options = &zap.Options{
 	Development: true,
 	// we dont log with panic level, so this essentially
@@ -63,30 +57,34 @@ var Options = &zap.Options{
 	Level:           zzap.NewAtomicLevelAt(zapcore.InfoLevel),
 	// log caller (file and line number) in "caller" key
 	EncoderConfigOptions: []zap.EncoderConfigOption{func(ec *zapcore.EncoderConfig) { ec.CallerKey = "caller" }},
-	ZapOpts:              []zzap.Option{zzap.AddCaller(), zzap.AddCallerSkip(1)},
+	// Skip 1 for controller-runtime logr - zapr frame. Config-daemon adds +1 when the file tee is installed.
+	ZapOpts: []zzap.Option{zzap.AddCaller(), zzap.AddCallerSkip(1)},
 }
 
+// fileLogState holds all resources for the active file logger.
+type fileLogState struct {
+	cfg  vars.LogFileSettings
+	path string
+	core zapcore.Core
+	bws  *zapcore.BufferedWriteSyncer
+	lj   *lumberjack.Logger
+}
+
+// activeState is atomically swapped by InitLogWithFile / CloseFileLogger.
+var activeState atomic.Pointer[fileLogState]
+
 // globalArmedCore is a permanent zapcore.Core installed into the tee by InitLog().
-// It is a no-op when unarmed (activeAsyncCore == nil) and routes log entries to the
-// current asyncFileCore when armed by InitLogWithFile().
-var globalArmedCore = &armedFileCore{}
+var globalArmedCore = &globalArmedFileCore{}
 
-// activeAsyncCore is atomically swapped by InitLogWithFile / CloseFileLogger.
-// armedFileCore reads this on every Check/Write/Enabled call so all logger
-// clones created via With() always see the current file writer.
-var activeAsyncCore atomic.Pointer[asyncFileCore]
-
-// BindFlags binds controller-runtime logging flags to provided flag Set
+// BindFlags binds controller-runtime logging flags to provided flag Set.
 func BindFlags(fs *flag.FlagSet) {
 	Options.BindFlags(fs)
 }
 
-// InitLog initializes controller-runtime log (zap log).
-// It installs a permanent tee that routes every log entry to both the console
-// sink and the global armed file core (initially a no-op).
+// InitLog initializes controller-runtime log (zap log) for the config-daemon.
+// It installs a permanent tee so log entries also route to the rotating file
+// writer once InitLogWithFile arms it.
 func InitLog() {
-	vars.SetBeforeChroot(SyncFileLogger)
-
 	base := zap.New(zap.UseFlagOptions(Options))
 
 	sink := base.GetSink()
@@ -97,71 +95,57 @@ func InitLog() {
 	}
 	existingZap := underlier.GetUnderlying()
 
-	combined := existingZap.WithOptions(zzap.WrapCore(func(core zapcore.Core) zapcore.Core {
-		return zapcore.NewTee(core, globalArmedCore)
-	}))
+	combined := existingZap.WithOptions(
+		zzap.WrapCore(func(core zapcore.Core) zapcore.Core {
+			return zapcore.NewTee(core, globalArmedCore)
+		}),
+		zzap.AddCallerSkip(1),
+	)
 	log.SetLogger(zapr.NewLogger(combined))
 }
 
+// InitLogConsole initializes console-only logging for the operator and other
+// components that do not write persistent host log files.
+func InitLogConsole() {
+	log.SetLogger(zap.New(zap.UseFlagOptions(Options)))
+}
+
 // InitLogWithFile applies vars.GetLogCfg() to the rotating file logger.
-// It validates the path, creates the directory, swaps the writer atomically,
-// prunes extra backups immediately, and removes files from a previous HostPath.
-// Safe to call again (no-op when already applied). Serialized against chroot
-// via vars.HostFSLock so reconfigure cannot run inside a chroot window.
 func InitLogWithFile() error {
-	vars.HostFSLock.Lock()
-	defer vars.HostFSLock.Unlock()
-	return applyFileLoggerLocked(vars.GetLogCfg(), "", false)
+	return applyFileLogger(vars.GetLogCfg(), "", false)
 }
 
-// initLogWithFileAt applies cfg to an explicit path. Used by tests that write
-// into a temp dir instead of the host /var/log path.
-func initLogWithFileAt(logFilePath string, cfg vars.LogFileSettings) error {
-	vars.HostFSLock.Lock()
-	defer vars.HostFSLock.Unlock()
-	cfg.Enabled = true
-	return applyFileLoggerLocked(cfg, logFilePath, true)
-}
-
-func applyFileLoggerLocked(cfg vars.LogFileSettings, overridePath string, pathOverridden bool) error {
+func applyFileLogger(cfg vars.LogFileSettings, overridePath string, pathOverridden bool) error {
 	if !cfg.Enabled && !pathOverridden {
-		if alreadyApplied(cfg, "") {
-			return nil
-		}
-		closeFileLoggerLocked()
-		appliedFileLog.Store(&appliedFileLogState{cfg: cfg})
-		fmt.Fprintf(os.Stderr, "sriov-operator: persistent file logging disabled\n")
+		closeFileLoggerInner()
+		announceLogDisabled()
 		return nil
 	}
 
 	logFilePath := overridePath
 	if !pathOverridden {
 		if cfg.HostPath == "" {
-			return fmt.Errorf("log HostPath must not be empty")
+			err := fmt.Errorf("log HostPath must not be empty")
+			logFileStatusFailure("resolve path", err, logFilePath)
+			return err
 		}
-		logFilePath = utils.GetHostExtensionPath(filepath.Join(cfg.HostPath, LogFileName))
-	}
-
-	if alreadyApplied(cfg, logFilePath) {
-		return nil
+		logFilePath = filepath.Join(cfg.HostPath, consts.ConfigDaemonLogSubDir, LogFileName)
 	}
 
 	if err := validateLogFilePath(logFilePath); err != nil {
+		logFileStatusFailure("validate path", err, logFilePath)
 		return err
 	}
 
-	maxSizeMB := clampLogParam(cfg.MaxSizeMB, logCfgMaxSizeMBMin, logCfgMaxSizeMBMax, logCfgMaxSizeMBDefault)
-	maxFiles := clampLogParam(cfg.MaxFiles, logCfgMaxFilesMin, logCfgMaxFilesMax, logCfgMaxFilesDefault)
-	maxAgeDays := clampLogParam(cfg.MaxAgeDays, logCfgMaxAgeDaysMin, logCfgMaxAgeDaysMax, logCfgMaxAgeDaysDefault)
+	maxSizeMB := clampLogParam(cfg.MaxSizeMB, consts.LogCfgMaxSizeMBMin, consts.LogCfgMaxSizeMBMax, consts.LogCfgMaxSizeMBDefault)
+	maxFiles := clampLogParam(cfg.MaxFiles, consts.LogCfgMaxFilesMin, consts.LogCfgMaxFilesMax, consts.LogCfgMaxFilesDefault)
+	maxAgeDays := clampLogParam(cfg.MaxAgeDays, consts.LogCfgMaxAgeDaysMin, consts.LogCfgMaxAgeDaysMax, consts.LogCfgMaxAgeDaysDefault)
 
 	logDir := filepath.Dir(logFilePath)
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
-		return fmt.Errorf("failed to create log directory %s: %w", logDir, err)
-	}
-
-	oldPath := ""
-	if w := currentFileWriter(); w != nil {
-		oldPath = w.lj.Filename
+		err = fmt.Errorf("create log directory %s: %w", logDir, err)
+		logFileStatusFailure("create log directory", err, logFilePath)
+		return err
 	}
 
 	lj := &lumberjack.Logger{
@@ -172,42 +156,128 @@ func applyFileLoggerLocked(cfg vars.LogFileSettings, overridePath string, pathOv
 		Compress:   cfg.Compress,
 	}
 
-	encCfg := zzap.NewProductionEncoderConfig()
-	encCfg.EncodeTime = zapcore.RFC3339NanoTimeEncoder
-	encoder := zapcore.NewJSONEncoder(encCfg)
-
-	fw := newFileWriter(lj, encoder.Clone())
-
-	fileCore := &asyncFileCore{
-		encoder:      encoder,
-		levelEnabler: Options.Level,
-		writer:       fw,
+	bws := &zapcore.BufferedWriteSyncer{
+		WS:            zapcore.AddSync(lj),
+		Size:          256 * 1024,
+		FlushInterval: 30 * time.Second,
 	}
 
-	if old := activeAsyncCore.Swap(fileCore); old != nil {
-		old.writer.close()
+	encCfg := zzap.NewProductionEncoderConfig()
+	encCfg.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+	core := zapcore.NewCore(zapcore.NewConsoleEncoder(encCfg), bws, Options.Level)
+
+	newState := &fileLogState{cfg: cfg, path: logFilePath, core: core, bws: bws, lj: lj}
+	oldState := activeState.Load()
+	if oldState != nil {
+		_ = oldState.bws.Stop()
+		_ = oldState.lj.Close()
 	}
 
 	pruneExtraBackups(logFilePath, maxFiles)
-	cleanupOldLogDir(oldPath, logFilePath)
 
-	appliedFileLog.Store(&appliedFileLogState{cfg: cfg, path: logFilePath})
-	fmt.Fprintf(os.Stderr, "sriov-operator: persistent file logging enabled (path=%s maxSizeMB=%d maxFiles=%d maxAgeDays=%d)\n",
-		logFilePath, maxSizeMB, maxFiles, maxAgeDays)
+	activeState.Store(newState)
+
+	// Deduplicate by comparing with OLD state (nil on first startup)
+	announceLogEnabled(oldState, logFilePath, maxSizeMB, maxFiles, maxAgeDays, cfg.Compress)
+	SyncFileLogger()
 	return nil
 }
 
-func alreadyApplied(cfg vars.LogFileSettings, path string) bool {
-	prev := appliedFileLog.Load()
-	if prev == nil || prev.cfg != cfg || prev.path != path {
-		return false
+// SyncFileLogger flushes all buffered file-log entries to disk.
+func SyncFileLogger() {
+	if s := activeState.Load(); s != nil {
+		_ = s.bws.Sync()
 	}
-	if cfg.Enabled {
-		return activeAsyncCore.Load() != nil
-	}
-	return activeAsyncCore.Load() == nil
 }
 
+// CloseFileLogger flushes and closes the active file logger.
+func CloseFileLogger() {
+	closeFileLoggerInner()
+}
+
+// IsFileLoggerActive reports whether a rotating file logger is currently armed.
+func IsFileLoggerActive() bool {
+	return activeState.Load() != nil
+}
+
+func closeFileLoggerInner() {
+	if old := activeState.Swap(nil); old != nil {
+		_ = old.bws.Stop()
+		_ = old.lj.Close()
+	}
+}
+
+// globalArmedFileCore — permanent no-op core that activates when activeState is set
+type globalArmedFileCore struct {
+	extraFields []zapcore.Field
+}
+
+func (a *globalArmedFileCore) Enabled(level zapcore.Level) bool {
+	s := activeState.Load()
+	return s != nil && s.core.Enabled(level)
+}
+
+func (a *globalArmedFileCore) With(fields []zapcore.Field) zapcore.Core {
+	combined := make([]zapcore.Field, len(a.extraFields)+len(fields))
+	copy(combined, a.extraFields)
+	copy(combined[len(a.extraFields):], fields)
+	return &globalArmedFileCore{extraFields: combined}
+}
+
+func (a *globalArmedFileCore) Check(entry zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	if a.Enabled(entry.Level) {
+		return ce.AddCore(entry, a)
+	}
+	return ce
+}
+
+func (a *globalArmedFileCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
+	s := activeState.Load()
+	if s == nil {
+		return nil
+	}
+	allFields := fields
+	if len(a.extraFields) > 0 {
+		allFields = make([]zapcore.Field, len(fields)+len(a.extraFields))
+		copy(allFields, fields)
+		copy(allFields[len(fields):], a.extraFields)
+	}
+	return s.core.Write(entry, allFields)
+}
+
+func (a *globalArmedFileCore) Sync() error {
+	s := activeState.Load()
+	if s == nil {
+		return nil
+	}
+	return s.core.Sync()
+}
+
+// SetLogLevel provides conversion from the operators LogLevel value and sets
+// the current logging level accordingly.
+func SetLogLevel(operatorLevel int) {
+	newLevel := operatorToZapLevel(operatorLevel)
+	currLevel := Options.Level.(zzap.AtomicLevel).Level()
+	if newLevel != currLevel {
+		log.Log.Info("Set log verbose level", "new-level", operatorLevel, "current-level", zapToOperatorLevel(currLevel))
+		Options.Level.(zzap.AtomicLevel).SetLevel(newLevel)
+	}
+}
+
+// GetLogLevel returns the current operator log level.
+func GetLogLevel() int {
+	return zapToOperatorLevel(Options.Level.(zzap.AtomicLevel).Level())
+}
+
+func zapToOperatorLevel(zapLevel zapcore.Level) int {
+	return int(zapLevel) * -1
+}
+
+func operatorToZapLevel(operatorLevel int) zapcore.Level {
+	return zapcore.Level(operatorLevel * -1)
+}
+
+// validateLogFilePath rejects clearly unsafe paths (empty, root).
 func validateLogFilePath(logFilePath string) error {
 	if logFilePath == "" {
 		return fmt.Errorf("logFilePath must not be empty")
@@ -216,15 +286,124 @@ func validateLogFilePath(logFilePath string) error {
 	if cleaned == "/" || cleaned == "." {
 		return fmt.Errorf("logFilePath resolves to an unsafe root path: %s", logFilePath)
 	}
-	if strings.Contains(logFilePath, "..") {
-		return fmt.Errorf("logFilePath must not contain path traversal (..): %s", logFilePath)
-	}
 	return nil
 }
 
+func clampLogParam(v, lo, hi, dflt int) int {
+	if v < lo || v > hi {
+		return dflt
+	}
+	return v
+}
+
+// announceLogDisabled prints a banner and log entry when file logging is disabled.
+func announceLogDisabled() {
+	separator := strings.Repeat("=", startupHeaderWidth)
+	nodeName := statusNodeName()
+	ts := time.Now().Format(time.RFC3339)
+
+	fmt.Fprintf(os.Stderr, "%s\n", separator)
+	fmt.Fprintf(os.Stderr, "%s/%s: persistent file logging disabled\n", Component, SubsystemPersistentFileLogging)
+	fmt.Fprintf(os.Stderr, "Node: %s | Start time: %s\n", nodeName, ts)
+	fmt.Fprintf(os.Stderr, "%s\n", separator)
+	_ = os.Stderr.Sync() // Flush stderr to ensure banner appears before structured log
+
+	statusLogger().Info("persistent file logging disabled", "status", "disabled")
+}
+
+// announceLogEnabled prints a banner and log entry when file logging is enabled.
+// Deduplicates announcements by comparing with oldState (state before this enable).
+func announceLogEnabled(oldState *fileLogState, logFilePath string, maxSizeMB, maxFiles, maxAgeDays int, compress bool) {
+	// Deduplicate enable announcements by comparing with previous state
+	if oldState != nil {
+		if oldState.path == logFilePath &&
+			oldState.cfg.MaxSizeMB == maxSizeMB &&
+			oldState.cfg.MaxFiles == maxFiles &&
+			oldState.cfg.MaxAgeDays == maxAgeDays &&
+			oldState.cfg.Compress == compress {
+			return
+		}
+	}
+
+	separator := strings.Repeat("=", startupHeaderWidth)
+	nodeName := statusNodeName()
+	ts := time.Now().Format(time.RFC3339)
+
+	// Print banner to stderr (pod logs)
+	fmt.Fprintf(os.Stderr, "%s\n", separator)
+	fmt.Fprintf(os.Stderr, "%s/%s: persistent file logging enabled\n", Component, SubsystemPersistentFileLogging)
+	fmt.Fprintf(os.Stderr, "Node: %s | Start time: %s\n", nodeName, ts)
+	fmt.Fprintf(os.Stderr, "Path: %s | maxSizeMB=%d maxFiles=%d maxAgeDays=%d compress=%t\n",
+		logFilePath, maxSizeMB, maxFiles, maxAgeDays, compress)
+	fmt.Fprintf(os.Stderr, "%s\n", separator)
+	_ = os.Stderr.Sync()
+
+	// Write startup header directly to log file for consistency with device-plugin
+	writeStartupHeaderToFile(logFilePath, nodeName, ts, maxSizeMB, maxFiles, maxAgeDays, compress)
+
+	statusLogger().Info("persistent file logging enabled",
+		"status", "enabled",
+		"path", logFilePath,
+		"maxSizeMB", maxSizeMB,
+		"maxFiles", maxFiles,
+		"maxAgeDays", maxAgeDays,
+		"compress", compress,
+	)
+}
+
+// logFileStatusFailure prints a banner and structured error when enable fails.
+func logFileStatusFailure(stage string, err error, logFilePath string) {
+	separator := strings.Repeat("=", startupHeaderWidth)
+	nodeName := statusNodeName()
+	ts := time.Now().Format(time.RFC3339)
+
+	fmt.Fprintf(os.Stderr, "%s\n", separator)
+	fmt.Fprintf(os.Stderr, "%s/%s: persistent file logging failed\n", Component, SubsystemPersistentFileLogging)
+	fmt.Fprintf(os.Stderr, "Node: %s | Start time: %s\n", nodeName, ts)
+	if logFilePath != "" {
+		fmt.Fprintf(os.Stderr, "Stage: %s | Path: %s | Error: %v\n", stage, logFilePath, err)
+	} else {
+		fmt.Fprintf(os.Stderr, "Stage: %s | Error: %v\n", stage, err)
+	}
+	fmt.Fprintf(os.Stderr, "%s\n", separator)
+	_ = os.Stderr.Sync() // Flush stderr to ensure banner appears before structured log
+
+	statusLogger().Error(err, "persistent file logging failed",
+		"status", "failed",
+		"stage", stage,
+		"path", logFilePath,
+	)
+}
+
+func statusLogger() logr.Logger {
+	return log.Log.WithName(SubsystemPersistentFileLogging).WithValues(
+		"component", Component,
+		"node", statusNodeName(),
+	)
+}
+
+func statusNodeName() string {
+	if vars.NodeName != "" {
+		return vars.NodeName
+	}
+	return "unknown"
+}
+
+// writeStartupHeaderToFile writes a startup banner directly to the log file
+// for consistency with device-plugin logging format.
+func writeStartupHeaderToFile(logFilePath, nodeName, ts string, maxSizeMB, maxFiles, maxAgeDays int, compress bool) {
+	s := activeState.Load()
+	if s == nil || s.lj == nil {
+		return
+	}
+	separator := strings.Repeat("=", startupHeaderWidth)
+	header := fmt.Sprintf("%s\n%s/%s: persistent file logging enabled\nNode: %s | Start time: %s\nPath: %s | maxSizeMB=%d maxFiles=%d maxAgeDays=%d compress=%t\n%s\n",
+		separator, Component, SubsystemPersistentFileLogging, nodeName, ts,
+		logFilePath, maxSizeMB, maxFiles, maxAgeDays, compress, separator)
+	_, _ = s.lj.Write([]byte(header))
+}
+
 // pruneExtraBackups immediately drops lumberjack backups beyond maxBackups.
-// lumberjack itself only mills on rotation, so shrinking MaxFiles would otherwise
-// leave extra files until the current log wraps.
 func pruneExtraBackups(logFilePath string, maxBackups int) {
 	if maxBackups <= 0 {
 		return
@@ -263,15 +442,27 @@ func pruneExtraBackups(logFilePath string, maxBackups int) {
 	})
 
 	preserved := map[string]struct{}{}
+	var pruned int
 	for _, b := range backups {
 		if _, seen := preserved[b.key]; seen {
 			continue
 		}
 		if len(preserved) >= maxBackups {
 			_ = os.Remove(filepath.Join(dir, b.name))
+			pruned++
 			continue
 		}
 		preserved[b.key] = struct{}{}
+	}
+	if pruned > 0 {
+		statusLogger().Info("pruned old log backups",
+			"status", "pruned",
+			"dir", dir,
+			"pruned", pruned,
+			"maxFiles", maxBackups,
+		)
+		fmt.Fprintf(os.Stderr, "%s/%s: pruned %d old log backup(s) in %s (maxFiles=%d)\n",
+			Component, SubsystemPersistentFileLogging, pruned, dir, maxBackups)
 	}
 }
 
@@ -283,452 +474,16 @@ func timeFromBackupName(filename, prefix, ext string) (time.Time, error) {
 	return time.Parse(lumberjackBackupTimeFormat, ts)
 }
 
-func cleanupOldLogDir(oldFilePath, newFilePath string) {
-	if oldFilePath == "" || newFilePath == "" {
-		return
-	}
-	oldDir := filepath.Dir(oldFilePath)
-	newDir := filepath.Dir(newFilePath)
-	if oldDir == newDir || oldDir == "" || oldDir == "." {
-		return
-	}
-	base := strings.TrimSuffix(LogFileName, filepath.Ext(LogFileName))
-	matches, _ := filepath.Glob(filepath.Join(oldDir, base+"*"))
-	for _, m := range matches {
-		_ = os.Remove(m)
-	}
-	_ = os.Remove(oldDir)
+// initLogWithFileAt applies cfg to an explicit path.
+func initLogWithFileAt(logFilePath string, cfg vars.LogFileSettings) error {
+	cfg.Enabled = true
+	return applyFileLogger(cfg, logFilePath, true)
 }
 
-// SyncFileLogger flushes all buffered file-log entries to disk.
-func SyncFileLogger() {
-	if c := activeAsyncCore.Load(); c != nil {
-		c.writer.syncWait()
-	}
-}
-
-// CloseFileLogger flushes and closes the active file logger.
-func CloseFileLogger() {
-	vars.HostFSLock.Lock()
-	defer vars.HostFSLock.Unlock()
-	closeFileLoggerLocked()
-}
-
-func closeFileLoggerLocked() {
-	if old := activeAsyncCore.Swap(nil); old != nil {
-		old.writer.close()
-	}
-	appliedFileLog.Store(nil)
-}
-
-// SetLogLevel provides conversion from the operators LogLevel value ({0,1,2} where 2 is the most verbose) and sets
-// the current logging level accordingly.
-func SetLogLevel(operatorLevel int) {
-	newLevel := operatorToZapLevel(operatorLevel)
-	currLevel := Options.Level.(zzap.AtomicLevel).Level()
-	if newLevel != currLevel {
-		log.Log.Info("Set log verbose level", "new-level", operatorLevel, "current-level", zapToOperatorLevel(currLevel))
-		Options.Level.(zzap.AtomicLevel).SetLevel(newLevel)
-	}
-}
-
-func GetLogLevel() int {
-	return zapToOperatorLevel(Options.Level.(zzap.AtomicLevel).Level())
-}
-
-func zapToOperatorLevel(zapLevel zapcore.Level) int {
-	return int(zapLevel) * -1
-}
-
-func operatorToZapLevel(operatorLevel int) zapcore.Level {
-	return zapcore.Level(operatorLevel * -1)
-}
-
-// currentFileWriter returns the fileWriter backing the active asyncFileCore,
-// or nil when file logging is disabled.  Used only by internal tests.
-func currentFileWriter() *fileWriter {
-	if c := activeAsyncCore.Load(); c != nil {
-		return c.writer
+// currentLumberjack returns the active lumberjack.Logger instance.
+func currentLumberjack() *lumberjack.Logger {
+	if s := activeState.Load(); s != nil {
+		return s.lj
 	}
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// armedFileCore — permanent no-op core that activates when activeAsyncCore is set
-// ---------------------------------------------------------------------------
-
-type armedFileCore struct {
-	extraFields []zapcore.Field
-}
-
-func (a *armedFileCore) Enabled(level zapcore.Level) bool {
-	c := activeAsyncCore.Load()
-	if c == nil {
-		return false
-	}
-	return c.Enabled(level)
-}
-
-func (a *armedFileCore) With(fields []zapcore.Field) zapcore.Core {
-	combined := make([]zapcore.Field, len(a.extraFields)+len(fields))
-	copy(combined, a.extraFields)
-	copy(combined[len(a.extraFields):], fields)
-	return &armedFileCore{extraFields: combined}
-}
-
-func (a *armedFileCore) Check(entry zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	if a.Enabled(entry.Level) {
-		return ce.AddCore(entry, a)
-	}
-	return ce
-}
-
-func (a *armedFileCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
-	c := activeAsyncCore.Load()
-	if c == nil {
-		return nil
-	}
-	allFields := fields
-	if len(a.extraFields) > 0 {
-		allFields = make([]zapcore.Field, len(fields)+len(a.extraFields))
-		copy(allFields, fields)
-		copy(allFields[len(fields):], a.extraFields)
-	}
-	return c.Write(entry, allFields)
-}
-
-func (a *armedFileCore) Sync() error {
-	c := activeAsyncCore.Load()
-	if c == nil {
-		return nil
-	}
-	return c.Sync()
-}
-
-// ---------------------------------------------------------------------------
-// asyncFileCore — zapcore.Core implementation
-// ---------------------------------------------------------------------------
-
-type asyncFileCore struct {
-	encoder      zapcore.Encoder
-	levelEnabler zapcore.LevelEnabler
-	writer       *fileWriter
-}
-
-func (a *asyncFileCore) Enabled(level zapcore.Level) bool {
-	return a.levelEnabler.Enabled(level)
-}
-
-func (a *asyncFileCore) With(fields []zapcore.Field) zapcore.Core {
-	clone := &asyncFileCore{
-		encoder:      a.encoder.Clone(),
-		levelEnabler: a.levelEnabler,
-		writer:       a.writer,
-	}
-	for _, f := range fields {
-		f.AddTo(clone.encoder)
-	}
-	return clone
-}
-
-func (a *asyncFileCore) Check(entry zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	if a.Enabled(entry.Level) {
-		return ce.AddCore(entry, a)
-	}
-	return ce
-}
-
-func (a *asyncFileCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
-	if a.writer.closed.Load() {
-		return nil
-	}
-	buf, err := a.encoder.EncodeEntry(entry, fields)
-	if err != nil {
-		return err
-	}
-	data := make([]byte, buf.Len())
-	copy(data, buf.Bytes())
-	buf.Free()
-
-	return a.writer.enqueue(data)
-}
-
-func (a *asyncFileCore) Sync() error {
-	return a.writer.syncWait()
-}
-
-// ---------------------------------------------------------------------------
-// ringBuffer — lock-protected circular buffer of []byte entries
-// ---------------------------------------------------------------------------
-//
-// When full, push() overwrites the oldest entry (instead of dropping the newest).
-// This preserves the most recent log entries which are typically the most valuable
-// for post-mortem debugging.
-
-const (
-	ringBufSize        = 4096
-	chrootPollInterval = 500 * time.Microsecond
-)
-
-type ringBuffer struct {
-	mu          sync.Mutex
-	buf         [][]byte
-	size        int
-	head        int // next write position
-	count       int // number of entries currently in the ring
-	overwritten uint64
-	notifyCh    chan struct{} // signals the consumer that data is available
-}
-
-func newRingBuffer(size int) *ringBuffer {
-	return &ringBuffer{
-		buf:      make([][]byte, size),
-		size:     size,
-		notifyCh: make(chan struct{}, 1),
-	}
-}
-
-func (rb *ringBuffer) push(data []byte) {
-	rb.mu.Lock()
-	if rb.count == rb.size {
-		rb.overwritten++
-	} else {
-		rb.count++
-	}
-	rb.buf[rb.head] = data
-	rb.head = (rb.head + 1) % rb.size
-	rb.mu.Unlock()
-
-	select {
-	case rb.notifyCh <- struct{}{}:
-	default:
-	}
-}
-
-func (rb *ringBuffer) pop() ([]byte, bool) {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	if rb.count == 0 {
-		return nil, false
-	}
-	tail := (rb.head - rb.count + rb.size) % rb.size
-	data := rb.buf[tail]
-	rb.buf[tail] = nil
-	rb.count--
-	return data, true
-}
-
-func (rb *ringBuffer) drainAll() [][]byte {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	if rb.count == 0 {
-		return nil
-	}
-	result := make([][]byte, 0, rb.count)
-	tail := (rb.head - rb.count + rb.size) % rb.size
-	for i := 0; i < rb.count; i++ {
-		idx := (tail + i) % rb.size
-		result = append(result, rb.buf[idx])
-		rb.buf[idx] = nil
-	}
-	rb.count = 0
-	return result
-}
-
-func (rb *ringBuffer) resetOverwritten() uint64 {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	n := rb.overwritten
-	rb.overwritten = 0
-	return n
-}
-
-func (rb *ringBuffer) len() int {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-	return rb.count
-}
-
-// ---------------------------------------------------------------------------
-// fileWriter — goroutine-backed lumberjack writer using a ring buffer
-// ---------------------------------------------------------------------------
-//
-// CHROOT SAFETY: safWrite() spin-waits on vars.InChroot before calling
-// lj.Write() to prevent rotation-during-chroot races.
-
-type fileWriter struct {
-	lj      *lumberjack.Logger
-	ring    *ringBuffer
-	encoder zapcore.Encoder
-	syncCh  chan chan error
-	closeCh chan struct{}
-	closed  atomic.Bool
-	wg      sync.WaitGroup
-}
-
-func newFileWriter(lj *lumberjack.Logger, encoder zapcore.Encoder) *fileWriter {
-	fw := &fileWriter{
-		lj:      lj,
-		ring:    newRingBuffer(ringBufSize),
-		encoder: encoder,
-		syncCh:  make(chan chan error, 1),
-		closeCh: make(chan struct{}),
-	}
-	fw.wg.Add(1)
-	go fw.run()
-	fmt.Fprintf(os.Stderr, "sriov-operator: file logger started (ring buffer size=%d, file=%s)\n", ringBufSize, lj.Filename)
-	return fw
-}
-
-func (fw *fileWriter) writeLogEntry(level zapcore.Level, msg string, fields ...zapcore.Field) {
-	entry := zapcore.Entry{
-		Level:      level,
-		Time:       time.Now(),
-		LoggerName: "sriov-operator",
-		Caller:     zapcore.EntryCaller{Defined: true, File: "log/log.go"},
-		Message:    msg,
-	}
-	buf, err := fw.encoder.Clone().EncodeEntry(entry, fields)
-	if err != nil {
-		return
-	}
-	_, _ = fw.lj.Write(buf.Bytes())
-	buf.Free()
-}
-
-func (fw *fileWriter) enqueue(data []byte) error {
-	if fw.closed.Load() {
-		return nil
-	}
-	fw.ring.push(data)
-	return nil
-}
-
-const (
-	logCfgMaxSizeMBMin      = 1
-	logCfgMaxSizeMBMax      = 1024
-	logCfgMaxSizeMBDefault  = 100
-	logCfgMaxFilesMin       = 1
-	logCfgMaxFilesMax       = 20
-	logCfgMaxFilesDefault   = 5
-	logCfgMaxAgeDaysMin     = 0
-	logCfgMaxAgeDaysMax     = 365
-	logCfgMaxAgeDaysDefault = 30
-)
-
-func clampLogParam(v, lo, hi, dflt int) int {
-	if v < lo || v > hi {
-		return dflt
-	}
-	return v
-}
-
-var syncWaitTimeout = 30 * time.Second
-
-func (fw *fileWriter) syncWait() error {
-	if fw.closed.Load() {
-		return nil
-	}
-	done := make(chan error, 1)
-	timeout := time.NewTimer(syncWaitTimeout)
-	defer timeout.Stop()
-
-	select {
-	case fw.syncCh <- done:
-		select {
-		case err := <-done:
-			return err
-		case <-timeout.C:
-			fmt.Fprintf(os.Stderr, "sriov-operator: syncWait deadline (%s) exceeded, some log entries may be lost\n", syncWaitTimeout)
-			return fmt.Errorf("syncWait timeout after %s", syncWaitTimeout)
-		case <-fw.closeCh:
-			return nil
-		}
-	case <-fw.closeCh:
-		return nil
-	case <-timeout.C:
-		fmt.Fprintf(os.Stderr, "sriov-operator: syncWait could not enqueue sync request within %s\n", syncWaitTimeout)
-		return fmt.Errorf("syncWait timeout after %s", syncWaitTimeout)
-	}
-}
-
-func (fw *fileWriter) close() {
-	if fw.closed.CompareAndSwap(false, true) {
-		close(fw.closeCh)
-		fw.wg.Wait()
-		fw.emitOverwriteSummary()
-		fmt.Fprintf(os.Stderr, "sriov-operator: file logger closed (file=%s)\n", fw.lj.Filename)
-		_ = fw.lj.Close()
-	}
-}
-
-func (fw *fileWriter) emitOverwriteSummary() {
-	if n := fw.ring.resetOverwritten(); n > 0 {
-		fw.writeLogEntry(zapcore.WarnLevel, "ring buffer overwrote oldest entries",
-			zzap.Uint64("overwritten", n))
-		fmt.Fprintf(os.Stderr, "sriov-operator: ring buffer overwrote %d oldest log entries\n", n)
-	}
-}
-
-func (fw *fileWriter) drainPending() {
-	entries := fw.ring.drainAll()
-	for _, data := range entries {
-		fw.safWrite(data)
-	}
-}
-
-func (fw *fileWriter) run() {
-	defer fw.wg.Done()
-	for {
-		select {
-		case done := <-fw.syncCh:
-			fw.drainPending()
-			fw.emitOverwriteSummary()
-			done <- nil
-			continue
-		case <-fw.closeCh:
-			fw.drainPending()
-			return
-		default:
-		}
-
-		if data, ok := fw.ring.pop(); ok {
-			fw.safWrite(data)
-			continue
-		}
-
-		select {
-		case <-fw.ring.notifyCh:
-		case done := <-fw.syncCh:
-			fw.drainPending()
-			fw.emitOverwriteSummary()
-			done <- nil
-		case <-fw.closeCh:
-			fw.drainPending()
-			return
-		}
-	}
-}
-
-// safWrite defers the write until we are outside any temporary chroot window, then
-// calls lj.Write which may transparently rotate the log file.
-//
-// In systemd mode the process runs on the host with InChroot permanently true for
-// path resolution — that is not a temporary chroot window, so we must not wait.
-func (fw *fileWriter) safWrite(data []byte) {
-	if vars.InChroot.Load() && !vars.UsingSystemdMode {
-		waitStart := time.Now()
-		for vars.InChroot.Load() && !fw.closed.Load() {
-			time.Sleep(chrootPollInterval)
-		}
-		if fw.closed.Load() {
-			return
-		}
-		waited := time.Since(waitStart)
-		fw.writeLogEntry(zapcore.InfoLevel, "safWrite resumed after chroot window",
-			zzap.Float64("waitedMs", float64(waited.Microseconds())/1000.0))
-	}
-	if _, err := fw.lj.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "sriov-operator: file-log write error: %v\n", err)
-	}
 }

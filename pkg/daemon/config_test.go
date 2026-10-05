@@ -136,10 +136,10 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 		})
 
 		It("should update LogCfg when LogConfig is set", func() {
+			enabled := true
 			maxSize := 50
 			maxFiles := 3
 			maxAge := 7
-			compress := false
 			hostPath := "/var/log/sriov-test"
 
 			soc := &sriovnetworkv1.SriovOperatorConfig{
@@ -149,11 +149,13 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 				},
 				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
 					LogConfig: &sriovnetworkv1.LogConfig{
-						MaxSizeMB:  &maxSize,
-						MaxFiles:   &maxFiles,
-						MaxAgeDays: &maxAge,
-						Compress:   &compress,
-						HostPath:   &hostPath,
+						ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{
+							Enabled:    &enabled,
+							MaxSizeMB:  &maxSize,
+							MaxFiles:   &maxFiles,
+							MaxAgeDays: &maxAge,
+							HostPath:   &hostPath,
+						},
 					},
 				},
 			}
@@ -164,7 +166,7 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 				g.Expect(cfg.MaxSizeMB).To(Equal(50))
 				g.Expect(cfg.MaxFiles).To(Equal(3))
 				g.Expect(cfg.MaxAgeDays).To(Equal(7))
-				g.Expect(cfg.Compress).To(BeFalse())
+				g.Expect(cfg.Compress).To(BeTrue()) // always true, not user-configurable
 				g.Expect(cfg.HostPath).To(Equal("/var/log/sriov-test"))
 				g.Expect(cfg.Enabled).To(BeTrue())
 			}, "15s", "3s").Should(Succeed())
@@ -179,7 +181,7 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 				},
 				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
 					LogConfig: &sriovnetworkv1.LogConfig{
-						Enabled: &enabled,
+						ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled},
 					},
 				},
 			}
@@ -199,7 +201,7 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 				},
 				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
 					LogConfig: &sriovnetworkv1.LogConfig{
-						MaxSizeMB: &maxSize,
+						ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{MaxSizeMB: &maxSize},
 					},
 				},
 			}
@@ -266,48 +268,46 @@ func validateExpectedDrain(disableDrain bool) {
 	}, "15s", "3s").Should(Succeed())
 }
 
-func ptr[T any](v T) *T { return &v }
-
 var _ = Describe("GetEffectiveLogConfig", func() {
 	It("returns defaults when LogConfig is nil", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(nil)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(vars.DefaultLogCfg()))
-	})
-
-	It("is available as a method on SriovOperatorConfig", func() {
-		soc := &sriovnetworkv1.SriovOperatorConfig{}
-		got, err := soc.GetEffectiveLogConfig()
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(vars.DefaultLogCfg()))
 	})
 
 	It("returns defaults for an empty LogConfig struct", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{})
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(vars.DefaultLogCfg()))
 	})
 
 	It("applies a partial override while keeping remaining defaults", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{MaxSizeMB: ptr(25)})
+		maxSizeMB := 25
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{MaxSizeMB: &maxSizeMB}})
 		Expect(err).NotTo(HaveOccurred())
 		d := vars.DefaultLogCfg()
 
 		Expect(got.MaxSizeMB).To(Equal(25))
 		Expect(got.MaxFiles).To(Equal(d.MaxFiles))
 		Expect(got.MaxAgeDays).To(Equal(d.MaxAgeDays))
-		Expect(got.Compress).To(Equal(d.Compress))
-		Expect(got.Enabled).To(BeTrue())
+		Expect(got.Compress).To(BeTrue()) // always true, not user-configurable
+		Expect(got.Enabled).To(Equal(d.Enabled))
 	})
 
 	It("applies a full override", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{
-			Enabled:    ptr(false),
-			MaxSizeMB:  ptr(50),
-			MaxFiles:   ptr(3),
-			MaxAgeDays: ptr(7),
-			Compress:   ptr(false),
-			HostPath:   ptr("/var/log/custom/log"),
+		enabled := false
+		maxSizeMB := 50
+		maxFiles := 3
+		maxAgeDays := 7
+		hostPath := "/var/log/custom/log"
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{
+			ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{
+				Enabled:    &enabled,
+				MaxSizeMB:  &maxSizeMB,
+				MaxFiles:   &maxFiles,
+				MaxAgeDays: &maxAgeDays,
+				HostPath:   &hostPath,
+			},
 		})
 		Expect(err).NotTo(HaveOccurred())
 
@@ -315,34 +315,38 @@ var _ = Describe("GetEffectiveLogConfig", func() {
 		Expect(got.MaxSizeMB).To(Equal(50))
 		Expect(got.MaxFiles).To(Equal(3))
 		Expect(got.MaxAgeDays).To(Equal(7))
-		Expect(got.Compress).To(BeFalse())
+		Expect(got.Compress).To(BeTrue()) // always true, not user-configurable
 		Expect(got.HostPath).To(Equal("/var/log/custom/log"))
 	})
 
 	It("resolves a folder-name HostPath under /var/log", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{
-			HostPath: ptr("custom-sriov-network-operator"),
+		hostPath := "custom-sriov-network-operator"
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{
+			ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.HostPath).To(Equal("/var/log/custom-sriov-network-operator"))
 	})
 
 	It("accepts a nested absolute path under /var/log", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{
-			HostPath: ptr("/var/log/custom-sriov-network-operator/first_rotation_logs/"),
+		hostPath := "/var/log/custom-sriov-network-operator/first_rotation_logs/"
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{
+			ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.HostPath).To(Equal("/var/log/custom-sriov-network-operator/first_rotation_logs"))
 	})
 
 	It("rejects a HostPath outside /var/log", func() {
-		_, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{HostPath: ptr("/custom/log")})
+		hostPath := "/custom/log"
+		_, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath}})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("/var/log"))
 	})
 
 	It("does not override HostPath when it is an empty string", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{HostPath: ptr("")})
+		hostPath := ""
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.HostPath).To(Equal(vars.DefaultLogCfg().HostPath))
 	})
@@ -354,31 +358,35 @@ var _ = Describe("GetEffectiveLogConfig", func() {
 		vars.SetLogCfg(modified)
 		defer func() { vars.SetLogCfg(saved) }()
 
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(nil)
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.MaxSizeMB).To(Equal(vars.DefaultLogCfg().MaxSizeMB))
 	})
 
 	It("allows MaxAgeDays of zero", func() {
-		got, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{MaxAgeDays: ptr(0)})
+		maxAgeDays := 0
+		got, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{MaxAgeDays: &maxAgeDays}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.MaxAgeDays).To(Equal(0))
 	})
 
 	It("rejects a HostPath with path traversal", func() {
-		_, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{HostPath: ptr("/../escape")})
+		hostPath := "/../escape"
+		_, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath}})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("path traversal"))
 	})
 
 	It("rejects a HostPath that is the filesystem root", func() {
-		_, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{HostPath: ptr("/")})
+		hostPath := "/"
+		_, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath}})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("filesystem root"))
 	})
 
 	It("rejects a folder-name HostPath that contains path separators", func() {
-		_, err := sriovnetworkv1.GetEffectiveLogConfig(&sriovnetworkv1.LogConfig{HostPath: ptr("relative/path")})
+		hostPath := "relative/path"
+		_, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(&sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{HostPath: &hostPath}})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("path separators"))
 	})
