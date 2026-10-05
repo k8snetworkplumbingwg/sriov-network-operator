@@ -1,6 +1,12 @@
 #!/bin/bash
 
-cat <<'EOF' > /host/etc/udev/disable-nm-sriov.sh
+udev_base_path="${UDEV_BASE_PATH:-/etc/udev}"
+target_dir="/host${udev_base_path}"
+target_file="${target_dir}/disable-nm-sriov.sh"
+
+mkdir -p "${target_dir}"
+
+cat <<'EOF' > "${target_file}"
 #!/bin/bash
 if [ ! -d "/sys/class/net/$1/device/physfn" ]; then
     exit 0
@@ -14,4 +20,4 @@ if [ "$2" == "$pf_pci_address" ]; then
 fi
 EOF
 
-chmod +x /host/etc/udev/disable-nm-sriov.sh
+chmod +x "${target_file}"
