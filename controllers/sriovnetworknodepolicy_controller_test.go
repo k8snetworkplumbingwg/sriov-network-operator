@@ -774,4 +774,5 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(selectors).To(HaveKeyWithValue("resnetdevice", `{"vendors":["8086"],"pfNames":["ens0#10-19"],"IsRdma":false,"NeedVhostNet":false}`))
 		})
 	})
+
 })

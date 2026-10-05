@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrl_builder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -63,6 +64,8 @@ type SriovNetworkNodePolicyReconciler struct {
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies/finalizers,verbs=update
+//+kubebuilder:rbac:groups=resource.k8s.io,resources=deviceclasses,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=sriovnetwork.k8snetworkplumbingwg.io,resources=sriovresourcepolicies;deviceattributes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -91,6 +94,12 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 		}
 		return reconcile.Result{}, err
 	}
+
+	// Keep feature-gate state aligned with the config we just fetched. The config
+	// controller also calls Init; refreshing here avoids racing a stale in-memory
+	// gate when this reconciler is woken by a SriovOperatorConfig watch.
+	r.FeatureGate.Init(defaultOpConf.Spec.FeatureGates)
+	reqLogger.Info("enabled featureGates", "featureGates", r.FeatureGate.String())
 
 	// Fetch the SriovNetworkNodePolicyList
 	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
@@ -131,9 +140,30 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 	if err = r.syncAllSriovNetworkNodeStates(ctx, defaultOpConf, policyList, nodeList); err != nil {
 		return reconcile.Result{}, err
 	}
-	// Sync Sriov device plugin ConfigMap object
-	if err = r.syncDevicePluginConfigMap(ctx, defaultOpConf, policyList, nodeList); err != nil {
-		return reconcile.Result{}, err
+
+	// Sync either device plugin ConfigMap or DRA resources (DeviceAttributes + SriovResourcePolicy) based on feature gate
+	if r.FeatureGate.IsEnabled(constants.DynamicResourceAllocationFeatureGate) {
+		reqLogger.Info("DRA feature gate enabled, syncing DeviceAttributes and SriovResourcePolicy CRs")
+		if err = r.syncDeviceAttributes(ctx, defaultOpConf, policyList); err != nil {
+			return reconcile.Result{}, err
+		}
+		if err = r.syncSriovResourcePolicies(ctx, defaultOpConf, policyList, nodeList); err != nil {
+			return reconcile.Result{}, err
+		}
+		if err = r.syncExtendedResourceDeviceClasses(ctx, defaultOpConf, policyList); err != nil {
+			return reconcile.Result{}, err
+		}
+	} else {
+		if err = r.cleanupExtendedResourceDeviceClasses(ctx); err != nil {
+			return reconcile.Result{}, err
+		}
+		if err = r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx); err != nil {
+			return reconcile.Result{}, err
+		}
+		// Sync Sriov device plugin ConfigMap object
+		if err = r.syncDevicePluginConfigMap(ctx, defaultOpConf, policyList, nodeList); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
 	// All was successful. Request that this be re-triggered after ResyncPeriod,
@@ -206,6 +236,8 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Watches(&corev1.Node{}, nodeEvenHandler).
 		Watches(&sriovnetworkv1.SriovNetworkNodePolicy{}, delayedEventHandler).
 		Watches(&sriovnetworkv1.SriovNetworkPoolConfig{}, delayedEventHandler).
+		Watches(&sriovnetworkv1.SriovOperatorConfig{}, delayedEventHandler,
+			ctrl_builder.WithPredicates(defaultConfigPredicate())).
 		WatchesRawSource(source.Channel(eventChan, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }

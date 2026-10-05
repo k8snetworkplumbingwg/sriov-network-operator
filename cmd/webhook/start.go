@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -37,7 +38,7 @@ var startCmd = &cobra.Command{
 }
 
 // admitv1Func handles a v1 admission
-type admitv1Func func(v1.AdmissionReview) *v1.AdmissionResponse
+type admitv1Func func(context.Context, v1.AdmissionReview) *v1.AdmissionResponse
 
 // admitHandler is a handler, for both validators and mutators, that supports multiple admission review versions
 type admitHandler struct {
@@ -108,7 +109,7 @@ func serve(w http.ResponseWriter, r *http.Request, admit admitHandler) {
 		}
 		responseAdmissionReview := &v1.AdmissionReview{}
 		responseAdmissionReview.SetGroupVersionKind(*gvk)
-		responseAdmissionReview.Response = admit.v1(*requestedAdmissionReview)
+		responseAdmissionReview.Response = admit.v1(r.Context(), *requestedAdmissionReview)
 		responseAdmissionReview.Response.UID = requestedAdmissionReview.Request.UID
 		responseObj = responseAdmissionReview
 	default:

@@ -31,7 +31,7 @@ export MULTUS_NAMESPACE="kube-system"
 source $here/run-e2e-conformance-common
 
 check_requirements() {
-  for cmd in kcli virsh virt-edit podman make go; do
+  for cmd in kcli virsh podman make go; do
     if ! command -v "$cmd" &> /dev/null; then
       echo "$cmd is not available"
       exit 1
