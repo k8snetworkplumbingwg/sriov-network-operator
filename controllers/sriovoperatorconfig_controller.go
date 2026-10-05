@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -390,6 +391,14 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 	}
 
 	data.Data["ConfigDaemonEnvVars"] = dc.Spec.ConfigDaemonEnvVars
+
+	logCfg, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(dc.Spec.LogConfig)
+	if err != nil {
+		logger.Error(err, "invalid config-daemon log configuration")
+		return fmt.Errorf("invalid config-daemon log configuration: %w", err)
+	}
+	data.Data["ConfigDaemonLogEnabled"] = logCfg.Enabled
+	data.Data["ConfigDaemonLogPath"] = filepath.Join(logCfg.HostPath, consts.ConfigDaemonLogSubDir)
 
 	objs, err := r.renderManifests(consts.ConfigDaemonPath, &data)
 	if err != nil {

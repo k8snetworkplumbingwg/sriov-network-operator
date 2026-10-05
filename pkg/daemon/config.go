@@ -44,7 +44,9 @@ func (oc *OperatorConfigNodeReconcile) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	snolog.SetLogLevel(operatorConfig.Spec.LogLevel)
-	oc.reconcileLogConfig(reqLogger, operatorConfig.Spec.LogConfig)
+	if err := oc.reconcileLogConfig(reqLogger, operatorConfig.Spec.LogConfig); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	newDisableDrain := operatorConfig.Spec.DisableDrain
 	if vars.DisableDrain != newDisableDrain {
@@ -69,14 +71,46 @@ func (oc *OperatorConfigNodeReconcile) SetupWithManager(mgr ctrl.Manager) error 
 }
 
 // reconcileLogConfig applies LogConfig changes to the file logger.
-func (oc *OperatorConfigNodeReconcile) reconcileLogConfig(reqLogger logr.Logger, lc *sriovnetworkv1.LogConfig) {
-	newCfg, err := sriovnetworkv1.GetEffectiveLogConfig(lc)
+func (oc *OperatorConfigNodeReconcile) reconcileLogConfig(reqLogger logr.Logger, lc *sriovnetworkv1.LogConfig) error {
+	newCfg, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(lc)
 	if err != nil {
-		reqLogger.Error(err, "invalid log configuration, skipping update")
-		return
+		reqLogger.Error(err, "invalid log configuration, skipping update",
+			"component", snolog.Component,
+			"subsystem", snolog.SubsystemPersistentFileLogging,
+			"node", vars.NodeName,
+		)
+		return nil
 	}
+	curCfg := vars.GetLogCfg()
+	if !needsLogReconcile(curCfg, newCfg) {
+		return nil
+	}
+	savedCfg := curCfg
 	vars.SetLogCfg(newCfg)
 	if err := snolog.InitLogWithFile(); err != nil {
-		reqLogger.Error(err, "failed to reconfigure file logging after LogConfig update, will retry on next reconcile")
+		vars.SetLogCfg(savedCfg)
+		reqLogger.Error(err, "failed to reconfigure persistent file logging, will retry on next reconcile",
+			"component", snolog.Component,
+			"subsystem", snolog.SubsystemPersistentFileLogging,
+			"node", vars.NodeName,
+			"enabled", newCfg.Enabled,
+		)
+		return err
 	}
+	return nil
+}
+
+func needsLogReconcile(cur, new vars.LogFileSettings) bool {
+	if cur != new {
+		return true
+	}
+
+	loggerActive := snolog.IsFileLoggerActive()
+	if new.Enabled && !loggerActive {
+		return true
+	}
+	if !new.Enabled && loggerActive {
+		return true
+	}
+	return false
 }

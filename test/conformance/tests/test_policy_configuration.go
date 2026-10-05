@@ -801,7 +801,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 
 					By("Enable persistent logging with defaults")
 					enabled := true
-					setOperatorConfigLogConfig(&sriovv1.LogConfig{Enabled: &enabled})
+					setOperatorConfigLogConfig(&sriovv1.LogConfig{ComponentLogConfig: sriovv1.ComponentLogConfig{Enabled: &enabled}})
 
 					node := sriovInfos.Nodes[0]
 					intf, err := sriovInfos.FindOneSriovDevice(node)

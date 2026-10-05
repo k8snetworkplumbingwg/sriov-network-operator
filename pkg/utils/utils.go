@@ -49,30 +49,21 @@ func (u *utilsHelper) Chroot(path string) (func() error, error) {
 		return nil, err
 	}
 
-	// Flush async file logs (and any other registered work) before HostFSLock /
-	// InChroot so rotation and path resolution stay outside the chroot window.
-	vars.RunBeforeChroot()
-
-	vars.HostFSLock.Lock()
 	if err := syscall.Chroot(path); err != nil {
-		vars.HostFSLock.Unlock()
 		root.Close()
 		return nil, err
 	}
-	vars.InChroot.Store(true)
+	vars.InChroot = true
 
 	return func() error {
-		defer vars.HostFSLock.Unlock()
 		defer root.Close()
-		// Keep InChroot true until both Chdir and Chroot succeed so concurrent
-		// host-path work does not run mid-restore.
 		if err := root.Chdir(); err != nil {
 			return fmt.Errorf("failed to chdir to original root before leaving chroot: %w", err)
 		}
 		if err := syscall.Chroot("."); err != nil {
 			return fmt.Errorf("failed to leave chroot: %w", err)
 		}
-		vars.InChroot.Store(false)
+		vars.InChroot = false
 		return nil
 	}, nil
 }
@@ -131,7 +122,7 @@ func IsCommandNotFound(err error) bool {
 }
 
 func GetHostExtension() string {
-	if vars.InChroot.Load() {
+	if vars.InChroot {
 		return vars.FilesystemRoot
 	}
 	return filepath.Join(vars.FilesystemRoot, consts.Host)
@@ -142,7 +133,7 @@ func GetHostExtensionPath(path string) string {
 }
 
 func GetChrootExtension() string {
-	if vars.InChroot.Load() {
+	if vars.InChroot {
 		return vars.FilesystemRoot
 	}
 	return fmt.Sprintf("chroot %s%s", vars.FilesystemRoot, consts.Host)

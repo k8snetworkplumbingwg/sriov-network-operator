@@ -68,7 +68,7 @@ spec:
 | `enableInjector` | bool | `true` | Deploy network resource injector webhook |
 | `enableOperatorWebhook` | bool | `true` | Deploy operator admission controller webhook |
 | `logLevel` | int | `2` | Log verbosity level (0=basic, 2=detailed) |
-| `logConfig` | object | defaults (enabled) | Config-daemon host file logging (see [LogConfig](#logconfig)) |
+| `logConfig` | object | defaults (enabled) | Host file logging for config-daemon and device-plugin (see [LogConfig](#logconfig)) |
 | `disableDrain` | bool | `false` | Disable node drain during configuration |
 | `enableOvsOffload` | bool | `false` | Enable OVS hardware offload support |
 | `configurationMode` | string | `daemon` | Configuration mode: "daemon" or "systemd" |
@@ -103,8 +103,13 @@ spec:
 
 ### LogConfig
 
-Persistent host logs for `sriov-network-config-daemon` (survive pod restart and node reboot).
+Persistent host logs for `sriov-network-config-daemon` and (optionally)
+`sriov-network-device-plugin` (survive pod restart and node reboot).
 When `logConfig` is omitted, logging is **enabled** with the defaults below. Stdout/`oc logs` are unchanged.
+
+**Important:** `logConfig` controls **config-daemon** host logging directly. **Device-plugin**
+host logging additionally requires `featureGates.devicePluginLogRotation: true` after a
+compatible device-plugin image is deployed. See [Upgrade workflow](#upgrade-workflow-host-logging).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -112,10 +117,11 @@ When `logConfig` is omitted, logging is **enabled** with the defaults below. Std
 | `maxSizeMB` | int | `100` | Rotate after this many MiB (1–1024) |
 | `maxFiles` | int | `5` | Max rotated backups to keep (1–20) |
 | `maxAgeDays` | int | `30` | Max age of backups in days; `0` = no age limit (max 365) |
-| `compress` | bool | `true` | Gzip rotated files |
-| `hostPath` | string | `/var/log/sriov-network-config-daemon` | Host directory: folder name under `/var/log` or absolute path under `/var/log` |
+| `hostPath` | string | `/var/log` | Base host log directory: folder name under `/var/log` or absolute path under `/var/log` |
 
-Active file: `<hostPath>/config-daemon.log`.
+Active file: `<hostPath>/sriov-network-config-daemon/config-daemon.log` for
+`sriov-network-config-daemon`, and `<hostPath>/sriovdp/sriovdp.log` for
+`sriov-network-device-plugin`.
 
 ```yaml
 spec:
@@ -124,8 +130,7 @@ spec:
     maxSizeMB: 100
     maxFiles: 5
     maxAgeDays: 30
-    compress: true
-    hostPath: /var/log/sriov-network-config-daemon
+    hostPath: /var/log
 ```
 
 ```yaml
@@ -143,7 +148,87 @@ spec:
     hostPath: sriov-daemon-logs
 ```
 
-Design notes: [Persistent Log Storage for Config Daemon](../design/sriov-persistent-logging.md).
+#### Per-component overrides
+
+The `configDaemon` and `devicePlugin` fields override the global settings above for
+`sriov-network-config-daemon` and `sriov-network-device-plugin` respectively. Only the
+fields set in the override take precedence; any field left unset falls back to the
+global value. Both accept the same `enabled`, `maxSizeMB`, `maxFiles`, `maxAgeDays`,
+and `hostPath` fields described above.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `configDaemon` | object | Overrides global LogConfig settings for `sriov-network-config-daemon` only |
+| `devicePlugin` | object | Overrides global LogConfig settings for `sriov-network-device-plugin` only |
+
+```yaml
+# Keep global logging enabled, but disable it only for the device plugin
+spec:
+  logConfig:
+    enabled: true
+    devicePlugin:
+      enabled: false
+```
+
+```yaml
+# Use a different host directory and rotation size for each component
+spec:
+  logConfig:
+    enabled: true
+    configDaemon:
+      hostPath: sriov-daemon-logs
+    devicePlugin:
+      hostPath: sriov-dp-logs
+      maxSizeMB: 50
+```
+
+#### Device-plugin feature gate
+
+Device-plugin DaemonSet changes (`--log_dir`, rotation flags, `/var/log` volume) are
+gated by `spec.featureGates.devicePluginLogRotation` (default: **`false`**).
+
+| `logConfig.enabled` | `devicePluginLogRotation` | Config-daemon | Device-plugin |
+|--------------------|---------------------------|---------------|---------------|
+| `true` | omitted / `false` | Host file logs | stderr only (unchanged DaemonSet) |
+| `true` | `true` | Host file logs | Host file logs (requires new DP image) |
+| `false` | any | off | off |
+
+You do **not** need to set `devicePluginLogRotation: false` explicitly; omitting it is
+equivalent.
+
+```yaml
+# Enable device-plugin host logging (after DP image upgrade)
+spec:
+  logConfig:
+    enabled: true
+  featureGates:
+    devicePluginLogRotation: true
+```
+
+#### Upgrade workflow (host logging)
+
+Operator and device-plugin are **separate images**. Safe phased rollout:
+
+1. **Upgrade operator** → enable `logConfig.enabled: true` (gate off) → config-daemon
+   logs on host; device-plugin unaffected.
+2. **Upgrade device-plugin image** → pods still stderr-only while gate is off.
+3. **Set `featureGates.devicePluginLogRotation: true`** → operator injects log flags
+   and volume; device-plugin writes to `<hostPath>/sriovdp/sriovdp.log`.
+
+To enable config-daemon logging only and never touch the device-plugin:
+
+```yaml
+spec:
+  logConfig:
+    enabled: true
+    devicePlugin:
+      enabled: false
+```
+
+**Before downgrading** the device-plugin image, disable the gate (or
+`logConfig.devicePlugin.enabled: false`) and wait for DaemonSet rollout.
+
+Full design notes: [Persistent Log Storage](../design/sriov-persistent-logging.md).
 
 ### Node Selection
 
@@ -217,6 +302,9 @@ spec:
 
   # enables the firmware reset via mstfwreset before a reboot
   mellanoxFirmwareReset: true
+
+  # injects device-plugin --log_dir and rotation flags (default: false; enable after DP image upgrade)
+  devicePluginLogRotation: true
 ```
 
 ## Configuration Modes

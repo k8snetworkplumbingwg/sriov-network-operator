@@ -185,10 +185,12 @@ spec:
         volumeMounts:
           - name: host
             mountPath: /host
-          - name: sriov-logs
-            mountPath: /host/var/log/sriov-network-config-daemon
           - name: tmp
             mountPath: /tmp
+          {{- if .ConfigDaemonLogEnabled }}
+          - name: sriov-logs
+            mountPath: {{.ConfigDaemonLogPath}}
+          {{- end }}
         lifecycle:
           preStop:
             exec:
@@ -197,10 +199,6 @@ spec:
       - name: host
         hostPath:
           path: /
-      - name: sriov-logs
-        hostPath:
-          path: /var/log/sriov-network-config-daemon
-          type: DirectoryOrCreate
       - name: cnibin
         hostPath:
           path: {{.CNIBinPath}}
@@ -210,3 +208,9 @@ spec:
           type: File
       - name: tmp
         emptyDir: {}
+      {{- if .ConfigDaemonLogEnabled }}
+      - name: sriov-logs
+        hostPath:
+          path: {{.ConfigDaemonLogPath}}
+          type: DirectoryOrCreate
+      {{- end }}

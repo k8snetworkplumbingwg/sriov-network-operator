@@ -7,16 +7,39 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
-
-const logHostPathRoot = "/var/log"
 
 // logHostPathFolderNameRE: single folder name under /var/log (no separators).
 var logHostPathFolderNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
-// GetEffectiveLogConfig maps CR LogConfig → LogFileSettings (defaults + HostPath resolve).
-func GetEffectiveLogConfig(lc *LogConfig) (vars.LogFileSettings, error) {
+// Both returns the effective log config for specific component.
+// Applies global settings first, then component overrides.
+func GetEffectiveConfigDaemonLogConfig(lc *LogConfig) (vars.LogFileSettings, error) {
+	cfg, err := getEffectiveLogConfigBase(lc)
+	if err != nil {
+		return vars.LogFileSettings{}, err
+	}
+	if lc == nil || lc.ConfigDaemon == nil {
+		return cfg, nil
+	}
+	return applyComponentOverride(cfg, lc.ConfigDaemon)
+}
+
+func GetEffectiveDevicePluginLogConfig(lc *LogConfig) (vars.LogFileSettings, error) {
+	cfg, err := getEffectiveLogConfigBase(lc)
+	if err != nil {
+		return vars.LogFileSettings{}, err
+	}
+	if lc == nil || lc.DevicePlugin == nil {
+		return cfg, nil
+	}
+	return applyComponentOverride(cfg, lc.DevicePlugin)
+}
+
+// getEffectiveLogConfigBase applies global LogConfig settings to defaults.
+func getEffectiveLogConfigBase(lc *LogConfig) (vars.LogFileSettings, error) {
 	cfg := vars.DefaultLogCfg()
 	if lc == nil {
 		return cfg, nil
@@ -33,9 +56,6 @@ func GetEffectiveLogConfig(lc *LogConfig) (vars.LogFileSettings, error) {
 	if lc.MaxAgeDays != nil {
 		cfg.MaxAgeDays = *lc.MaxAgeDays
 	}
-	if lc.Compress != nil {
-		cfg.Compress = *lc.Compress
-	}
 	if lc.HostPath != nil && *lc.HostPath != "" {
 		resolved, err := ResolveLogHostPath(*lc.HostPath)
 		if err != nil {
@@ -46,12 +66,31 @@ func GetEffectiveLogConfig(lc *LogConfig) (vars.LogFileSettings, error) {
 	return cfg, nil
 }
 
-// GetEffectiveLogConfig returns the effective file-log settings for this CR.
-func (cr *SriovOperatorConfig) GetEffectiveLogConfig() (vars.LogFileSettings, error) {
-	if cr == nil {
-		return vars.DefaultLogCfg(), nil
+// applyComponentOverride applies ComponentLogConfig overrides to base config.
+func applyComponentOverride(cfg vars.LogFileSettings, override *ComponentLogConfig) (vars.LogFileSettings, error) {
+	if override == nil {
+		return cfg, nil
 	}
-	return GetEffectiveLogConfig(cr.Spec.LogConfig)
+	if override.Enabled != nil {
+		cfg.Enabled = *override.Enabled
+	}
+	if override.MaxSizeMB != nil {
+		cfg.MaxSizeMB = *override.MaxSizeMB
+	}
+	if override.MaxFiles != nil {
+		cfg.MaxFiles = *override.MaxFiles
+	}
+	if override.MaxAgeDays != nil {
+		cfg.MaxAgeDays = *override.MaxAgeDays
+	}
+	if override.HostPath != nil && *override.HostPath != "" {
+		resolved, err := ResolveLogHostPath(*override.HostPath)
+		if err != nil {
+			return vars.LogFileSettings{}, err
+		}
+		cfg.HostPath = resolved
+	}
+	return cfg, nil
 }
 
 // ResolveLogHostPath validates HostPath and returns a cleaned absolute path.
@@ -74,12 +113,12 @@ func ResolveLogHostPath(p string) (string, error) {
 	} else {
 		// relative → /var/log/<name>
 		if strings.ContainsAny(p, `/\`) {
-			return "", fmt.Errorf("hostPath folder name must not contain path separators, got %q; use a name like \"custom-sriov-network-operator\" or a full path under %s", p, logHostPathRoot)
+			return "", fmt.Errorf("hostPath folder name must not contain path separators, got %q; use a name like \"custom-sriov-network-operator\" or a full path under %s", p, consts.LogHostPathRoot)
 		}
 		if !logHostPathFolderNameRE.MatchString(p) {
 			return "", fmt.Errorf("hostPath folder name %q is invalid; must start with an alphanumeric character and contain only [a-zA-Z0-9._-]", p)
 		}
-		resolved = filepath.Join(logHostPathRoot, p)
+		resolved = filepath.Join(consts.LogHostPathRoot, p)
 	}
 
 	if err := checkLogHostPathAllowed(resolved); err != nil {
@@ -130,7 +169,7 @@ func resolveLogHostPathWithAncestors(original, resolved string) (string, error) 
 			return "", fmt.Errorf("hostPath cannot inspect %q: %w", cur, err)
 		}
 		// Do not walk above /var/log: a missing /var/log is fine (MkdirAll creates it).
-		if cur == logHostPathRoot || !strings.HasPrefix(cur, logHostPathRoot+string(os.PathSeparator)) {
+		if cur == consts.LogHostPathRoot || !strings.HasPrefix(cur, consts.LogHostPathRoot+string(os.PathSeparator)) {
 			return resolved, nil
 		}
 		missing = append(missing, filepath.Base(cur))
@@ -147,11 +186,11 @@ func checkLogHostPathAllowed(path string) error {
 	if path == "/" {
 		return fmt.Errorf("must not be the filesystem root")
 	}
-	if path == logHostPathRoot {
+	if path == consts.LogHostPathRoot {
 		return nil
 	}
-	if !strings.HasPrefix(path+string(os.PathSeparator), logHostPathRoot+string(os.PathSeparator)) {
-		return fmt.Errorf("must be under %s", logHostPathRoot)
+	if !strings.HasPrefix(path+string(os.PathSeparator), consts.LogHostPathRoot+string(os.PathSeparator)) {
+		return fmt.Errorf("must be under %s", consts.LogHostPathRoot)
 	}
 	return nil
 }

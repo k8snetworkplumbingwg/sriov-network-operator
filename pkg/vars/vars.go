@@ -5,7 +5,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,16 +47,8 @@ var (
 	// DpdkDrivers supported DPDK drivers for virtual functions
 	DpdkDrivers = []string{"igb_uio", "vfio-pci", "uio_pci_generic"}
 
-	// InChroot global variable to mark that the config-daemon code is inside chroot on the host file system
-	InChroot atomic.Bool
-
-	// HostFSLock serializes syscall.Chroot windows with operations that open
-	// host paths (file-log reconfigure). Held for the duration of Chroot().
-	HostFSLock sync.Mutex
-
-	// beforeChroot is an optional callback invoked by utils.Chroot before entering
-	// the chroot window (e.g. flush async file logs). Set via SetBeforeChroot.
-	beforeChroot atomic.Pointer[func()]
+	// InChroot marks that the config-daemon code is inside chroot on the host file system.
+	InChroot = false
 
 	// UsingSystemdMode global variable to mark the config-daemon is running on systemd mode
 	UsingSystemdMode = false
@@ -117,12 +108,12 @@ type LogFileSettings struct {
 // DefaultLogCfg returns production defaults.
 func DefaultLogCfg() LogFileSettings {
 	return LogFileSettings{
-		Enabled:    true,
-		MaxSizeMB:  100,
-		MaxFiles:   5,
-		MaxAgeDays: 30,
-		Compress:   true,
-		HostPath:   "/var/log/sriov-network-config-daemon",
+		Enabled:    consts.LogCfgEnabledDefault,
+		MaxSizeMB:  consts.LogCfgMaxSizeMBDefault,
+		MaxFiles:   consts.LogCfgMaxFilesDefault,
+		MaxAgeDays: consts.LogCfgMaxAgeDaysDefault,
+		Compress:   consts.LogCfgCompressDefault,
+		HostPath:   consts.LogHostPathRoot,
 	}
 }
 
@@ -131,23 +122,6 @@ func GetLogCfg() LogFileSettings { return logCfg.Load().(LogFileSettings) }
 
 // SetLogCfg replaces the current file-log settings.
 func SetLogCfg(cfg LogFileSettings) { logCfg.Store(cfg) }
-
-// SetBeforeChroot registers a callback to run immediately before syscall.Chroot.
-// Pass nil to clear. Used by the file logger to flush buffered entries.
-func SetBeforeChroot(fn func()) {
-	if fn == nil {
-		beforeChroot.Store(nil)
-		return
-	}
-	beforeChroot.Store(&fn)
-}
-
-// RunBeforeChroot invokes the registered before-chroot callback, if any.
-func RunBeforeChroot() {
-	if p := beforeChroot.Load(); p != nil && *p != nil {
-		(*p)()
-	}
-}
 
 func init() {
 	logCfg.Store(DefaultLogCfg())

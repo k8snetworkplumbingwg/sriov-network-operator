@@ -204,6 +204,11 @@ const (
 	// MellanoxFirmwareResetFeatureGate: enables the firmware reset via mstfwreset before a reboot
 	MellanoxFirmwareResetFeatureGate = "mellanoxFirmwareReset"
 
+	// DevicePluginLogRotationFeatureGate: enables injection of device-plugin log-rotation
+	// flags into the DaemonSet. Enable only once the deployed
+	// sriov-network-device-plugin image supports these flags.
+	DevicePluginLogRotationFeatureGate = "devicePluginLogRotation"
+
 	// The path to the file on the host filesystem that contains the IB GUID distribution for IB VFs
 	InfinibandGUIDConfigFilePath = SriovConfBasePath + "/infiniband/guids"
 )
