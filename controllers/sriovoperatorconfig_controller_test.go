@@ -1025,12 +1025,7 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 					os.Setenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_ENABLED", "true")
 					DeferCleanup(os.Setenv, "METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES", os.Getenv("METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES"))
 					os.Setenv("METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES", "true")
-
-					err := util.WaitForNamespacedObject(&rbacv1.Role{}, k8sClient, testNamespace, "prometheus-k8s", util.RetryInterval, util.APITimeout)
-					Expect(err).ToNot(HaveOccurred())
-
-					err = util.WaitForNamespacedObject(&rbacv1.RoleBinding{}, k8sClient, testNamespace, "prometheus-k8s", util.RetryInterval, util.APITimeout)
-					Expect(err).ToNot(HaveOccurred())
+					Expect(util.TriggerSriovOperatorConfigReconcile(k8sClient, testNamespace)).To(Succeed())
 
 					assertResourceExists(
 						schema.GroupVersionKind{
@@ -1047,6 +1042,15 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 							Version: "v1",
 						},
 						client.ObjectKey{Namespace: testNamespace, Name: "sriov-vf-rules"})
+
+					By("leaving Prometheus RBAC to the installation manifests")
+					role := &rbacv1.Role{}
+					err := k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "prometheus-k8s"}, role)
+					Expect(errors.IsNotFound(err)).To(BeTrue())
+
+					roleBinding := &rbacv1.RoleBinding{}
+					err = k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "prometheus-k8s"}, roleBinding)
+					Expect(errors.IsNotFound(err)).To(BeTrue())
 				})
 			})
 		})
@@ -1127,10 +1131,15 @@ func makeDefaultSriovOpConfig() *sriovnetworkv1.SriovOperatorConfig {
 }
 
 func assertResourceExists(gvk schema.GroupVersionKind, key client.ObjectKey) {
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(gvk)
-	err := k8sClient.Get(context.Background(), key, u)
-	Expect(err).NotTo(HaveOccurred())
+	Eventually(func() error {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		return k8sClient.Get(context.Background(), key, u)
+	}).
+		WithOffset(1).
+		WithPolling(util.RetryInterval).
+		WithTimeout(util.APITimeout).
+		Should(Succeed())
 }
 
 func assertResourceDoesNotExist(gvk schema.GroupVersionKind, key client.ObjectKey) {

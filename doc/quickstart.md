@@ -56,6 +56,22 @@ helm install -n sriov-network-operator --create-namespace \
 
 **Note:** The Helm chart is available as a container image at [ghcr.io/k8snetworkplumbingwg/sriov-network-operator-chart](https://github.com/k8snetworkplumbingwg/sriov-network-operator/pkgs/container/sriov-network-operator-chart)
 
+#### Upgrade from an older Helm release
+
+When upgrading from a version where the operator created operand RBAC
+resources at runtime, use Helm 3.17 or later with `--take-ownership` on the
+first upgrade so Helm can adopt those existing resources:
+
+```bash
+helm upgrade --take-ownership -n sriov-network-operator \
+  --reuse-values \
+  sriov-network-operator \
+  oci://ghcr.io/k8snetworkplumbingwg/sriov-network-operator-chart
+```
+
+The flag is needed only for the first such upgrade. Subsequent upgrades can use
+the normal `helm upgrade` command.
+
 #### Enable Webhooks (Optional)
 
 By default, the Helm chart disables webhooks. To enable them:

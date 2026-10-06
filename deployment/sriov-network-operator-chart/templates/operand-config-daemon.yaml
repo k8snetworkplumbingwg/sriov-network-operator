@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sriov-network-config-daemon
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sriov-network-config-daemon
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "delete"]
+- apiGroups: ["sriovnetwork.openshift.io"]
+  resources: ["sriovnetworknodestates"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["sriovnetwork.openshift.io"]
+  resources: ["sriovoperatorconfigs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["sriovnetwork.openshift.io"]
+  resources: ["sriovnetworknodestates/status"]
+  verbs: ["patch"]
+- apiGroups: ["security.openshift.io"]
+  resourceNames: ["privileged"]
+  resources: ["securitycontextconstraints"]
+  verbs: ["use"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "update"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update"]
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sriov-network-config-daemon
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sriov-network-config-daemon
+subjects:
+- kind: ServiceAccount
+  name: sriov-network-config-daemon
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sriov-network-config-daemon
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["config.openshift.io"]
+  resources: ["infrastructures"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sriov-network-config-daemon
+  labels:
+  {{- include "sriov-network-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sriov-network-config-daemon
+subjects:
+- kind: ServiceAccount
+  name: sriov-network-config-daemon
+  namespace: {{ .Release.Namespace }}

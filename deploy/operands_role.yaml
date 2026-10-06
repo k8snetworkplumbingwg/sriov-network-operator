@@ -1,0 +1,83 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: network-resources-injector
+  namespace: $NAMESPACE
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["watch", "list", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sriov-network-config-daemon
+  namespace: $NAMESPACE
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "delete"]
+- apiGroups: ["sriovnetwork.openshift.io"]
+  resources: ["sriovnetworknodestates"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["sriovnetwork.openshift.io"]
+  resources: ["sriovoperatorconfigs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["sriovnetwork.openshift.io"]
+  resources: ["sriovnetworknodestates/status"]
+  verbs: ["patch"]
+- apiGroups: ["security.openshift.io"]
+  resourceNames: ["privileged"]
+  resources: ["securitycontextconstraints"]
+  verbs: ["use"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "update"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update"]
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: operator-webhook-sa
+  namespace: $NAMESPACE
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: metrics-exporter-role
+  namespace: $NAMESPACE
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resourceNames: ["privileged"]
+    resources: ["securitycontextconstraints"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sriov-plugin
+  namespace: $NAMESPACE
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resourceNames: ["privileged"]
+    resources: ["securitycontextconstraints"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sriov-device-plugin-pod-access
+  namespace: $NAMESPACE
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "update", "patch"]
