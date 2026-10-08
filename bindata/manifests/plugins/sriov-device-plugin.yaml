@@ -73,6 +73,12 @@ spec:
         - --log-level=10
         - --resource-prefix={{.ResourcePrefix}}
         - --config-file=/etc/pcidp/$(NODE_NAME)
+        {{- if .DevicePluginLogEnabled }}
+        - --log_dir=/var/log/sriovdp
+        - --log-max-size={{.DevicePluginLogMaxSizeMB}}
+        - --log-max-files={{.DevicePluginLogMaxFiles}}
+        - --log-max-age={{.DevicePluginLogMaxAgeDays}}
+        {{- end }}
         {{- if .UseCDI }}
         - --use-cdi
         {{- end }}
@@ -81,6 +87,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        {{- if .DevicePluginLogEnabled }}
+        - name: SRIOV_DP_LOG_HOST_PATH
+          value: "{{.DevicePluginLogHostPath}}"
+        {{- end }}
         securityContext:
           privileged: true
           readOnlyRootFilesystem: true
@@ -95,6 +105,10 @@ spec:
         - name: plugins-registry
           mountPath: /var/lib/kubelet/plugins_registry
           readOnly: false
+        {{- if .DevicePluginLogEnabled }}
+        - name: log
+          mountPath: /var/log/sriovdp
+        {{- end }}
         - name: config-volume
           mountPath: /etc/pcidp/
           readOnly: true
@@ -111,6 +125,12 @@ spec:
         - name: plugins-registry
           hostPath:
             path: /var/lib/kubelet/plugins_registry
+        {{- if .DevicePluginLogEnabled }}
+        - name: log
+          hostPath:
+            path: {{.DevicePluginLogHostPath}}
+            type: DirectoryOrCreate
+        {{- end }}
         - name: config-volume
           configMap:
             name: device-plugin-config

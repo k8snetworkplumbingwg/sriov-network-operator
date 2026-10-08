@@ -147,7 +147,7 @@ func newDelegateToV1AdmitHandler(f admitv1Func) admitHandler {
 
 func runStartCmd(cmd *cobra.Command, args []string) {
 	// init logger
-	snolog.InitLog()
+	snolog.InitLogConsole()
 	setupLog := log.Log.WithName("sriov-network-operator-webhook")
 
 	setupLog.Info("Run sriov-network-operator-webhook")

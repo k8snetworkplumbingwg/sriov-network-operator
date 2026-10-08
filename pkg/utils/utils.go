@@ -58,10 +58,13 @@ func (u *utilsHelper) Chroot(path string) (func() error, error) {
 	return func() error {
 		defer root.Close()
 		if err := root.Chdir(); err != nil {
-			return err
+			return fmt.Errorf("failed to chdir to original root before leaving chroot: %w", err)
+		}
+		if err := syscall.Chroot("."); err != nil {
+			return fmt.Errorf("failed to leave chroot: %w", err)
 		}
 		vars.InChroot = false
-		return syscall.Chroot(".")
+		return nil
 	}, nil
 }
 

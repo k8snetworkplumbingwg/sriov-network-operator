@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	errs "github.com/pkg/errors"
@@ -193,6 +194,18 @@ func syncPluginDaemonObjs(ctx context.Context,
 	data.Data["NodeSelectorField"] = GetNodeSelectorForDevicePlugin(dc)
 	data.Data["UseCDI"] = dc.Spec.UseCDI
 	data.Data["BlockDevicePluginUntilConfigured"] = featureGate.IsEnabled(constants.BlockDevicePluginUntilConfiguredFeatureGate)
+
+	logCfg, err := sriovnetworkv1.GetEffectiveDevicePluginLogConfig(dc.Spec.LogConfig)
+	if err != nil {
+		logger.Error(err, "invalid device-plugin log configuration")
+		return fmt.Errorf("invalid device-plugin log configuration: %w", err)
+	}
+	data.Data["DevicePluginLogHostPath"] = filepath.Join(logCfg.HostPath, constants.DevicePluginLogSubDir)
+	data.Data["DevicePluginLogEnabled"] = logCfg.Enabled
+	data.Data["DevicePluginLogMaxSizeMB"] = logCfg.MaxSizeMB
+	data.Data["DevicePluginLogMaxFiles"] = logCfg.MaxFiles
+	data.Data["DevicePluginLogMaxAgeDays"] = logCfg.MaxAgeDays
+
 	objs, err := renderDsForCR(constants.PluginPath, &data, renderFn)
 	if err != nil {
 		logger.Error(err, "Fail to render SR-IoV manifests")

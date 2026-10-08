@@ -82,7 +82,7 @@ func main() {
 
 	snolog.BindFlags(flag.CommandLine)
 	flag.Parse()
-	snolog.InitLog()
+	snolog.InitLogConsole()
 
 	restConfig := ctrl.GetConfigOrDie()
 

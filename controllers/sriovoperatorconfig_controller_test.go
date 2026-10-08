@@ -1111,6 +1111,216 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			}, "1s").Should(Succeed())
 		})
 	})
+
+	Context("LogConfig", func() {
+		It("should add log volume mounts to sriov-device-plugin when logConfig.enabled is true", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			enabled := true
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled}}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-device-plugin", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check args contain log_dir
+				args := strings.Join(daemonSet.Spec.Template.Spec.Containers[0].Args, " ")
+				g.Expect(args).To(ContainSubstring("--log_dir=/var/log/sriovdp"))
+
+				// Check volume mount exists
+				var hasLogMount bool
+				for _, vm := range daemonSet.Spec.Template.Spec.Containers[0].VolumeMounts {
+					if vm.MountPath == "/var/log/sriovdp" {
+						hasLogMount = true
+						break
+					}
+				}
+				g.Expect(hasLogMount).To(BeTrue(), "log volume mount should exist")
+
+				// Check volume exists
+				var hasLogVolume bool
+				for _, v := range daemonSet.Spec.Template.Spec.Volumes {
+					if v.Name == "log" && v.HostPath != nil {
+						hasLogVolume = true
+						g.Expect(v.HostPath.Path).To(Equal("/var/log/sriovdp"))
+						break
+					}
+				}
+				g.Expect(hasLogVolume).To(BeTrue(), "log volume should exist")
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should add log volume mounts to sriov-network-config-daemon when logConfig.enabled is true", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			enabled := true
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled}}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-network-config-daemon", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check volume mount exists for config daemon logs
+				var hasLogMount bool
+				for _, vm := range daemonSet.Spec.Template.Spec.Containers[0].VolumeMounts {
+					if vm.MountPath == "/var/log/sriov-network-config-daemon" {
+						hasLogMount = true
+						break
+					}
+				}
+				g.Expect(hasLogMount).To(BeTrue(), "config daemon log volume mount should exist")
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should remove log volume mounts from sriov-device-plugin when logConfig.enabled is false", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			// First enable logging
+			enabled := true
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled}}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Wait for volume mount to appear
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-device-plugin", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+				args := strings.Join(daemonSet.Spec.Template.Spec.Containers[0].Args, " ")
+				g.Expect(args).To(ContainSubstring("--log_dir"))
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+
+			// Now disable logging
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+			disabled := false
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &disabled}}
+			err = k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-device-plugin", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check args do NOT contain log_dir
+				args := strings.Join(daemonSet.Spec.Template.Spec.Containers[0].Args, " ")
+				g.Expect(args).NotTo(ContainSubstring("--log_dir"))
+
+				// Check volume mount does NOT exist
+				for _, vm := range daemonSet.Spec.Template.Spec.Containers[0].VolumeMounts {
+					g.Expect(vm.MountPath).NotTo(Equal("/var/log/sriovdp"), "log volume mount should not exist when disabled")
+				}
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should use custom hostPath for device-plugin when devicePlugin.hostPath is set", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			enabled := true
+			customPath := "custom-dp-logs"
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{
+				ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled},
+				DevicePlugin: &sriovnetworkv1.ComponentLogConfig{
+					HostPath: &customPath,
+				},
+			}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-device-plugin", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Check volume uses custom host path
+				for _, v := range daemonSet.Spec.Template.Spec.Volumes {
+					if v.Name == "log" && v.HostPath != nil {
+						g.Expect(v.HostPath.Path).To(Equal("/var/log/custom-dp-logs/sriovdp"))
+						return
+					}
+				}
+				g.Expect(false).To(BeTrue(), "log volume with custom path not found")
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should allow devicePlugin to disable logging when global is enabled", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			enabled := true
+			disabled := false
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{
+				ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled},
+				DevicePlugin: &sriovnetworkv1.ComponentLogConfig{
+					Enabled: &disabled,
+				},
+			}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-device-plugin", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Device plugin should NOT have log args
+				args := strings.Join(daemonSet.Spec.Template.Spec.Containers[0].Args, " ")
+				g.Expect(args).NotTo(ContainSubstring("--log_dir"))
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+
+			// Config daemon should still have logging enabled
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-network-config-daemon", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var hasLogMount bool
+				for _, vm := range daemonSet.Spec.Template.Spec.Containers[0].VolumeMounts {
+					if vm.MountPath == "/var/log/sriov-network-config-daemon" {
+						hasLogMount = true
+						break
+					}
+				}
+				g.Expect(hasLogMount).To(BeTrue(), "config daemon should still have logging enabled")
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+
+		It("should set SRIOV_DP_LOG_HOST_PATH env var when logging is enabled", func() {
+			config := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "default"}, config)).NotTo(HaveOccurred())
+
+			enabled := true
+			config.Spec.LogConfig = &sriovnetworkv1.LogConfig{ComponentLogConfig: sriovnetworkv1.ComponentLogConfig{Enabled: &enabled}}
+			err := k8sClient.Update(ctx, config)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				daemonSet := &appsv1.DaemonSet{}
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: "sriov-device-plugin", Namespace: testNamespace}, daemonSet)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var hasEnvVar bool
+				for _, env := range daemonSet.Spec.Template.Spec.Containers[0].Env {
+					if env.Name == "SRIOV_DP_LOG_HOST_PATH" {
+						hasEnvVar = true
+						g.Expect(env.Value).To(Equal("/var/log/sriovdp"))
+						break
+					}
+				}
+				g.Expect(hasEnvVar).To(BeTrue(), "SRIOV_DP_LOG_HOST_PATH env var should be set")
+			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+		})
+	})
 })
 
 func makeDefaultSriovOpConfig() *sriovnetworkv1.SriovOperatorConfig {
