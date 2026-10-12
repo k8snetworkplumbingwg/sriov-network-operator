@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	dptypes "github.com/k8snetworkplumbingwg/sriov-network-device-plugin/pkg/types"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -773,5 +775,170 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 			Expect(selectors).To(HaveKeyWithValue("resvfiopci", `{"vendors":["8086"],"pfNames":["ens0#0-9"],"IsRdma":false,"NeedVhostNet":false}`))
 			Expect(selectors).To(HaveKeyWithValue("resnetdevice", `{"vendors":["8086"],"pfNames":["ens0#10-19"],"IsRdma":false,"NeedVhostNet":false}`))
 		})
+	})
+	Context("NodeState source revisions", func() {
+		It("records current source revisions even when the rendered spec is unchanged", func() {
+			ctx := context.Background()
+			node := testManagedNode("worker1")
+			policy := sriovnetworkv1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: vars.Namespace},
+				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+					ResourceName: "resource", NumVfs: 2, NodeSelector: map[string]string{},
+					NicSelector: sriovnetworkv1.SriovNetworkNicSelector{PfNames: []string{"ens1"}},
+				},
+			}
+			pool := &sriovnetworkv1.SriovNetworkPoolConfig{ObjectMeta: metav1.ObjectMeta{
+				Name: "pool", Namespace: vars.Namespace,
+			}}
+			state := &sriovnetworkv1.SriovNetworkNodeState{ObjectMeta: metav1.ObjectMeta{
+				Name: node.Name, Namespace: vars.Namespace,
+			}}
+			state.Status.Interfaces = sriovnetworkv1.InterfaceExts{{Name: "ens1", PciAddress: "0000:01:00.0"}}
+			config := testOperatorConfig()
+			createAggregateObjects(node, config, &policy)
+			createDrainOnlyPool(pool)
+			status := state.Status
+			createAggregateObjects(state)
+			state.Status = status
+			Expect(k8sClient.Status().Update(ctx, state)).To(Succeed())
+			c := k8sClient
+			r := &SriovNetworkNodePolicyReconciler{Client: c, Scheme: c.Scheme()}
+			ns := &sriovnetworkv1.SriovNetworkNodeState{ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: vars.Namespace}}
+			Expect(pool.SetRevisionOnObject(ns)).To(Succeed())
+			policies := &sriovnetworkv1.SriovNetworkNodePolicyList{Items: []sriovnetworkv1.SriovNetworkNodePolicy{policy}}
+			Expect(r.syncSriovNetworkNodeState(ctx, config, policies, ns, node)).To(Succeed())
+			latest := &sriovnetworkv1.SriovNetworkNodeState{}
+			Expect(c.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: vars.Namespace}, latest)).To(Succeed())
+			Expect(policy.RevisionMatchesInNodeState(latest)).To(BeTrue())
+			Expect(pool.RevisionMatchesInObject(latest)).To(BeTrue())
+			previousSpec := latest.DeepCopy().Spec
+			previousGeneration := latest.Generation
+			policy.Spec.Priority++
+			Expect(c.Update(ctx, &policy)).To(Succeed())
+			policies.Items[0] = policy
+			Expect(r.syncSriovNetworkNodeState(ctx, config, policies, ns, node)).To(Succeed())
+			Expect(c.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: vars.Namespace}, latest)).To(Succeed())
+			Expect(policy.RevisionMatchesInNodeState(latest)).To(BeTrue())
+			Expect(latest.Spec).To(Equal(previousSpec))
+			Expect(latest.Generation).To(Equal(previousGeneration))
+		})
+
+		It("replaces policy and pool membership", func() {
+			ctx := context.Background()
+			node := testManagedNode("worker1")
+			first := sriovnetworkv1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "first", Namespace: vars.Namespace},
+				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+					ResourceName: "first", NumVfs: 2, Priority: 99,
+					NodeSelector: map[string]string{"policy-group": "a"},
+					NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{PfNames: []string{"ens1#0-0"}},
+				},
+			}
+			second := *first.DeepCopy()
+			second.Name, second.Spec.ResourceName = "second", "second"
+			second.Spec.NicSelector.PfNames = []string{"ens1#1-1"}
+			firstPool := &sriovnetworkv1.SriovNetworkPoolConfig{ObjectMeta: metav1.ObjectMeta{
+				Name: "first-pool", Namespace: vars.Namespace,
+			}}
+			secondPool := firstPool.DeepCopy()
+			secondPool.Name = "second-pool"
+			state := &sriovnetworkv1.SriovNetworkNodeState{
+				ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: vars.Namespace,
+					Annotations: map[string]string{"unrelated": "preserved"}},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
+					Interfaces: sriovnetworkv1.InterfaceExts{{Name: "ens1", PciAddress: "0000:01:00.0"}},
+					Conditions: []metav1.Condition{{Type: sriovnetworkv1.ConditionReady, Status: metav1.ConditionTrue,
+						Reason: sriovnetworkv1.ReasonNodeReady, ObservedGeneration: 1, LastTransitionTime: metav1.Now()}},
+				},
+			}
+			config := testOperatorConfig()
+			createAggregateObjects(node, config, &first, &second)
+			createDrainOnlyPool(firstPool)
+			createDrainOnlyPool(secondPool)
+			status := state.Status
+			createAggregateObjects(state)
+			state.Status = status
+			Expect(k8sClient.Status().Update(ctx, state)).To(Succeed())
+			moved := *second.DeepCopy()
+			moved.Spec.NodeSelector["policy-group"] = "b"
+			c := k8sClient
+			r := &SriovNetworkNodePolicyReconciler{Client: c, Scheme: c.Scheme()}
+			steps := []struct {
+				name      string
+				group     string
+				policies  []sriovnetworkv1.SriovNetworkNodePolicy
+				pool      *sriovnetworkv1.SriovNetworkPoolConfig
+				resources []string
+			}{
+				{"add first policy", "a", []sriovnetworkv1.SriovNetworkNodePolicy{first}, firstPool, []string{"first"}},
+				{"add partition policy", "a", []sriovnetworkv1.SriovNetworkNodePolicy{first, second}, firstPool, []string{"first", "second"}},
+				{"remove first policy", "a", []sriovnetworkv1.SriovNetworkNodePolicy{second}, firstPool, []string{"second"}},
+				{"move node out of policy", "b", []sriovnetworkv1.SriovNetworkNodePolicy{second}, secondPool, nil},
+				{"move to another policy and pool", "b", []sriovnetworkv1.SriovNetworkNodePolicy{first, moved}, secondPool, []string{"second"}},
+				{"remove all policies and pool", "b", nil, nil, nil},
+			}
+			for _, step := range steps {
+				By(step.name)
+				if step.name == "move to another policy and pool" {
+					Expect(c.Update(ctx, &moved)).To(Succeed())
+					step.policies[1] = moved
+				}
+				node.Labels["policy-group"] = step.group
+				Expect(c.Update(ctx, node)).To(Succeed())
+				previousSpec := state.DeepCopy().Spec
+				desired := &sriovnetworkv1.SriovNetworkNodeState{ObjectMeta: metav1.ObjectMeta{
+					Name: node.Name, Namespace: vars.Namespace,
+				}}
+				Expect(step.pool.SetRevisionOnObject(desired)).To(Succeed())
+				Expect(r.syncSriovNetworkNodeState(ctx, config,
+					&sriovnetworkv1.SriovNetworkNodePolicyList{Items: step.policies}, desired, node)).To(Succeed())
+				Expect(c.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: vars.Namespace}, state)).To(Succeed())
+				var resources []string
+				for _, iface := range state.Spec.Interfaces {
+					for _, group := range iface.VfGroups {
+						resources = append(resources, group.ResourceName)
+					}
+				}
+				slices.Sort(resources)
+				Expect(resources).To(Equal(step.resources))
+				for _, policy := range []sriovnetworkv1.SriovNetworkNodePolicy{first, second, moved} {
+					want := slices.ContainsFunc(step.policies, func(current sriovnetworkv1.SriovNetworkNodePolicy) bool {
+						return current.Name == policy.Name && current.Generation == policy.Generation && current.Selected(node)
+					})
+					Expect(policy.RevisionMatchesInNodeState(state)).To(Equal(want), "policy %s generation %d", policy.Name, policy.Generation)
+				}
+				if step.pool == nil {
+					Expect(state.Annotations).NotTo(HaveKey(consts.PoolRevisionAnnotation))
+				} else {
+					Expect(step.pool.RevisionMatchesInObject(state)).To(BeTrue())
+				}
+				Expect(state.Annotations).To(HaveKeyWithValue("unrelated", "preserved"))
+				specChanged := !equality.Semantic.DeepEqual(previousSpec, state.Spec)
+				assertPolicies := func(applied bool) {
+					for i := range step.policies {
+						policy := &step.policies[i]
+						var matched, ready int32
+						wantStatus, reason := metav1.ConditionFalse, sriovnetworkv1.ReasonNoMatchingNodes
+						if policy.Selected(node) {
+							matched, reason = 1, sriovnetworkv1.ReasonApplyingConfiguration
+							if applied {
+								ready, wantStatus, reason = 1, metav1.ConditionTrue, sriovnetworkv1.ReasonPolicyReady
+							}
+						}
+						result := policyStatus(ctx, c, policy)
+						Expect(result.matched).To(Equal(&matched))
+						Expect(result.ready).To(Equal(&ready))
+						Expect(result.condition.Status).To(Equal(wantStatus))
+						Expect(result.condition.Reason).To(Equal(reason))
+						Expect(result.condition.ObservedGeneration).To(Equal(policy.Generation))
+					}
+				}
+				assertPolicies(!specChanged)
+				state.Status.Conditions[0].ObservedGeneration = state.Generation
+				Expect(c.Status().Update(ctx, state)).To(Succeed())
+				assertPolicies(true)
+			}
+		})
+
 	})
 })
