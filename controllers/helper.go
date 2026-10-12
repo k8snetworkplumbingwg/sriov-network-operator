@@ -62,6 +62,9 @@ var (
 )
 
 const (
+	linuxOSLabelValue                     = "linux"
+	workerNodeLabelKey                    = "node-role.kubernetes.io/worker"
+	kubernetesOSLabelKey                  = "kubernetes.io/os"
 	clusterRoleResourceName               = "ClusterRole"
 	clusterRoleBindingResourceName        = "ClusterRoleBinding"
 	mutatingWebhookConfigurationCRDName   = "MutatingWebhookConfiguration"
@@ -149,20 +152,20 @@ func formatJSON(str string) (string, error) {
 	return prettyJSON.String(), nil
 }
 
-// GetDefaultNodeSelector return a nodeSelector with worker and linux os
+// GetDefaultNodeSelector returns a selector for worker nodes running Linux.
 func GetDefaultNodeSelector() map[string]string {
 	return map[string]string{
-		"node-role.kubernetes.io/worker": "",
-		"kubernetes.io/os":               "linux",
+		workerNodeLabelKey:   "",
+		kubernetesOSLabelKey: linuxOSLabelValue,
 	}
 }
 
-// GetDefaultNodeSelectorForDevicePlugin return a nodeSelector with worker linux os
-// and the enabled sriov device plugin
+// GetNodeSelectorForDevicePlugin returns the node selector for the SR-IOV device plugin.
+// It uses the configured daemon selector when present and always requires the plugin enabled.
 func GetNodeSelectorForDevicePlugin(dc *sriovnetworkv1.SriovOperatorConfig) map[string]string {
 	if len(dc.Spec.ConfigDaemonNodeSelector) == 0 {
 		return map[string]string{
-			"kubernetes.io/os":               "linux",
+			kubernetesOSLabelKey:             linuxOSLabelValue,
 			constants.SriovDevicePluginLabel: constants.SriovDevicePluginLabelEnabled,
 		}
 	}

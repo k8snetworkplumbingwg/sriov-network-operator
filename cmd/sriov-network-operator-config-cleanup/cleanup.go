@@ -19,6 +19,8 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
+const defaultOperatorConfigName = "default"
+
 var (
 	namespace string
 	watchTO   int
@@ -37,6 +39,7 @@ func init() {
 	vars.Scheme = newScheme
 }
 
+// runCleanupCmd deletes the default SriovOperatorConfig in the configured namespace and waits for its removal.
 func runCleanupCmd(cmd *cobra.Command, args []string) error {
 	// init logger
 	snolog.InitLog()
@@ -54,7 +57,7 @@ func runCleanupCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	operatorConfig := &sriovnetworkv1.SriovOperatorConfig{}
-	err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "default"}, operatorConfig)
+	err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: defaultOperatorConfigName}, operatorConfig)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil
@@ -73,7 +76,7 @@ func runCleanupCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	for {
-		err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "default"}, operatorConfig)
+		err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: defaultOperatorConfigName}, operatorConfig)
 		if err != nil {
 			if errors.IsNotFound(err) {
 				break

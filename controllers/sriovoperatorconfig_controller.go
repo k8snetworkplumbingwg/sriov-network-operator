@@ -58,6 +58,11 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
+const (
+	admissionRegistrationGroupName  = "admissionregistration.k8s.io"
+	admissionRegistrationAPIVersion = "v1"
+)
+
 var errSystemdModeOnHypershift = errors.New("systemd mode is not supported on hypershift")
 
 // SriovOperatorConfigReconciler reconciles a SriovOperatorConfig object
@@ -693,6 +698,8 @@ func (r *SriovOperatorConfigReconciler) handleSriovOperatorConfigDeletion(ctx co
 	return reconcile.Result{}, err
 }
 
+// setLabelInsideObject applies the config daemon node selector to rendered
+// MachineConfig objects, then synchronizes all rendered objects.
 func (r SriovOperatorConfigReconciler) setLabelInsideObject(ctx context.Context, cr *sriovnetworkv1.SriovOperatorConfig, objs []*uns.Unstructured) error {
 	logger := log.Log.WithName("setLabelInsideObject")
 	for _, obj := range objs {
@@ -721,24 +728,26 @@ func (r SriovOperatorConfigReconciler) setLabelInsideObject(ctx context.Context,
 	return nil
 }
 
+// deleteAllWebhooks removes the operator and injector webhook configurations,
+// returning any errors encountered while deleting them.
 func (r SriovOperatorConfigReconciler) deleteAllWebhooks(ctx context.Context) error {
 	var err error
 	obj := &uns.Unstructured{}
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Version: "v1"})
+	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: admissionRegistrationGroupName, Kind: mutatingWebhookConfigurationCRDName, Version: admissionRegistrationAPIVersion})
 	obj.SetName(consts.OperatorWebHookName)
 	err = errors.Join(
 		err, r.deleteWebhookObject(ctx, obj),
 	)
 
 	obj = &uns.Unstructured{}
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Version: "v1"})
+	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: admissionRegistrationGroupName, Kind: "ValidatingWebhookConfiguration", Version: admissionRegistrationAPIVersion})
 	obj.SetName(consts.OperatorWebHookName)
 	err = errors.Join(
 		err, r.deleteWebhookObject(ctx, obj),
 	)
 
 	obj = &uns.Unstructured{}
-	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Version: "v1"})
+	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: admissionRegistrationGroupName, Kind: mutatingWebhookConfigurationCRDName, Version: admissionRegistrationAPIVersion})
 	obj.SetName(consts.InjectorWebHookName)
 	err = errors.Join(
 		err, r.deleteWebhookObject(ctx, obj),

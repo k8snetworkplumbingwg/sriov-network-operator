@@ -64,15 +64,8 @@ type SriovNetworkNodePolicyReconciler struct {
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=sriovnetwork.openshift.io,resources=sriovnetworknodepolicies/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the SriovNetworkNodePolicy object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.8.3/pkg/reconcile
+// Reconcile handles the synthetic policy sync request by syncing node states and
+// device-plugin configuration, then schedules another sync after the resync period.
 func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Only handle node-policy-sync-event
 	if req.Name != nodePolicySyncEventName || req.Namespace != "" {
@@ -108,8 +101,8 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 	// Fetch the Nodes
 	nodeList := &corev1.NodeList{}
 	lo := &client.MatchingLabels{
-		"node-role.kubernetes.io/worker": "",
-		"kubernetes.io/os":               "linux",
+		workerNodeLabelKey:   "",
+		kubernetesOSLabelKey: linuxOSLabelValue,
 	}
 	if len(defaultOpConf.Spec.ConfigDaemonNodeSelector) > 0 {
 		labels := client.MatchingLabels(defaultOpConf.Spec.ConfigDaemonNodeSelector)
@@ -210,6 +203,8 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
+// syncDevicePluginConfigMap builds the device plugin configuration for each node,
+// sets its enabled or disabled label, and creates or updates the shared ConfigMap.
 func (r *SriovNetworkNodePolicyReconciler) syncDevicePluginConfigMap(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig,
 	pl *sriovnetworkv1.SriovNetworkNodePolicyList, nl *corev1.NodeList) error {
 	logger := log.Log.WithName("syncDevicePluginConfigMap")
@@ -254,7 +249,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncDevicePluginConfigMap(ctx context
 
 	cm := &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "v1",
+			APIVersion: corev1.SchemeGroupVersion.Version,
 			Kind:       "ConfigMap",
 		},
 		ObjectMeta: metav1.ObjectMeta{

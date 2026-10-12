@@ -10,12 +10,22 @@ import (
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 )
 
-var (
-	defaultPriorityPatch  = map[string]interface{}{"op": "add", "path": "/spec/priority", "value": 99}
-	defaultIsRdmaPatch    = map[string]interface{}{"op": "add", "path": "/spec/isRdma", "value": false}
-	InfiniBandIsRdmaPatch = map[string]interface{}{"op": "add", "path": "/spec/isRdma", "value": true}
+const (
+	patchOperationAdd = "add"
+	patchOperationKey = "op"
+	patchPathKey      = "path"
+	patchValueKey     = "value"
+	isRdmaPatchPath   = "/spec/isRdma"
 )
 
+var (
+	defaultPriorityPatch  = map[string]interface{}{patchOperationKey: patchOperationAdd, patchPathKey: "/spec/priority", patchValueKey: 99}
+	defaultIsRdmaPatch    = map[string]interface{}{patchOperationKey: patchOperationAdd, patchPathKey: isRdmaPatchPath, patchValueKey: false}
+	InfiniBandIsRdmaPatch = map[string]interface{}{patchOperationKey: patchOperationAdd, patchPathKey: isRdmaPatchPath, patchValueKey: true}
+)
+
+// mutateSriovNetworkNodePolicy adds default policy values and enables RDMA for
+// InfiniBand policies that do not use the vfio-pci device type.
 func mutateSriovNetworkNodePolicy(cr map[string]interface{}) (*v1.AdmissionResponse, error) {
 	log.Log.V(2).Info("mutateSriovNetworkNodePolicy(): set default value")
 	reviewResponse := v1.AdmissionResponse{}

@@ -26,12 +26,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const (
+	groupName  = "sriovnetwork.openshift.io"
+	apiVersion = "v1"
+)
+
 var (
 	// GroupVersion is group version used to register these objects
-	GroupVersion = schema.GroupVersion{Group: "sriovnetwork.openshift.io", Version: "v1"}
+	GroupVersion = schema.GroupVersion{Group: groupName, Version: apiVersion}
 
 	// SchemeGroupVersion is group version used to register these objects
-	SchemeGroupVersion = schema.GroupVersion{Group: "sriovnetwork.openshift.io", Version: "v1"}
+	SchemeGroupVersion = schema.GroupVersion{Group: groupName, Version: apiVersion}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
 	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)

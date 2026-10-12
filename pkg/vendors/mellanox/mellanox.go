@@ -47,6 +47,8 @@ const (
 	LinkTypeP1            = "LINK_TYPE_P1"
 	LinkTypeP2            = "LINK_TYPE_P2"
 	MellanoxVendorID      = "15b3"
+	deviceFlag            = "-d"
+	confirmationFlag      = "-y"
 )
 
 type MlxNic struct {
@@ -78,13 +80,16 @@ func New(utilsHelper utils.CmdInterface, hostHelper host.HostManagerInterface) M
 	}
 }
 
+// MstConfigReadData runs mstconfig to read the firmware configuration for a PCI device.
 func (m *mellanoxHelper) MstConfigReadData(pciAddress string) (string, string, error) {
 	log.Log.Info("MstConfigReadData()", "device", pciAddress)
-	args := []string{"-e", "-d", pciAddress, "q"}
+	args := []string{"-e", deviceFlag, pciAddress, "q"}
 	stdout, stderr, err := m.utils.RunCommand("mstconfig", args...)
 	return stdout, stderr, err
 }
 
+// GetMellanoxBlueFieldMode reports whether a device is in BlueField DPU or
+// ConnectX mode based on its mstconfig firmware data.
 func (m *mellanoxHelper) GetMellanoxBlueFieldMode(PciAddress string) (BlueFieldMode, error) {
 	log.Log.V(2).Info("MellanoxBlueFieldMode(): checking mode for device", "device", PciAddress)
 	stdout, stderr, err := m.MstConfigReadData(PciAddress)
@@ -147,6 +152,9 @@ func (m *mellanoxHelper) GetMellanoxBlueFieldMode(PciAddress string) (BlueFieldM
 	return -1, fmt.Errorf("MellanoxBlueFieldMode(): unknown device status for %s", PciAddress)
 }
 
+// MlxResetFW disables SR-IOV VFs for the requested Mellanox devices, then
+// invokes mstfwreset for each device. Reset command failures are logged and
+// processing continues; failures disabling VFs are returned immediately.
 func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) error {
 	log.Log.Info("mellanox-plugin resetFW()")
 	var errs []error
@@ -166,7 +174,7 @@ func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus ma
 			}
 		}
 
-		cmdArgs := []string{"-d", pciAddress, "--skip_driver", "-l", "3", "-y", "reset"}
+		cmdArgs := []string{deviceFlag, pciAddress, "--skip_driver", "-l", "3", confirmationFlag, "reset"}
 		log.Log.Info("mellanox-plugin: resetFW()", "cmd-args", cmdArgs)
 		// We have to ensure that pciutils is installed into the container image Dockerfile.sriov-network-config-daemon
 		_, stderr, err := m.utils.RunCommand("mstfwreset", cmdArgs...)
@@ -178,6 +186,8 @@ func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus ma
 	return kerrors.NewAggregate(errs)
 }
 
+// MlxConfigFW applies the requested firmware settings to each Mellanox device
+// using mstconfig. It rejects firmware changes for devices in BlueField DPU mode.
 func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error {
 	log.Log.Info("mellanox-plugin configFW()")
 	for pciAddr, fwArgs := range attributesToChange {
@@ -190,7 +200,7 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 			// Host reboot won't re-load NIC firmware in DPU mode. To apply FW changes power cycle is required or mstfwreset could be used.
 			return errors.Errorf("NIC %s is in DPU mode. Firmware configuration changes are not supported in this mode.", pciAddr)
 		}
-		cmdArgs := []string{"-d", pciAddr, "-y", "set"}
+		cmdArgs := []string{deviceFlag, pciAddr, confirmationFlag, "set"}
 		if fwArgs.EnableSriov {
 			cmdArgs = append(cmdArgs, fmt.Sprintf("%s=True", EnableSriov))
 		} else if fwArgs.TotalVfs == 0 {

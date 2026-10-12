@@ -29,10 +29,12 @@ var (
 	tlsCurvePreferences string
 )
 
+const startCommandDescription = "Starts Webhook Daemon"
+
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Starts Webhook Daemon",
-	Long:  "Starts Webhook Daemon",
+	Short: startCommandDescription,
+	Long:  startCommandDescription,
 	Run:   runStartCmd,
 }
 

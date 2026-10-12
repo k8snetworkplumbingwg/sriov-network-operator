@@ -76,14 +76,14 @@ func (fg *featureGate) Init(features map[string]bool) {
 	fg.state = state
 }
 
-// String returns string representation of the features state
+// String returns the feature states as comma-separated name:value pairs.
 func (fg *featureGate) String() string {
 	fg.lock.RLock()
 	defer fg.lock.RUnlock()
 	var result strings.Builder
 	var sep string
 	for k, v := range fg.state {
-		result.WriteString(fmt.Sprintf("%s%s:%t", sep, k, v))
+		fmt.Fprintf(&result, "%s%s:%t", sep, k, v)
 		sep = ", "
 	}
 	return result.String()

@@ -28,6 +28,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	apiVersionKey = "apiVersion"
+	kindKey       = "kind"
+	metadataKey   = "metadata"
+	nameKey       = "name"
+	namespaceKey  = "namespace"
+	statusKey     = "status"
+)
+
 // Interface provides methods for applying resource status using Server-Side Apply
 // and emitting events for condition transitions.
 type Interface interface {
@@ -213,13 +222,13 @@ func (p *Patcher) buildStatusApplyConfiguration(obj client.Object, statusFields 
 
 	u := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": gvk.GroupVersion().String(),
-			"kind":       gvk.Kind,
-			"metadata": map[string]interface{}{
-				"name":      obj.GetName(),
-				"namespace": obj.GetNamespace(),
+			apiVersionKey: gvk.GroupVersion().String(),
+			kindKey:       gvk.Kind,
+			metadataKey: map[string]interface{}{
+				nameKey:      obj.GetName(),
+				namespaceKey: obj.GetNamespace(),
 			},
-			"status": statusMap,
+			statusKey: statusMap,
 		},
 	}
 
@@ -259,13 +268,13 @@ func (p *Patcher) buildConditionApplyConfiguration(obj client.Object, conditions
 
 	u := &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": gvk.GroupVersion().String(),
-			"kind":       gvk.Kind,
-			"metadata": map[string]interface{}{
-				"name":      obj.GetName(),
-				"namespace": obj.GetNamespace(),
+			apiVersionKey: gvk.GroupVersion().String(),
+			kindKey:       gvk.Kind,
+			metadataKey: map[string]interface{}{
+				nameKey:      obj.GetName(),
+				namespaceKey: obj.GetNamespace(),
 			},
-			"status": map[string]interface{}{
+			statusKey: map[string]interface{}{
 				"conditions": conditionsSlice,
 			},
 		},

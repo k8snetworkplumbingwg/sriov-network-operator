@@ -34,9 +34,7 @@ updates:
       k8s-dependencies:
         patterns:
           - "k8s.io/*"
-      controller-runtime-dependencies:
-        patterns:
-          - "sigs.k8s.io/controller-runtime/*"
+          - "sigs.k8s.io/controller-runtime*"
       general-dependencies:
         patterns:
           - "*"
