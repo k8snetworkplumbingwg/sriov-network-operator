@@ -32,6 +32,7 @@ import (
 	hostTypes "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	snolog "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/log"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform/baremetal"
 	mock_platform "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/platform/mock"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/generic"
@@ -196,6 +197,11 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 		hostHelper.EXPECT().IsKernelArgsSet("", constants.KernelArgRdmaExclusive).Return(false).AnyTimes()
 		hostHelper.EXPECT().IsKernelArgsSet("", constants.KernelArgRdmaShared).Return(false).AnyTimes()
 		hostHelper.EXPECT().SetRDMASubsystem("").Return(nil).AnyTimes()
+		hostHelper.EXPECT().ReadServiceManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test", Path: "/etc/systemd/system/test.service"}, nil).AnyTimes()
+		hostHelper.EXPECT().ReadOvsServiceInjectionManifestFile(gomock.Any(), gomock.Any()).Return(&hostTypes.Service{
+			Name: "ovs-vswitchd.service",
+			Path: "/etc/systemd/system/ovs-vswitchd.service.d/10-hw-offload.conf",
+		}, nil).AnyTimes()
 
 		hostHelper.EXPECT().GetRebootCount(gomock.Any()).DoAndReturn(func(_ int64) (int, error) {
 			return int(rebootCount.Load()), nil
@@ -212,11 +218,6 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 
 		hostHelper.EXPECT().ConfigSriovInterfaces(gomock.Any(), gomock.Any(), gomock.Any(), false).Do(
 			func(_, _, _, _ any) { discoverSriovReturn.ReplaceOriginalWithAfter() }).AnyTimes()
-		// k8s plugin for k8s cluster type
-		if vars.ClusterType == constants.ClusterTypeKubernetes {
-			hostHelper.EXPECT().ReadServiceManifestFile(gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
-			hostHelper.EXPECT().ReadOvsServiceInjectionManifestFile(gomock.Any(), gomock.Any()).Return(&hostTypes.Service{Name: "test"}, nil).AnyTimes()
-		}
 
 		platformMock.EXPECT().Init().Return(nil)
 		// TODO: remove this when adding unit tests for switchdev
@@ -227,7 +228,9 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 
 		genericPlugin, err = generic.NewGenericPlugin(hostHelper)
 		Expect(err).ToNot(HaveOccurred())
-		platformMock.EXPECT().GetVendorPlugins(gomock.Any()).Return(genericPlugin, []plugin.VendorPlugin{}, nil)
+		hostPlugin, err := baremetal.NewHostConfig(hostHelper)
+		Expect(err).ToNot(HaveOccurred())
+		platformMock.EXPECT().GetVendorPlugins(gomock.Any()).Return(genericPlugin, []plugin.VendorPlugin{hostPlugin}, nil)
 
 		featureGates := featuregate.New()
 		featureGates.Init(map[string]bool{})

@@ -311,10 +311,10 @@ var _ = Describe("Aggregate status", func() {
 		Expect(k8sClient.Update(ctx, pool)).To(Succeed())
 		Eventually(func(g Gomega) {
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pool), pool)).To(Succeed())
-			g.Expect(pool.Status.MatchedNodeCount).To(Equal(new(int32(1))))
-			g.Expect(pool.Status.ReadyNodeCount).To(Equal(new(int32(0))))
+			g.Expect(pool.Status.MatchedNodeCount).To(BeNil())
+			g.Expect(pool.Status.ReadyNodeCount).To(BeNil())
 			g.Expect(pool.Status.Conditions).To(HaveLen(1))
-			g.Expect(pool.Status.Conditions[0].Reason).To(Equal(sriovnetworkv1.ReasonApplyingConfiguration))
+			g.Expect(pool.Status.Conditions[0].Reason).To(Equal(sriovnetworkv1.ReasonUnsupportedConfiguration))
 			g.Expect(pool.Status.Conditions[0].ObservedGeneration).To(Equal(pool.Generation))
 		}, 30*time.Second, 50*time.Millisecond).Should(Succeed())
 	})
@@ -480,72 +480,57 @@ var _ = Describe("Aggregate hardware offload status", func() {
 				}
 				Expect(pool.Status.Conditions[0].Status).To(Equal(wantStatus))
 			}
-			if clusterType == constants.ClusterTypeOpenshift {
-				pool.Spec.OvsHardwareOffloadConfig.Name = ""
-				Expect(k8sClient.Update(ctx, pool)).To(Succeed())
-				reconcile()
-				assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
-				pool.Spec.OvsHardwareOffloadConfig.Name = "infra"
-				Expect(k8sClient.Update(ctx, pool)).To(Succeed())
-			}
 			selected, _, err := findNodePoolConfig(ctx, node, k8sClient)
 			Expect(err).NotTo(HaveOccurred())
-			if clusterType == constants.ClusterTypeOpenshift {
-				Expect(selected.Name).NotTo(Equal(pool.Name))
-			} else {
-				Expect(selected.Name).To(Equal(pool.Name))
-			}
+			Expect(selected.Name).NotTo(Equal(pool.Name))
 			reconcile()
-			if clusterType == constants.ClusterTypeOpenshift {
-				Expect(pool.Status.Conditions).To(HaveLen(1))
-				Expect(pool.Status.Conditions[0].Status).To(Equal(metav1.ConditionFalse))
-				Expect(pool.Status.Conditions[0].Reason).To(Equal(sriovnetworkv1.ReasonUnsupportedConfiguration))
-				Expect(pool.Status.Conditions[0].ObservedGeneration).To(Equal(pool.Generation))
-				Expect(pool.Status.MatchedNodeCount).To(BeNil())
-				Expect(pool.Status.ReadyNodeCount).To(BeNil())
-			} else {
-				assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
-				policyReconciler := &SriovNetworkNodePolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
-				syncNode := func() {
-					Expect(policyReconciler.syncAllSriovNetworkNodeStates(ctx, config,
-						&sriovnetworkv1.SriovNetworkNodePolicyList{}, &corev1.NodeList{Items: []corev1.Node{*node}})).To(Succeed())
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(state), state)).To(Succeed())
-					Expect(state.Spec.System.OvsConfig).To(Equal(pool.Spec.OvsHardwareOffloadConfig.OvsConfig))
-					Expect(pool.RevisionMatchesInObject(state)).To(BeTrue())
-				}
-				applyNode := func() {
-					state.SetNodeStateConfigurationConditions(constants.SyncStatusSucceeded, "", false)
-					Expect(k8sClient.Status().Update(ctx, state)).To(Succeed())
-					reconcile()
-					assertCounts(1, sriovnetworkv1.ReasonPoolConfigReady)
-				}
-				syncNode()
-				reconcile()
-				assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
-				applyNode()
-				pool.Spec.OvsHardwareOffloadConfig.OvsConfig["max-idle"] = "30000"
-				Expect(k8sClient.Update(ctx, pool)).To(Succeed())
-				reconcile()
-				assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
-				syncNode()
-				reconcile()
-				assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
-				applyNode()
+			Expect(pool.Status.Conditions).To(HaveLen(1))
+			Expect(pool.Status.Conditions[0].Status).To(Equal(metav1.ConditionFalse))
+			Expect(pool.Status.Conditions[0].Reason).To(Equal(sriovnetworkv1.ReasonUnsupportedConfiguration))
+			Expect(pool.Status.Conditions[0].ObservedGeneration).To(Equal(pool.Generation))
+			Expect(pool.Status.MatchedNodeCount).To(BeNil())
+			Expect(pool.Status.ReadyNodeCount).To(BeNil())
+			pool.Spec.OvsHardwareOffloadConfig.Name = ""
+			Expect(k8sClient.Update(ctx, pool)).To(Succeed())
+			selected, _, err = findNodePoolConfig(ctx, node, k8sClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(selected.Name).To(Equal(pool.Name))
+			reconcile()
+			assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
+			policyReconciler := &SriovNetworkNodePolicyReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			syncNode := func() {
+				Expect(policyReconciler.syncAllSriovNetworkNodeStates(ctx, config,
+					&sriovnetworkv1.SriovNetworkNodePolicyList{}, &corev1.NodeList{Items: []corev1.Node{*node}})).To(Succeed())
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(state), state)).To(Succeed())
+				Expect(state.Spec.System.OvsConfig).To(Equal(pool.Spec.OvsHardwareOffloadConfig.OvsConfig))
+				Expect(pool.RevisionMatchesInObject(state)).To(BeTrue())
 			}
-
+			applyNode := func() {
+				state.SetNodeStateConfigurationConditions(constants.SyncStatusSucceeded, "", false)
+				Expect(k8sClient.Status().Update(ctx, state)).To(Succeed())
+				reconcile()
+				assertCounts(1, sriovnetworkv1.ReasonPoolConfigReady)
+			}
+			syncNode()
+			reconcile()
+			assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
+			applyNode()
+			pool.Spec.OvsHardwareOffloadConfig.OvsConfig["max-idle"] = "30000"
+			Expect(k8sClient.Update(ctx, pool)).To(Succeed())
+			reconcile()
+			assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
+			syncNode()
+			reconcile()
+			assertCounts(0, sriovnetworkv1.ReasonApplyingConfiguration)
+			applyNode()
 			other := &sriovnetworkv1.SriovNetworkPoolConfig{ObjectMeta: metav1.ObjectMeta{Name: "overlap", Namespace: vars.Namespace}}
 			createDrainOnlyPool(other)
 			reconcile()
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(other), other)).To(Succeed())
-			if clusterType == constants.ClusterTypeOpenshift {
-				Expect(other.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
-				Expect(other.Status.ReadyNodeCount).To(Equal(new(int32(1))))
-			} else {
-				assertCounts(0, sriovnetworkv1.ReasonPoolConflict)
-				Expect(other.Status.Conditions[0].Reason).To(Equal(sriovnetworkv1.ReasonPoolConflict))
-			}
+			assertCounts(0, sriovnetworkv1.ReasonPoolConflict)
+			Expect(other.Status.Conditions[0].Reason).To(Equal(sriovnetworkv1.ReasonPoolConflict))
 		},
-		Entry("OpenShift skips MachineConfig hardware offload", constants.ClusterTypeOpenshift),
+		Entry("OpenShift applies OVS configuration through NodeStates", constants.ClusterTypeOpenshift),
 		Entry("Kubernetes applies OVS configuration through NodeStates", constants.ClusterTypeKubernetes),
 	)
 })

@@ -118,6 +118,27 @@ func IsCommandNotFound(err error) bool {
 	return false
 }
 
+// KernelArgsScript is the host script that adds or removes kernel command-line arguments.
+const KernelArgsScript = "bindata/scripts/kargs.sh"
+
+// EditKernelArg adds or removes one kernel command-line argument via ostree or grubby.
+// mode is "add" or "remove". A missing grubby/ostree binary is logged and treated as success
+// so nodes without those tools are not failed closed.
+func EditKernelArg(cmd CmdInterface, mode, karg string) error {
+	log.Log.Info("EditKernelArg()", "mode", mode, "karg", karg)
+	_, _, err := cmd.RunCommand("/bin/sh", KernelArgsScript, mode, karg)
+	if err != nil {
+		if IsCommandNotFound(err) {
+			log.Log.Error(err, "EditKernelArg(): grubby or ostree command not found. Please ensure that kernel arg are correct",
+				"karg", karg)
+			return nil
+		}
+		log.Log.Error(err, "EditKernelArg(): fail to edit kernel arg", "karg", karg)
+		return err
+	}
+	return nil
+}
+
 func GetHostExtension() string {
 	if vars.InChroot {
 		return vars.FilesystemRoot

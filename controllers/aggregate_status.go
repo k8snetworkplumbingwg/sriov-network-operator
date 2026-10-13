@@ -23,7 +23,6 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 const aggregateStatusSyncEventName = "aggregate-status-sync-event"
@@ -84,8 +83,8 @@ func (r *AggregateStatusReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	for i := range pools.Items {
 		pool := &pools.Items[i]
 		var result aggregateResult
-		// TODO: remove this after we migrate the hw offload config for openshift to not use machineconfigs
-		if vars.ClusterType == constants.ClusterTypeOpenshift && pool.Spec.OvsHardwareOffloadConfig.Name != "" {
+		// Pools with the deprecated offload Name are retained only for cleanup.
+		if pool.Spec.OvsHardwareOffloadConfig.Name != "" {
 			result = offloadPoolStatus(pool)
 		} else {
 			result = regularPoolStatusFrom(pool, nodesErr, states, statesErr, memberships)
@@ -276,8 +275,8 @@ func selectPoolNodes(pools []sriovnetworkv1.SriovNetworkPoolConfig, nodes []core
 	for i := range pools {
 		pool := &pools[i]
 
-		// TODO: remove this after we migrate the hw offload config for openshift to not use machineconfigs
-		if vars.ClusterType == constants.ClusterTypeOpenshift && pool.Spec.OvsHardwareOffloadConfig.Name != "" {
+		// Pools with the deprecated offload Name are retained only for cleanup.
+		if pool.Spec.OvsHardwareOffloadConfig.Name != "" {
 			continue
 		}
 
@@ -354,8 +353,8 @@ func aggregateNodes(generation int64, matched, ready int32, issues []aggregateIs
 	return aggregateKnown(generation, matched, ready, reason, aggregateMessage(ready, matched, issues, reason), isReady)
 }
 
-// TODO: Support OpenShift hardware-offload readiness after MachineConfig is removed and it uses the vanilla Kubernetes flow.
+// offloadPoolStatus explains why a pool retained for MachineConfig cleanup is inactive.
 func offloadPoolStatus(pool *sriovnetworkv1.SriovNetworkPoolConfig) aggregateResult {
 	return aggregateBlocked(pool.Generation, sriovnetworkv1.ReasonUnsupportedConfiguration,
-		"Hardware offload readiness is not supported yet")
+		"OvsHardwareOffloadConfig.Name is deprecated; clear it and use nodeSelector to configure nodes")
 }

@@ -278,16 +278,14 @@ type SriovNetworkPoolConfigStatus struct {
 ```
 
 **Conditions:**
-- For regular pools, `Ready=True` only when `matchedNodeCount > 0`, `readyNodeCount == matchedNodeCount`, and the current pool configuration is effective for every target node. Vanilla Kubernetes OVS configuration follows this NodeState-based flow, including named pools. OpenShift hardware-offload readiness is currently unsupported and has no node counts.
+- For regular pools, `Ready=True` only when `matchedNodeCount > 0`, `readyNodeCount == matchedNodeCount`, and the current pool configuration is effective for every target node. OVS configuration follows this NodeState-based flow on both Kubernetes and OpenShift when `ovsHardwareOffloadConfig.name` is empty. Pools with the deprecated `name` set are excluded from node selection and have no node counts.
 - `Ready=False` for incomplete rollout, overlapping pools, missing targets, unsupported configuration, or application failure. Reason and message identify the blocker. `Ready=Unknown` means the controller cannot determine the outcome. `Progressing` and `Degraded` are not pool conditions.
 
 Pool readiness depends on its configuration path:
 
 - For regular pools, target nodes come from `nodeSelector` within the managed node set. Reject overlapping pool membership with `Ready=False`, reason `PoolConflict`; do not count conflicting nodes as ready. When the pool sets RDMA or OVS system configuration, count a node only when its NodeState records the current pool UID and generation and reports `Ready=True` for its current spec generation.
 - A pool that only sets `maxUnavailable` changes drain coordination, not host configuration. Count its selected nodes as ready once membership is unambiguous and the drain setting is accepted. Unrelated NodeState failures must not make this pool unready.
-- OpenShift hardware offload pools report `Ready=False` with `UnsupportedConfiguration`; `matchedNodeCount` and `readyNodeCount` are absent. Previously reported counts are cleared when a regular pool switches to this path. Vanilla Kubernetes pools, including named hardware-offload pools, use the regular NodeState readiness and node counts. Aggregate status does not read or watch MachineConfigs or MachineConfigPools.
-
-TODO: Support OpenShift hardware-offload readiness after removing MachineConfig-related configuration and using the same flow as vanilla Kubernetes.
+- Pools with the deprecated `ovsHardwareOffloadConfig.name` set report `Ready=False` with `UnsupportedConfiguration`; `matchedNodeCount` and `readyNodeCount` are absent. Previously reported counts are cleared when a regular pool switches to this path. Clear `name` and use `nodeSelector` to apply OVS configuration through NodeStates on both Kubernetes and OpenShift. Aggregate status does not read or watch MachineConfigs or MachineConfigPools.
 
 Regular-pool target selection and ready-node calculation must use the same managed-node scope.
 

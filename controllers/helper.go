@@ -335,8 +335,8 @@ func findNodePoolConfig(ctx context.Context, node *corev1.Node, c k8sclient.Clie
 	nodesInPools := map[string]interface{}{}
 
 	for _, npc := range npcl.Items {
-		// OpenShift hardware offload uses MachineConfigs rather than NodeStates.
-		if vars.ClusterType == constants.ClusterTypeOpenshift && npc.Spec.OvsHardwareOffloadConfig.Name != "" {
+		// Pools with the deprecated offload Name are retained only for cleanup.
+		if npc.Spec.OvsHardwareOffloadConfig.Name != "" {
 			continue
 		}
 

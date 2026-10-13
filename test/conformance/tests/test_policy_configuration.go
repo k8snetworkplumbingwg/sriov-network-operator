@@ -648,7 +648,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 							"Name": Equal(intf.Name), "NumVfs": Equal(1),
 						})))
 						g.Expect(nodeState.Status.Interfaces).To(ContainElement(MatchFields(IgnoreExtras, Fields{
-							"Name": Equal(intf.Name), "NumVfs": Equal(2),
+							"Name": Equal(intf.Name), "NumVfs": Equal(previousPolicy.Spec.NumVfs),
 						})))
 						stable, err := cluster.SriovStable(operatorNamespace, clients)
 						g.Expect(err).ToNot(HaveOccurred())

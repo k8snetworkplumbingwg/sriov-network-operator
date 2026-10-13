@@ -110,20 +110,20 @@ var _ = Describe("Baremetal", func() {
 				}
 			})
 
-			It("should load generic, k8s, and all unique vendor plugins", func() {
+			It("should load generic, host, and all unique vendor plugins", func() {
 				mainPlugin, addPlugins, err := bm.GetVendorPlugins(ns)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(mainPlugin.Name()).To(Equal("generic"))
 
-				// Expect 3 additional plugins: intel, mellanox, k8s
+				// Expect 3 additional plugins: intel, mellanox, host
 				Expect(addPlugins).To(HaveLen(3))
 
 				pluginNames := []string{}
 				for _, p := range addPlugins {
 					pluginNames = append(pluginNames, p.Name())
 				}
-				Expect(pluginNames).To(ContainElements("intel", "mellanox", "k8s"))
+				Expect(pluginNames).To(ContainElements("intel", "mellanox", hostPluginName))
 			})
 
 			It("should not duplicate plugins for vendors with multiple interfaces", func() {
@@ -140,7 +140,7 @@ var _ = Describe("Baremetal", func() {
 				for _, p := range addPlugins {
 					pluginNames = append(pluginNames, p.Name())
 				}
-				Expect(pluginNames).To(ContainElements("intel", "mellanox", "k8s"))
+				Expect(pluginNames).To(ContainElements("intel", "mellanox", hostPluginName))
 			})
 
 			It("should return an error if a vendor plugin fails to load", func() {
@@ -177,41 +177,45 @@ var _ = Describe("Baremetal", func() {
 				}
 			})
 
-			It("should load generic and vendor plugins, but not the k8s plugin", func() {
+			It("should load generic, host, and vendor plugins", func() {
 				mainPlugin, addPlugins, err := bm.GetVendorPlugins(ns)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(mainPlugin.Name()).To(Equal("generic"))
 
-				// Expect 2 additional plugins: intel, mellanox. k8s_plugin should NOT be loaded.
-				Expect(addPlugins).To(HaveLen(2))
+				// Expect 3 additional plugins: intel, mellanox, host
+				Expect(addPlugins).To(HaveLen(3))
 
 				pluginNames := []string{}
 				for _, p := range addPlugins {
 					pluginNames = append(pluginNames, p.Name())
 				}
-				Expect(pluginNames).To(ContainElements("intel", "mellanox"))
-				Expect(pluginNames).NotTo(ContainElement("k8s"))
+				Expect(pluginNames).To(ContainElements("intel", "mellanox", hostPluginName))
 			})
 		})
 	})
 
 	Context("Systemd Plugin Retrieval", func() {
-		It("should return a configured generic plugin for PhasePre", func() {
+		It("should return a host-then-generic chain for PhasePre", func() {
 			p, err := bm.SystemdGetVendorPlugin(consts.PhasePre)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(p).NotTo(BeNil())
-			Expect(p.Name()).To(Equal("generic"))
-			// Note: Verifying the With... options requires either inspecting the
-			// internal state of the plugin or having the plugin expose its config.
-			// A simple type/name check is often sufficient for unit tests.
+			Expect(p.Name()).To(Equal(systemdChainName))
+			chain := p.(*pluginChain)
+			Expect(chain.plugins).To(HaveLen(2))
+			Expect(chain.plugins[0].Name()).To(Equal(hostPluginName))
+			Expect(chain.plugins[1].Name()).To(Equal("generic"))
 		})
 
-		It("should return a standard generic plugin for PhasePost", func() {
+		It("should return a host-then-generic chain for PhasePost", func() {
 			p, err := bm.SystemdGetVendorPlugin(consts.PhasePost)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(p).NotTo(BeNil())
-			Expect(p.Name()).To(Equal("generic"))
+			Expect(p.Name()).To(Equal(systemdChainName))
+			chain := p.(*pluginChain)
+			Expect(chain.plugins).To(HaveLen(2))
+			Expect(chain.plugins[0].Name()).To(Equal(hostPluginName))
+			Expect(chain.plugins[1].Name()).To(Equal("generic"))
 		})
 
 		It("should return an error for an invalid phase", func() {

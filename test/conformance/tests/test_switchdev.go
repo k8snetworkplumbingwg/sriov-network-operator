@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -76,23 +75,6 @@ var _ = Describe("[sriov] Switchdev", Ordered, func() {
 				NodeSelector:             &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}},
 				OvsHardwareOffloadConfig: sriovv1.OvsHardwareOffloadConfig{OvsConfig: map[string]string{"hw-offload": "true", "tc-policy": "none"}},
 			},
-		}
-		if os.Getenv("CLUSTER_TYPE") == string(consts.ClusterTypeOpenshift) {
-			pool.Spec.NodeSelector = nil
-			node, err := clients.CoreV1Interface.Nodes().Get(context.Background(), testNode, metav1.GetOptions{})
-			Expect(err).ToNot(HaveOccurred())
-			desiredConfig := node.Annotations[consts.DesiredMachineConfigAnnotation]
-			Expect(desiredConfig).ToNot(BeEmpty(), "The selected node must have a desired MachineConfig")
-			machineConfig, err := clients.MachineConfigs().Get(context.Background(), desiredConfig, metav1.GetOptions{})
-			Expect(err).ToNot(HaveOccurred())
-			for _, owner := range machineConfig.OwnerReferences {
-				if owner.Kind == "MachineConfigPool" {
-					pool.Spec.OvsHardwareOffloadConfig.Name = owner.Name
-					break
-				}
-			}
-			Expect(pool.Spec.OvsHardwareOffloadConfig.Name).ToNot(BeEmpty(), "The selected node's MachineConfig must belong to a MachineConfigPool")
-			By("Enabling OVS hardware offload for MachineConfigPool " + pool.Spec.OvsHardwareOffloadConfig.Name)
 		}
 		Expect(clients.Create(context.Background(), pool)).To(Succeed())
 		for _, intf := range interfaces {

@@ -103,6 +103,10 @@ func validateSriovNetworkPoolConfig(cr *sriovnetworkv1.SriovNetworkPoolConfig, o
 		return false, warnings, fmt.Errorf("SriovOperatorConfig can't have both parallel configuration and OvsHardwareOffloadConfig")
 	}
 
+	if cr.Spec.OvsHardwareOffloadConfig.Name != "" {
+		warnings = append(warnings, "OvsHardwareOffloadConfig.Name is deprecated and ignored; OVS hardware offload is applied by the config daemon on switchdev nodes")
+	}
+
 	if cr.Spec.MaxUnavailable != nil {
 		_, err := cr.MaxUnavailable(0)
 		if err != nil {

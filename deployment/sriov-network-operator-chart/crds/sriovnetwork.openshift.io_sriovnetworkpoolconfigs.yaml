@@ -118,11 +118,10 @@ spec:
                 properties:
                   name:
                     description: |-
-                      Name is mandatory and must be unique.
-                      On Kubernetes:
-                      Name is the name of OvsHardwareOffloadConfig
-                      On OpenShift:
-                      Name is the name of MachineConfigPool to be enabled with OVS hardware offload
+                      Name is deprecated and ignored.
+                      OVS hardware offload is applied by the config daemon on nodes that use switchdev.
+                      The field is retained for compatibility. Pools with Name set are excluded from node selection.
+                      Do not set Name on new SriovNetworkPoolConfig objects.
                     type: string
                   otherConfig:
                     additionalProperties:
