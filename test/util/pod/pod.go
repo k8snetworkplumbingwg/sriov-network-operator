@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	. "github.com/onsi/gomega"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +22,26 @@ import (
 )
 
 const hostnameLabel = "kubernetes.io/hostname"
+
+// AssertContainerReady checks pod phase and the named spec container and ready status.
+// Use the polling callback's Gomega to retry transient readiness failures.
+func AssertContainerReady(g Gomega, p corev1.Pod, containerName string) {
+	g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning), "pod %s/%s", p.Namespace, p.Name)
+	found := false
+	for _, container := range p.Spec.Containers {
+		if container.Name == containerName {
+			found = true
+		}
+	}
+	g.Expect(found).To(BeTrue(), "pod %s/%s missing container %s", p.Namespace, p.Name, containerName)
+	ready := false
+	for _, status := range p.Status.ContainerStatuses {
+		if status.Name == containerName {
+			ready = status.Ready
+		}
+	}
+	g.Expect(ready).To(BeTrue(), "pod %s/%s container %s missing or not ready", p.Namespace, p.Name, containerName)
+}
 
 func GetDefinition() *corev1.Pod {
 	podObject := &corev1.Pod{
