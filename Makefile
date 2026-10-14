@@ -17,6 +17,9 @@ DOCKERFILE_CONFIG_DAEMON?=Dockerfile.sriov-network-config-daemon
 DOCKERFILE_WEBHOOK?=Dockerfile.webhook
 
 CRD_BASES=./config/crd/bases
+# External DRA CRDs are vendored in the chart, rather than generated from our API.
+DRA_CRDS=./deployment/sriov-network-operator-chart/crds/sriovnetwork.k8snetworkplumbingwg.io_deviceattributes.yaml \
+	./deployment/sriov-network-operator-chart/crds/sriovnetwork.k8snetworkplumbingwg.io_sriovresourcepolicies.yaml
 
 export APP_NAME?=sriov-network-operator
 TARGET=$(TARGET_DIR)/bin/$(APP_NAME)
@@ -86,11 +89,11 @@ run: skopeo install
 
 # Install CRDs into a cluster
 install: manifests
-	kubectl apply -f $(CRD_BASES)
+	kubectl apply -f $(CRD_BASES) $(addprefix -f ,$(DRA_CRDS))
 
 # Uninstall CRDs from a cluster
 uninstall: manifests
-	kubectl delete --ignore-not-found -f $(CRD_BASES)
+	kubectl delete --ignore-not-found -f $(CRD_BASES) $(addprefix -f ,$(DRA_CRDS))
 
 # Generate manifests e.g. CRD, RBAC etc.
 manifests: controller-gen

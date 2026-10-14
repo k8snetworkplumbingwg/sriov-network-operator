@@ -20,6 +20,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -331,7 +332,7 @@ func TestBuildPolicyConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "PfNames with VF range resolved via nodeState altNames",
+			name: "alternative PF name resolved with unsupported VF range preserved",
 			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
 				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
 					ResourceName: "nic",
@@ -587,7 +588,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			utilruntime.Must(corev1.AddToScheme(scheme))
 			utilruntime.Must(resourceapi.AddToScheme(scheme))
 			dc = &sriovnetworkv1.SriovOperatorConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace, UID: "operator-owner"},
 			}
 			allObjs := append([]k8sclient.Object{dc}, objs...)
 			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(allObjs...).Build()
@@ -670,6 +671,9 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 		It("syncDeviceAttributes adopts CR when operator managed label was removed", func() {
 			attr := buildDeviceAttributesCR("intel-nic-attrs", "intel_nic")
 			attr.Labels = map[string]string{drapkg.ResourcePoolLabel: "intel-nic"}
+			attr.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(
+				&sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, UID: "operator-owner"}},
+				sriovnetworkv1.SchemeGroupVersion.WithKind("SriovOperatorConfig"))}
 			beforeEachDRA(attr)
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
@@ -732,6 +736,9 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				},
 				Spec: sriovdrav1alpha1.SriovResourcePolicySpec{},
 			}
+			existingPolicy.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(
+				&sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, UID: "operator-owner"}},
+				sriovnetworkv1.SchemeGroupVersion.WithKind("SriovOperatorConfig"))}
 			beforeEachDRA(node, nodeState, existingPolicy)
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
@@ -1150,7 +1157,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			utilruntime.Must(sriovdrav1alpha1.AddToScheme(noDeviceClassScheme))
 			utilruntime.Must(corev1.AddToScheme(noDeviceClassScheme))
 			dc = &sriovnetworkv1.SriovOperatorConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace, UID: "operator-owner"},
 			}
 			cl := fake.NewClientBuilder().WithScheme(noDeviceClassScheme).WithObjects(dc).Build()
 			fg := featuregate.New()
@@ -1276,5 +1283,92 @@ func TestReconcileCleansDRAObjectsWhenFeatureGateDisabled(t *testing.T) {
 	gotPolicy := &sriovdrav1alpha1.SriovResourcePolicy{}
 	if err := cl.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "worker-0"}, gotPolicy); !errors.IsNotFound(err) {
 		t.Fatalf("expected SriovResourcePolicy deleted, get err=%v", err)
+	}
+}
+
+func TestSyncNamespacedDRAOwnership(t *testing.T) {
+	ctx := context.Background()
+	oldNamespace := vars.Namespace
+	vars.Namespace = "dra-ownership-test"
+	t.Cleanup(func() { vars.Namespace = oldNamespace })
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{sriovnetworkv1.AddToScheme, sriovdrav1alpha1.AddToScheme, corev1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{
+		Name: consts.DefaultConfigName, Namespace: vars.Namespace, UID: "operator-owner",
+	}}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1", Labels: map[string]string{corev1.LabelHostname: "worker-1"}}}
+	state := &sriovnetworkv1.SriovNetworkNodeState{ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: vars.Namespace}}
+	policies := &sriovnetworkv1.SriovNetworkNodePolicyList{Items: []sriovnetworkv1.SriovNetworkNodePolicy{{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1"},
+		Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic", NicSelector: sriovnetworkv1.SriovNetworkNicSelector{Vendor: "8086"}},
+	}}}
+	userValue := "user-value"
+	for _, original := range []k8sclient.Object{
+		&sriovdrav1alpha1.DeviceAttributes{
+			ObjectMeta: metav1.ObjectMeta{Name: "intel-nic-attrs", Namespace: vars.Namespace},
+			Spec: sriovdrav1alpha1.DeviceAttributesSpec{Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				"example.com/custom": {StringValue: &userValue},
+			}},
+		},
+		&sriovdrav1alpha1.SriovResourcePolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: vars.Namespace},
+			Spec: sriovdrav1alpha1.SriovResourcePolicySpec{Configs: []sriovdrav1alpha1.Config{{
+				ResourceFilters: []sriovdrav1alpha1.ResourceFilter{{Vendors: []string{"15b3"}}},
+			}}},
+		},
+	} {
+		for _, marker := range []string{"none", "controller", "label", "foreign-controller"} {
+			t.Run(original.GetName()+"/"+marker, func(t *testing.T) {
+				existing := original.DeepCopyObject().(k8sclient.Object)
+				switch marker {
+				case "controller", "foreign-controller":
+					controllerOwner := owner.DeepCopy()
+					if marker == "foreign-controller" {
+						controllerOwner.Name, controllerOwner.UID = "other", "other-owner"
+					}
+					if err := controllerutil.SetControllerReference(controllerOwner, existing, scheme); err != nil {
+						t.Fatal(err)
+					}
+				case "label":
+					existing.SetLabels(drapkg.OperatorGeneratedByLabels())
+				}
+				cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(owner, node, state, existing).Build()
+				r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme}
+				before := existing.DeepCopyObject().(k8sclient.Object)
+				if err := cl.Get(ctx, k8sclient.ObjectKeyFromObject(existing), before); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				switch existing.(type) {
+				case *sriovdrav1alpha1.DeviceAttributes:
+					err = r.syncDeviceAttributes(ctx, owner, policies)
+				case *sriovdrav1alpha1.SriovResourcePolicy:
+					err = r.syncSriovResourcePolicies(ctx, owner, policies, &corev1.NodeList{Items: []corev1.Node{*node}})
+				}
+				got := existing.DeepCopyObject().(k8sclient.Object)
+				if getErr := cl.Get(ctx, k8sclient.ObjectKeyFromObject(existing), got); getErr != nil {
+					t.Fatal(getErr)
+				}
+				if marker == "none" || marker == "foreign-controller" {
+					if !errors.IsConflict(err) {
+						t.Fatalf("expected ownership conflict, got %v", err)
+					}
+					if diff := cmp.Diff(before, got); diff != "" {
+						t.Fatalf("user-owned object changed (-before +after):\n%s", diff)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !metav1.IsControlledBy(got, owner) || got.GetLabels()[drapkg.GeneratedByLabel] != consts.SriovNetworkOperatorIdentifier {
+					t.Fatalf("operator ownership was not restored: %+v", got)
+				}
+			})
+		}
 	}
 }

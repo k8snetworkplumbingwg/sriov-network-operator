@@ -276,6 +276,8 @@ The DRA driver project uses a **two-CRD architecture** that decouples device sel
 
 Both CRDs from the DRA driver project will be included in the operator's Helm chart under `deployment/sriov-network-operator-chart/crds/`, similar to how the `NetworkAttachmentDefinition` CRD from Multus is currently included (`k8s.cni.cncf.io_networkattachmentdefinitions_crd.yaml`).
 
+The manifest-based `make install` / `make deploy-setup` path also installs these two vendored DRA CRDs; `make uninstall` removes them.
+
 The CRDs will be named:
 - `sriovnetwork.k8snetworkplumbingwg.io_sriovresourcepolicies.yaml`
 - `sriovnetwork.k8snetworkplumbingwg.io_deviceattributes.yaml`
@@ -311,7 +313,7 @@ New behavior (DRA mode, implemented):
 | `Spec.ResourceName` | `Spec.Configs[].DeviceAttributesSelector` (label ref) | `Spec.Attributes["k8s.cni.cncf.io/resourceName"]` (extended resource name: `ResourcePrefix/resourceName`) |
 | `Spec.NicSelector.Vendor` | `Spec.Configs[].ResourceFilters[].Vendors` | - |
 | `Spec.NicSelector.DeviceID` | `Spec.Configs[].ResourceFilters[].Devices` (VF device ID) | - |
-| `Spec.NicSelector.PfNames` | `Spec.Configs[].ResourceFilters[].PfNames` | - |
+| `Spec.NicSelector.PfNames` | `Spec.Configs[].ResourceFilters[].PfNames` (whole PF names only; VF ranges unsupported) | - |
 | `Spec.NicSelector.RootDevices` | `Spec.Configs[].ResourceFilters[].PfPciAddresses` | - |
 | `Spec.NodeSelector` | Used by `p.Selected(node)` to decide if a config entry is included | - |
 | Generated `Spec.NodeSelector` on CR | Always `kubernetes.io/hostname` `In` `[<node name>]` (not a copy of policy nodeSelector) | - |
@@ -322,6 +324,8 @@ New behavior (DRA mode, implemented):
 **Notes:**
 - `resourceFilters.drivers` is set for `deviceType: vfio-pci`, but the DRA driver does not filter on driver yet.
 - Per-node `SriovResourcePolicy` CRs require an existing `SriovNetworkNodeState`; there is no `SyncStatus` gate on CR creation.
+- VF ranges in PF selectors (for example, `ens1f0#2-5`) are currently unsupported in DRA mode. The operator resolves alternative PF names and preserves the range suffix, as it does for device-plugin configuration. The current DRA driver matches PF names literally, so a ranged entry matches no VFs. The operator does not translate ranges into VF PCI addresses or watch node-state inventory for range expansion. Use whole PF names in DRA mode, or retain device-plugin mode for VF-range partitioning until native range support is available in the DRA driver.
+- Existing namespaced DRA objects are reconciled only when they carry the operator's generated-by label or a controller reference to the current `SriovOperatorConfig`. Name collisions with unmarked user objects return a conflict; label drift on owned objects is repaired.
 
 Example auto-generated `DeviceAttributes` (attribute value is the extended resource name, e.g. `ResourcePrefix/resourceName` or plain `resourceName` if no prefix):
 ```yaml

@@ -146,11 +146,24 @@ func applyDesiredLabels(obj metav1.Object, desired map[string]string) bool {
 	return changed
 }
 
+// requireDRAOwnership permits recovery of either a missing label or a missing
+// controller reference, but never adopts an unmarked, user-created object.
+func requireDRAOwnership(owner, existing metav1.Object, resource string) error {
+	if objectHasOperatorManagedLabel(existing) || metav1.IsControlledBy(existing, owner) {
+		return nil
+	}
+	return apierrors.NewConflict(sriovdrav1alpha1.Resource(resource),
+		existing.GetName(), fmt.Errorf("object exists but is not operator-managed"))
+}
+
 // reconcileDeviceAttributes brings an existing DeviceAttributes CR in line with desired state:
 // owner reference, operator labels (including after managed-label drift), and spec.
 func reconcileDeviceAttributes(ctx context.Context, r *SriovNetworkNodePolicyReconciler,
 	dc *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger,
 	desired, existing *sriovdrav1alpha1.DeviceAttributes) error {
+	if err := requireDRAOwnership(dc, existing, "deviceattributes"); err != nil {
+		return err
+	}
 	changed, err := ensureControllerOwner(dc, existing, r.Scheme)
 	if err != nil {
 		return err
@@ -174,6 +187,9 @@ func reconcileDeviceAttributes(ctx context.Context, r *SriovNetworkNodePolicyRec
 func reconcileSriovResourcePolicy(ctx context.Context, r *SriovNetworkNodePolicyReconciler,
 	dc *sriovnetworkv1.SriovOperatorConfig, logger logr.Logger,
 	desired, existing *sriovdrav1alpha1.SriovResourcePolicy) error {
+	if err := requireDRAOwnership(dc, existing, "sriovresourcepolicies"); err != nil {
+		return err
+	}
 	changed, err := ensureControllerOwner(dc, existing, r.Scheme)
 	if err != nil {
 		return err
@@ -560,6 +576,7 @@ func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 	}
 
 	// Map PF names (resolve alternative interface names via node state)
+	// Preserve VF range suffixes for the driver; DRA does not support them yet.
 	if len(p.Spec.NicSelector.PfNames) > 0 {
 		resourceFilter.PfNames = resolvePfNames(p.Spec.NicSelector.PfNames, nodeState)
 	}

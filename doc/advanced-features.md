@@ -146,6 +146,8 @@ spec:
 
 If the Kubernetes **DRAExtendedResource** feature gate is enabled on the cluster, per-resourceName DeviceClasses can also be requested via pod `resources.limits` using their **`extendedResourceName`** (same values as device-plugin mode), in addition to ResourceClaimTemplate.
 
+**Current limitation — VF ranges**: DRA mode does not support VF ranges in `spec.nicSelector.pfNames` (for example, `ens1f0#2-5`). The operator preserves the range suffix, but the current `dra-driver-sriov` matches PF names literally, so a ranged entry matches no VFs. Use whole PF names such as `ens1f0` in DRA mode. Keep device-plugin mode when partitioning a PF into VF ranges; DRA range support is deferred until the driver supports it natively.
+
 **Requirements**: Kubernetes **1.34+** with DRA (`resource.k8s.io` APIs); **Multus CNI** with DRA integration; container runtime with **CDI** and **NRI** support; **`dra-driver-sriov`** image configured (e.g. `images.sriovDraDriver` in Helm). The operator does not enforce cluster version or runtime capabilities. See [DRA integration design](design/DRA-integration.md#dependencies) for prerequisites, upstream Multus/driver changes, and constraints.
 
 ### Feature Gate Best Practices
