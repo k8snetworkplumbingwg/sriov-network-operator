@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 
@@ -20,7 +21,8 @@ func RetriveSupportedNics() error {
 	return nil
 }
 
-func MutateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
+func MutateCustomResource(ctx context.Context, ar v1.AdmissionReview) *v1.AdmissionResponse {
+	_ = ctx
 	log.Log.V(2).Info("mutating custom resource")
 
 	cr := map[string]interface{}{}
@@ -40,7 +42,7 @@ func MutateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
 	return reviewResp
 }
 
-func ValidateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
+func ValidateCustomResource(ctx context.Context, ar v1.AdmissionReview) *v1.AdmissionResponse {
 	log.Log.V(2).Info("validating custom resource")
 	var err error
 	var raw []byte
@@ -63,7 +65,7 @@ func ValidateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
 			return toV1AdmissionResponse(err)
 		}
 
-		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovNetworkNodePolicy(&policy, ar.Request.Operation); err != nil {
+		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovNetworkNodePolicy(ctx, &policy, ar.Request.Operation); err != nil {
 			reviewResponse.Result = &metav1.Status{
 				Reason: metav1.StatusReason(err.Error()),
 			}
