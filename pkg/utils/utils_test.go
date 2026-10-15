@@ -32,8 +32,8 @@ func TestValidateOvsConfig(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:      "value with special characters other than single quote",
-			config:    map[string]string{"key": `value with "double" quotes and $pecial`},
+			name:      "value with shell and systemd special characters is escaped, not rejected",
+			config:    map[string]string{"key": "value with \"double\" and 'single' quotes, $pecial and 100%"},
 			expectErr: false,
 		},
 		{
@@ -57,14 +57,32 @@ func TestValidateOvsConfig(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name:      "value with single quote",
-			config:    map[string]string{"key": "val'ue"},
+			name:      "value is only a single quote",
+			config:    map[string]string{"key": "'"},
+			expectErr: false,
+		},
+		{
+			// A line break would end the ExecStartPre line, so it cannot be escaped.
+			name:      "value with a newline",
+			config:    map[string]string{"key": "val\nue"},
 			expectErr: true,
 		},
 		{
-			name:      "value is only a single quote",
-			config:    map[string]string{"key": "'"},
+			name:      "value with a carriage return",
+			config:    map[string]string{"key": "val\rue"},
 			expectErr: true,
+		},
+		{
+			// systemd stops reading the line at a NUL and then rejects the unit for
+			// unbalanced quoting.
+			name:      "value with a NUL byte",
+			config:    map[string]string{"key": "val\x00ue"},
+			expectErr: true,
+		},
+		{
+			name:      "value with other control characters is accepted",
+			config:    map[string]string{"key": "val\tue\x1b"},
+			expectErr: false,
 		},
 		{
 			name:      "second key invalid",
@@ -118,17 +136,43 @@ func TestRenderOtherOvsConfigOption(t *testing.T) {
 			wantExternalIds: "hw-offload tc_policy",
 			wantOtherConfig: `other_config:hw-offload="true" other_config:tc_policy="none" `,
 		},
+		// The escaped forms below are consumed by systemd first and then by bash,
+		// each of which removes one layer before ovs-vsctl sees the value.
 		{
-			name:            "value with double quotes is escaped by %q",
+			name:            "double quote is escaped for both layers",
 			config:          map[string]string{"key": `val"ue`},
 			wantExternalIds: "key",
-			wantOtherConfig: `other_config:key="val\"ue" `,
+			wantOtherConfig: `other_config:key="val\\"ue" `,
 		},
 		{
-			name:            "value with dollar sign is kept as-is",
+			name:            "dollar sign is escaped so systemd does not expand it",
 			config:          map[string]string{"key": "$value"},
 			wantExternalIds: "key",
-			wantOtherConfig: `other_config:key="$value" `,
+			wantOtherConfig: `other_config:key="\\$$value" `,
+		},
+		{
+			name:            "percent is escaped so systemd does not expand a specifier",
+			config:          map[string]string{"key": "a%Hb"},
+			wantExternalIds: "key",
+			wantOtherConfig: `other_config:key="a%%Hb" `,
+		},
+		{
+			name:            "single quote does not end the systemd command",
+			config:          map[string]string{"key": "val'ue"},
+			wantExternalIds: "key",
+			wantOtherConfig: `other_config:key="val\'ue" `,
+		},
+		{
+			name:            "backslash survives both layers",
+			config:          map[string]string{"key": `a\nb`},
+			wantExternalIds: "key",
+			wantOtherConfig: `other_config:key="a\\\\nb" `,
+		},
+		{
+			name:            "backtick is escaped so bash does not substitute a command",
+			config:          map[string]string{"key": "a`b"},
+			wantExternalIds: "key",
+			wantOtherConfig: "other_config:key=\"a\\\\`b\" ",
 		},
 		{
 			name:      "invalid key with dot returns error",
@@ -136,8 +180,18 @@ func TestRenderOtherOvsConfigOption(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name:      "value with single quote returns error",
-			config:    map[string]string{"key": "val'ue"},
+			name:      "value with a newline returns error",
+			config:    map[string]string{"key": "val\nue"},
+			expectErr: true,
+		},
+		{
+			name:      "value with a carriage return returns error",
+			config:    map[string]string{"key": "val\rue"},
+			expectErr: true,
+		},
+		{
+			name:      "value with a NUL byte returns error",
+			config:    map[string]string{"key": "val\x00ue"},
 			expectErr: true,
 		},
 	}
