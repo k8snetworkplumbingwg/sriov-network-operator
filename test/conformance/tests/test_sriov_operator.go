@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1040,8 +1041,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				}, 2*time.Minute, 10*time.Second).Should(BeZero())
 
 				assertObjectIsNotFound("network-resources-injector-service", &corev1.Service{})
-				assertObjectIsNotFound("network-resources-injector", &rbacv1.ClusterRole{})
-				assertObjectIsNotFound("network-resources-injector-role-binding", &rbacv1.ClusterRoleBinding{})
+				assertOperandRBACPersists("network-resources-injector-sa", "k8s.cni.cncf.io", "network-attachment-definitions")
 				assertObjectIsNotFound("network-resources-injector-config", &admission.MutatingWebhookConfiguration{})
 				assertObjectIsNotFound("nri-control-switches", &corev1.ConfigMap{})
 				assertObjectIsNotFound("network-resources-injector-allow-traffic-api-server", &networkv1.NetworkPolicy{})
@@ -1062,8 +1062,7 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				}, 2*time.Minute, 10*time.Second).Should(BeZero())
 
 				assertObjectIsNotFound("operator-webhook-service", &corev1.Service{})
-				assertObjectIsNotFound("operator-webhook", &rbacv1.ClusterRole{})
-				assertObjectIsNotFound("operator-webhook-role-binding", &rbacv1.ClusterRoleBinding{})
+				assertOperandRBACPersists("operator-webhook-sa", "sriovnetwork.openshift.io", "sriovnetworknodestates")
 				assertObjectIsNotFound("sriov-operator-webhook-config", &admission.MutatingWebhookConfiguration{})
 				assertObjectIsNotFound("operator-webhook-allow-traffic-api-server", &networkv1.NetworkPolicy{})
 			})
@@ -2262,6 +2261,47 @@ func assertObjectIsNotFound(name string, obj runtimeclient.Object) {
 		err := clients.Get(context.Background(), runtimeclient.ObjectKey{Name: name, Namespace: operatorNamespace}, obj)
 		return err != nil && k8serrors.IsNotFound(err)
 	}, 2*time.Minute, 10*time.Second).Should(BeTrue())
+}
+
+// The RBAC owner can generate different role names, so identify the binding by its ServiceAccount subject.
+func assertOperandRBACPersists(serviceAccount, apiGroup, resource string) {
+	Eventually(func(g Gomega) bool {
+		sa := &corev1.ServiceAccount{}
+		g.Expect(clients.Get(context.Background(), runtimeclient.ObjectKey{
+			Name: serviceAccount, Namespace: operatorNamespace,
+		}, sa)).To(Succeed())
+
+		bindings := &rbacv1.ClusterRoleBindingList{}
+		g.Expect(clients.List(context.Background(), bindings)).To(Succeed())
+		for _, binding := range bindings.Items {
+			if binding.RoleRef.Kind != "ClusterRole" {
+				continue
+			}
+			var subjectMatches bool
+			for _, subject := range binding.Subjects {
+				if subject.Kind == "ServiceAccount" && subject.Name == serviceAccount && subject.Namespace == operatorNamespace {
+					subjectMatches = true
+					break
+				}
+			}
+			if !subjectMatches {
+				continue
+			}
+
+			role := &rbacv1.ClusterRole{}
+			if err := clients.Get(context.Background(), runtimeclient.ObjectKey{Name: binding.RoleRef.Name}, role); err != nil {
+				continue
+			}
+			for _, rule := range role.Rules {
+				if (slices.Contains(rule.APIGroups, apiGroup) || slices.Contains(rule.APIGroups, "*")) &&
+					(slices.Contains(rule.Resources, resource) || slices.Contains(rule.Resources, "*")) &&
+					(slices.Contains(rule.Verbs, "get") || slices.Contains(rule.Verbs, "*")) {
+					return true
+				}
+			}
+		}
+		return false
+	}, 2*time.Minute, 10*time.Second).Should(BeTrue(), "expected persistent RBAC for %s to read %s", serviceAccount, resource)
 }
 
 func assertDevicePluginConfigurationContains(node, configuration string) {

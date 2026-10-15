@@ -26,6 +26,11 @@ HELM_VALUES_OPTS="\
 
 PATH=$PATH:${root}/bin
 make helm
+HELM_EXTRA_OPTS=""
+if [ "${HELM_MODE}" = "upgrade" ]; then
+  HELM_EXTRA_OPTS="--take-ownership"
+fi
+
 helm  ${HELM_MODE} -n ${NAMESPACE} --create-namespace \
-  $HELM_VALUES_OPTS \
+  $HELM_VALUES_OPTS $HELM_EXTRA_OPTS \
   --wait sriov-network-operator ./deployment/sriov-network-operator-chart
