@@ -107,7 +107,7 @@ func ValidateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
 			return toV1AdmissionResponse(err)
 		}
 
-		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovNetwork(&network, ar.Request.Operation); err != nil {
+		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovNetwork(&network); err != nil {
 			reviewResponse.Result = &metav1.Status{
 				Reason: metav1.StatusReason(err.Error()),
 			}
@@ -121,7 +121,7 @@ func ValidateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
 			return toV1AdmissionResponse(err)
 		}
 
-		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovIBNetwork(&network, ar.Request.Operation); err != nil {
+		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateSriovIBNetwork(&network); err != nil {
 			reviewResponse.Result = &metav1.Status{
 				Reason: metav1.StatusReason(err.Error()),
 			}
@@ -135,7 +135,7 @@ func ValidateCustomResource(ar v1.AdmissionReview) *v1.AdmissionResponse {
 			return toV1AdmissionResponse(err)
 		}
 
-		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateOVSNetwork(&network, ar.Request.Operation); err != nil {
+		if reviewResponse.Allowed, reviewResponse.Warnings, err = validateOVSNetwork(&network); err != nil {
 			reviewResponse.Result = &metav1.Status{
 				Reason: metav1.StatusReason(err.Error()),
 			}
