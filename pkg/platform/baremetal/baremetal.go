@@ -8,13 +8,10 @@ import (
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	genericplugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/generic"
 	intelplugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/intel"
-	k8splugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/k8s"
 	mellanoxplugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/mellanox"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 // VendorPluginMap maps PCI vendor IDs to their corresponding plugin constructor functions.
@@ -64,22 +61,18 @@ func (bm *Baremetal) DiscoverBridges() (sriovnetworkv1.Bridges, error) {
 
 // GetVendorPlugins loads and returns the appropriate plugins for the baremetal platform.
 // Returns the generic plugin as the main plugin, and vendor-specific plugins (Intel, Mellanox)
-// plus the k8s plugin (for Kubernetes clusters) as additional plugins.
+// plus the host config plugin as additional plugins. Host config runs on both OpenShift and Kubernetes.
 func (bm *Baremetal) GetVendorPlugins(ns *sriovnetworkv1.SriovNetworkNodeState) (plugin.VendorPlugin, []plugin.VendorPlugin, error) {
 	additionalPlugins, err := bm.loadVendorPlugins(ns)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	clusterOrchestrator, err := orchestrator.New(vars.ClusterType)
+	hostPlugin, err := NewHostConfig(bm.hostHelpers)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	if clusterOrchestrator.ClusterType() == consts.ClusterTypeKubernetes {
-		k8sPlugin := k8splugin.NewK8sPlugin(bm.hostHelpers)
-		additionalPlugins = append(additionalPlugins, k8sPlugin)
-	}
+	additionalPlugins = append(additionalPlugins, hostPlugin)
 
 	genericPlugin, err := genericplugin.NewGenericPlugin(bm.hostHelpers)
 	if err != nil {
@@ -89,20 +82,31 @@ func (bm *Baremetal) GetVendorPlugins(ns *sriovnetworkv1.SriovNetworkNodeState) 
 	return genericPlugin, additionalPlugins, nil
 }
 
-// SystemdGetVendorPlugin returns the appropriate plugin for systemd mode based on the phase.
-// For PhasePre, returns a generic plugin that skips VF and bridge configuration.
-// For PhasePost, returns a full generic plugin.
+// SystemdGetVendorPlugin returns the plugin chain for systemd mode.
+// Host config runs before the generic plugin so kernel modules and kernel arguments
+// are applied before NIC configuration. PhasePre skips VF and bridge configuration.
 func (bm *Baremetal) SystemdGetVendorPlugin(phase string) (plugin.VendorPlugin, error) {
+	var genericOptions []genericplugin.Option
 	switch phase {
 	case consts.PhasePre:
-		return genericplugin.NewGenericPlugin(bm.hostHelpers,
+		genericOptions = []genericplugin.Option{
 			genericplugin.WithSkipVFConfiguration(),
-			genericplugin.WithSkipBridgeConfiguration())
+			genericplugin.WithSkipBridgeConfiguration(),
+		}
 	case consts.PhasePost:
-		return genericplugin.NewGenericPlugin(bm.hostHelpers)
 	default:
 		return nil, fmt.Errorf("invalid phase %s", phase)
 	}
+
+	hostPlugin, err := NewHostConfig(bm.hostHelpers)
+	if err != nil {
+		return nil, err
+	}
+	genericPlugin, err := genericplugin.NewGenericPlugin(bm.hostHelpers, genericOptions...)
+	if err != nil {
+		return nil, err
+	}
+	return newPluginChain(systemdChainName, hostPlugin, genericPlugin), nil
 }
 
 // loadVendorPlugins loads vendor-specific plugins based on the detected device vendors.

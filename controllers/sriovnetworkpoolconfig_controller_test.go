@@ -81,61 +81,66 @@ var _ = Describe("SriovNetworkPoolConfig controller", Ordered, func() {
 	})
 
 	Context("When is up", func() {
-		It("should be able to create machine config for MachineConfigPool specified in sriov pool config", func() {
+		It("deletes a leftover ovs hardware offload MachineConfig and drops the finalizer", func() {
 			if vars.ClusterType != consts.ClusterTypeOpenshift {
 				Skip("test should only be executed with openshift cluster type")
 			}
 
+			mcpName := "worker-hwoffload"
+			mcName := "00-" + mcpName + "-" + consts.OVSHWOLMachineConfigNameSuffix
+			mc := &mcfgv1.MachineConfig{ObjectMeta: metav1.ObjectMeta{Name: mcName}}
+			Expect(k8sClient.Create(ctx, mc)).To(Succeed())
+
 			config := &sriovnetworkv1.SriovNetworkPoolConfig{}
 			config.SetNamespace(testNamespace)
 			config.SetName("ovs-hw-offload-config")
-			mcpName := "worker-hwoffload"
-			mc := &mcfgv1.MachineConfig{}
-			mcName := "00-" + mcpName + "-" + consts.OVSHWOLMachineConfigNameSuffix
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: mcName, Namespace: testNamespace}, mc)
-			Expect(errors.IsNotFound(err)).Should(BeTrue())
-
-			mcp := &mcfgv1.MachineConfigPool{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: mcpName, Namespace: testNamespace}, mcp)
-			Expect(errors.IsNotFound(err)).Should(BeTrue())
-
-			mcp = &mcfgv1.MachineConfigPool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: mcpName,
-				},
-				Spec: mcfgv1.MachineConfigPoolSpec{
-					NodeSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"node-role.kubernetes.io/worker": "",
-						},
-					},
-				},
-			}
-			err = k8sClient.Create(ctx, mcp)
-			Expect(err).NotTo(HaveOccurred())
+			config.Finalizers = []string{sriovnetworkv1.POOLCONFIGFINALIZERNAME}
+			config.Spec.OvsHardwareOffloadConfig = sriovnetworkv1.OvsHardwareOffloadConfig{Name: mcpName}
+			Expect(k8sClient.Create(ctx, config)).To(Succeed())
 			DeferCleanup(func() {
-				err = k8sClient.Delete(ctx, mcp)
+				err := k8sClient.Delete(ctx, config)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			config.Spec.OvsHardwareOffloadConfig = sriovnetworkv1.OvsHardwareOffloadConfig{
-				Name: mcpName,
-			}
-			err = k8sClient.Create(ctx, config)
-			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: mcName}, &mcfgv1.MachineConfig{})
+				return errors.IsNotFound(err)
+			}, util.APITimeout, util.RetryInterval).Should(BeTrue())
+
+			Eventually(func() []string {
+				latest := &sriovnetworkv1.SriovNetworkPoolConfig{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: config.Name, Namespace: testNamespace}, latest)).To(Succeed())
+				return latest.Finalizers
+			}, util.APITimeout, util.RetryInterval).ShouldNot(ContainElement(sriovnetworkv1.POOLCONFIGFINALIZERNAME))
+		})
+
+		It("does not create an ovs hardware offload MachineConfig", func() {
+			config := &sriovnetworkv1.SriovNetworkPoolConfig{}
+			config.SetNamespace(testNamespace)
+			config.SetName("ovs-hw-offload-config-no-mc")
+			config.Finalizers = []string{sriovnetworkv1.POOLCONFIGFINALIZERNAME}
+			config.Spec.OvsHardwareOffloadConfig = sriovnetworkv1.OvsHardwareOffloadConfig{Name: "worker"}
+			Expect(k8sClient.Create(ctx, config)).To(Succeed())
 			DeferCleanup(func() {
-				err = k8sClient.Delete(ctx, config)
+				err := k8sClient.Delete(ctx, config)
 				Expect(err).ToNot(HaveOccurred())
+				// Finish finalization before deleting the MachineConfigPool or stopping its controller.
+				Eventually(func() bool {
+					return errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: config.Name, Namespace: config.Namespace}, config))
+				}, util.APITimeout, util.RetryInterval).Should(BeTrue())
 			})
 
-			Eventually(func() error {
-				mc := &mcfgv1.MachineConfig{}
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: mcName, Namespace: testNamespace}, mc)
-				if err != nil {
-					return err
-				}
-				return nil
-			}, util.APITimeout, util.RetryInterval).Should(Succeed())
+			mcName := "00-worker-" + consts.OVSHWOLMachineConfigNameSuffix
+			Consistently(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: mcName}, &mcfgv1.MachineConfig{})
+				return errors.IsNotFound(err)
+			}, "3s", util.RetryInterval).Should(BeTrue())
+
+			Eventually(func() []string {
+				latest := &sriovnetworkv1.SriovNetworkPoolConfig{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: config.Name, Namespace: testNamespace}, latest)).To(Succeed())
+				return latest.Finalizers
+			}, util.APITimeout, util.RetryInterval).ShouldNot(ContainElement(sriovnetworkv1.POOLCONFIGFINALIZERNAME))
 		})
 	})
 })

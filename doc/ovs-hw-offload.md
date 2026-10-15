@@ -23,6 +23,10 @@ The following manufacturers are known to work:
 
 - OpenVswitch installed
 
+Hardware offload (`other_config:hw-offload=true` by default) is applied by the config daemon when a node policy sets `eSwitchMode: switchdev`. The daemon writes `/etc/systemd/system/ovs-vswitchd.service.d/10-hw-offload.conf` on both OpenShift and Kubernetes and reboots the node when that file or the kernel command line changes.
+
+`SriovNetworkPoolConfig.spec.ovsHardwareOffloadConfig.name` is deprecated and ignored. Do not set it. Custom OVS `other_config` values belong on a pool that selects nodes with `nodeSelector` and leaves `name` empty. That pool's `otherConfig` is copied onto `SriovNetworkNodeState.spec.system.ovsConfig`.
+
 ### Activate "manageSoftwareBridges" featureGate
 
 ```

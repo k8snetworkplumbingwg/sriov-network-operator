@@ -18,8 +18,9 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 )
 
-// TODO: handle this to support unit-tests
-const systemdDir = "/usr/lib/systemd/system/"
+// systemdDropinDir is the writable systemd drop-in directory on both OpenShift and Kubernetes.
+// /usr/lib/systemd is ostree-immutable on RHCOS, so operator-owned drop-ins live under /etc.
+const systemdDropinDir = "/etc/systemd/system/"
 
 type service struct {
 	utilsHelper utils.CmdInterface
@@ -161,7 +162,7 @@ func (s *service) ReadOvsServiceInjectionManifestFile(filePath string, ovsConfig
 		return nil, err
 	}
 
-	dropinPath := systemdDir + serviceContent.Name + ".d/" + serviceContent.Dropins[0].Name
+	dropinPath := systemdDropinDir + serviceContent.Name + ".d/" + serviceContent.Dropins[0].Name
 	return &types.Service{
 		Name:    serviceContent.Name,
 		Path:    dropinPath,

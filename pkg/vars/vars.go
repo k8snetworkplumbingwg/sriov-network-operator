@@ -80,6 +80,10 @@ var (
 	// DisableDrain controls if the daemon will drain the node before configuration
 	DisableDrain = false
 
+	// ForcePciRealloc is set when SR-IOV configuration hits ENOMEM and pci=realloc
+	// must stay enabled across reconciles until the node reboots onto that cmdline.
+	ForcePciRealloc = false
+
 	// FeatureGates interface to interact with feature gates
 	FeatureGate featuregate.FeatureGate
 
