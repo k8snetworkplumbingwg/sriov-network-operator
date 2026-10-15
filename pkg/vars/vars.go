@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -46,7 +47,7 @@ var (
 	// DpdkDrivers supported DPDK drivers for virtual functions
 	DpdkDrivers = []string{"igb_uio", "vfio-pci", "uio_pci_generic"}
 
-	// InChroot global variable to mark that the config-daemon code is inside chroot on the host file system
+	// InChroot marks that the config-daemon code is inside chroot on the host file system.
 	InChroot = false
 
 	// UsingSystemdMode global variable to mark the config-daemon is running on systemd mode
@@ -89,9 +90,42 @@ var (
 	// UseExternalDrainer controls if SRIOV operator will use an external drainer
 	// for draining nodes or its internal drain controller (default)
 	UseExternalDrainer bool
+
+	// logCfg: effective file-log settings (use GetLogCfg / SetLogCfg).
+	logCfg atomic.Value
 )
 
+// LogFileSettings is the daemon's on-disk log config.
+type LogFileSettings struct {
+	Enabled    bool
+	MaxSizeMB  int
+	MaxFiles   int
+	MaxAgeDays int
+	Compress   bool
+	HostPath   string
+}
+
+// DefaultLogCfg returns production defaults.
+func DefaultLogCfg() LogFileSettings {
+	return LogFileSettings{
+		Enabled:    consts.LogCfgEnabledDefault,
+		MaxSizeMB:  consts.LogCfgMaxSizeMBDefault,
+		MaxFiles:   consts.LogCfgMaxFilesDefault,
+		MaxAgeDays: consts.LogCfgMaxAgeDaysDefault,
+		Compress:   consts.LogCfgCompressDefault,
+		HostPath:   consts.LogHostPathRoot,
+	}
+}
+
+// GetLogCfg returns the current file-log settings.
+func GetLogCfg() LogFileSettings { return logCfg.Load().(LogFileSettings) }
+
+// SetLogCfg replaces the current file-log settings.
+func SetLogCfg(cfg LogFileSettings) { logCfg.Store(cfg) }
+
 func init() {
+	logCfg.Store(DefaultLogCfg())
+
 	Namespace = os.Getenv("NAMESPACE")
 
 	ClusterType = consts.ClusterType(os.Getenv("CLUSTER_TYPE"))

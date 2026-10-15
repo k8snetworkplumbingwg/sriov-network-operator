@@ -119,6 +119,43 @@ spec:
 
 **Warning**: This feature may extend reboot times and should be tested thoroughly.
 
+#### 6. Device Plugin Log Rotation (`devicePluginLogRotation`)
+
+**Description**: Injects host log rotation settings into the
+`sriov-network-device-plugin` DaemonSet (`--log_dir`, `--log-max-*`, and a `/var/log`
+host volume). Config-daemon logging is **not** gated by this flag.
+
+**Default**: Disabled (`false`)
+
+**Requirements**: A device-plugin image that supports `--log_dir` and rotation flags.
+Enable only **after** that image is deployed on all nodes.
+
+```yaml
+apiVersion: sriovnetwork.openshift.io/v1
+kind: SriovOperatorConfig
+metadata:
+  name: default
+  namespace: sriov-network-operator
+spec:
+  logConfig:
+    enabled: true
+  featureGates:
+    devicePluginLogRotation: true
+```
+
+**Upgrade workflow**:
+
+1. Upgrade operator → set `logConfig.enabled: true` (gate remains off).
+2. Upgrade device-plugin image.
+3. Set `devicePluginLogRotation: true`.
+
+With the gate off, `logConfig.enabled: true` affects only the config-daemon; the
+device-plugin keeps stderr-only logging. See
+[operator-config-api.md](api/operator-config-api.md#upgrade-workflow-host-logging).
+
+**Before downgrading** the device-plugin image, set `devicePluginLogRotation: false`
+and wait for rollout.
+
 ### Feature Gate Best Practices
 
 1. **Test in Development**: Always test feature gates in non-production environments

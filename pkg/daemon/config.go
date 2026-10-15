@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -22,7 +23,10 @@ type OperatorConfigNodeReconcile struct {
 
 // NewOperatorConfigNodeReconcile creates a new instance of OperatorConfigNodeReconcile with the given client.
 func NewOperatorConfigNodeReconcile(client client.Client) *OperatorConfigNodeReconcile {
-	return &OperatorConfigNodeReconcile{client: client, latestFeatureGates: make(map[string]bool)}
+	return &OperatorConfigNodeReconcile{
+		client:             client,
+		latestFeatureGates: make(map[string]bool),
+	}
 }
 
 // Reconcile reconciles the OperatorConfig resource. It updates log level and feature gates as necessary.
@@ -39,8 +43,10 @@ func (oc *OperatorConfigNodeReconcile) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	// update log level
 	snolog.SetLogLevel(operatorConfig.Spec.LogLevel)
+	if err := oc.reconcileLogConfig(reqLogger, operatorConfig.Spec.LogConfig); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	newDisableDrain := operatorConfig.Spec.DisableDrain
 	if vars.DisableDrain != newDisableDrain {
@@ -62,4 +68,49 @@ func (oc *OperatorConfigNodeReconcile) SetupWithManager(mgr ctrl.Manager) error 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovOperatorConfig{}).
 		Complete(oc)
+}
+
+// reconcileLogConfig applies LogConfig changes to the file logger.
+func (oc *OperatorConfigNodeReconcile) reconcileLogConfig(reqLogger logr.Logger, lc *sriovnetworkv1.LogConfig) error {
+	newCfg, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(lc)
+	if err != nil {
+		reqLogger.Error(err, "invalid log configuration, skipping update",
+			"component", snolog.Component,
+			"subsystem", snolog.SubsystemPersistentFileLogging,
+			"node", vars.NodeName,
+		)
+		return nil
+	}
+	curCfg := vars.GetLogCfg()
+	if !needsLogReconcile(curCfg, newCfg) {
+		return nil
+	}
+	savedCfg := curCfg
+	vars.SetLogCfg(newCfg)
+	if err := snolog.InitLogWithFile(); err != nil {
+		vars.SetLogCfg(savedCfg)
+		reqLogger.Error(err, "failed to reconfigure persistent file logging, will retry on next reconcile",
+			"component", snolog.Component,
+			"subsystem", snolog.SubsystemPersistentFileLogging,
+			"node", vars.NodeName,
+			"enabled", newCfg.Enabled,
+		)
+		return err
+	}
+	return nil
+}
+
+func needsLogReconcile(cur, new vars.LogFileSettings) bool {
+	if cur != new {
+		return true
+	}
+
+	loggerActive := snolog.IsFileLoggerActive()
+	if new.Enabled && !loggerActive {
+		return true
+	}
+	if !new.Enabled && loggerActive {
+		return true
+	}
+	return false
 }

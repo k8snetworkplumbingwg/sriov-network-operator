@@ -40,6 +40,74 @@ func (pns PluginNameSlice) ToStringSlice() []string {
 	return ss
 }
 
+// LogConfig configures persistent host log files for the sriov-network-config-daemon
+// and sriov-network-device-plugin. Global settings apply to both components unless
+// overridden by component-specific ConfigDaemon or DevicePlugin fields.
+// Unset LogConfig uses defaults (enabled=false). Stdout/stderr logging is unchanged.
+//
+// +structType=granular
+type LogConfig struct {
+	// ComponentLogConfig holds the global settings that apply to both components
+	// unless overridden per-component below.
+	ComponentLogConfig `json:",inline"`
+
+	// ConfigDaemon overrides global settings for the sriov-network-config-daemon only.
+	// Any field set here takes precedence over the corresponding global field.
+	// +optional
+	ConfigDaemon *ComponentLogConfig `json:"configDaemon,omitempty"`
+
+	// DevicePlugin overrides global settings for the sriov-network-device-plugin only.
+	// Any field set here takes precedence over the corresponding global field.
+	// +optional
+	DevicePlugin *ComponentLogConfig `json:"devicePlugin,omitempty"`
+}
+
+// ComponentLogConfig provides log configuration shared by LogConfig's global settings
+// and, when used via LogConfig.ConfigDaemon/DevicePlugin, as per-component overrides.
+// When used as an override, any field set here takes precedence over the
+// corresponding global LogConfig field.
+type ComponentLogConfig struct {
+	// Enabled turns persistent host file logging on or off. Defaults to false when unset.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MaxSizeMB is the maximum size in megabytes of a log file before rotation.
+	// Defaults to 100. Minimum 1; maximum 1024.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1024
+	// +kubebuilder:validation:XValidation:rule="self >= 1 && self <= 1024",message="maxSizeMB must be between 1 and 1024"
+	// +optional
+	MaxSizeMB *int `json:"maxSizeMB,omitempty"`
+
+	// MaxFiles is the maximum number of old log files to retain after rotation.
+	// Defaults to 5. Minimum 1; maximum 20.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=20
+	// +kubebuilder:validation:XValidation:rule="self >= 1 && self <= 20",message="maxFiles must be between 1 and 20"
+	// +optional
+	MaxFiles *int `json:"maxFiles,omitempty"`
+
+	// MaxAgeDays is the maximum number of days to retain old log files.
+	// Defaults to 30. Set to 0 to disable age-based cleanup (bounded only by MaxFiles).
+	// Maximum 365.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=365
+	// +kubebuilder:validation:XValidation:rule="self >= 0 && self <= 365",message="maxAgeDays must be between 0 and 365"
+	// +optional
+	MaxAgeDays *int `json:"maxAgeDays,omitempty"`
+
+	// HostPath is the base host log directory.
+	// Default: "/var/log".
+	// Accepts a folder name ("my-logs" → /var/log/my-logs) or an absolute path
+	// under /var/log. Rejects "..", "~", paths outside /var/log, and symlink escapes.
+	// /var/log itself is allowed.
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:XValidation:rule="self.size() == 0 || (!self.contains('..') && !self.contains('~'))",message="hostPath must not contain '..' or '~'"
+	// +kubebuilder:validation:XValidation:rule="self.size() == 0 || self == '/var/log' || self.startsWith('/var/log/') || self.matches('^[a-zA-Z0-9][a-zA-Z0-9._-]*$')",message="hostPath must be a single folder name or an absolute path under /var/log"
+	// +optional
+	HostPath *string `json:"hostPath,omitempty"`
+}
+
 // SriovOperatorConfigSpec defines the desired state of SriovOperatorConfig
 type SriovOperatorConfigSpec struct {
 	// NodeSelector selects the nodes to be configured
@@ -69,6 +137,11 @@ type SriovOperatorConfigSpec struct {
 	// ConfigDaemonEnvVars allows to specify custom environment variables
 	// for the sriov-network-config-daemon
 	ConfigDaemonEnvVars map[string]string `json:"configDaemonEnvVars,omitempty"`
+	// LogConfig contains configuration for persistent host log files
+	// (both config daemon and device plugin).
+	// When unset, persistent logging is disabled.
+	// +optional
+	LogConfig *LogConfig `json:"logConfig,omitempty"`
 }
 
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig

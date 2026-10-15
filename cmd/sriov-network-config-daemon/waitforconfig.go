@@ -110,7 +110,7 @@ func validateWaitForConfigOpts() error {
 }
 
 func runWaitForConfigCmd(cmd *cobra.Command, args []string) error {
-	snolog.InitLog()
+	snolog.InitLogConsole()
 	setupLog := log.Log.WithName("wait-for-config")
 
 	if err := validateWaitForConfigOpts(); err != nil {

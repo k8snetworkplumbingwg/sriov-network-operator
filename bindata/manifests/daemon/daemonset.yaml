@@ -187,6 +187,10 @@ spec:
             mountPath: /host
           - name: tmp
             mountPath: /tmp
+          {{- if .ConfigDaemonLogEnabled }}
+          - name: sriov-logs
+            mountPath: {{.ConfigDaemonLogPath}}
+          {{- end }}
         lifecycle:
           preStop:
             exec:
@@ -204,3 +208,9 @@ spec:
           type: File
       - name: tmp
         emptyDir: {}
+      {{- if .ConfigDaemonLogEnabled }}
+      - name: sriov-logs
+        hostPath:
+          path: {{.ConfigDaemonLogPath}}
+          type: DirectoryOrCreate
+      {{- end }}
