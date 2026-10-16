@@ -18,6 +18,8 @@ spec:
       maxUnavailable: 33%
   template:
     metadata:
+      annotations:
+        sriovnetwork.openshift.io/config-hash: "{{.DevicePluginConfigHash}}"
       labels:
         app: sriov-device-plugin
         component: network
