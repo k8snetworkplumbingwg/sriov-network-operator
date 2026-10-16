@@ -398,7 +398,7 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 	}
 	// Sync DaemonSets
 	for _, obj := range objs {
-		if obj.GetKind() == "DaemonSet" {
+		if obj.GetKind() == consts.DaemonSet {
 			err = updateDaemonsetNodeSelector(obj, dc.Spec.ConfigDaemonNodeSelector)
 			if err != nil {
 				return err

@@ -71,7 +71,7 @@ func TestMetricsExporterSELinuxType(t *testing.T) {
 							return render.RenderDir(filepath.Join("..", path), data)
 						},
 						applyManifestFn: func(_ context.Context, _ client.Client, obj *unstructured.Unstructured) error {
-							if obj.GetKind() != "DaemonSet" {
+							if obj.GetKind() != consts.DaemonSet {
 								return nil
 							}
 							daemonSet = &appsv1.DaemonSet{}
