@@ -2111,34 +2111,40 @@ func defaultFilterPolicy(policy sriovv1.SriovNetworkNodePolicy) bool {
 }
 
 func setSriovOperatorSpecFlag(flagName string, flagValue bool) func() {
-	cfg := sriovv1.SriovOperatorConfig{}
-	err := clients.Get(context.TODO(), runtimeclient.ObjectKey{
-		Name:      "default",
-		Namespace: operatorNamespace,
-	}, &cfg)
-
 	ret := func() {}
 
-	Expect(err).ToNot(HaveOccurred())
-	if flagName == operatorNetworkInjectorFlag && cfg.Spec.EnableInjector != flagValue {
-		cfg.Spec.EnableInjector = flagValue
-		err = clients.Update(context.TODO(), &cfg)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(cfg.Spec.EnableInjector).To(Equal(flagValue))
-		ret = func() {
-			setSriovOperatorSpecFlag(flagName, !flagValue)
-		}
-	}
+	// The operator patches the SriovOperatorConfig status after every reconcile,
+	// so an Update right after a previous flag change can hit a conflict.
+	// Re-read the object and retry until the Update goes through.
+	Eventually(func(g Gomega) {
+		cfg := sriovv1.SriovOperatorConfig{}
+		err := clients.Get(context.TODO(), runtimeclient.ObjectKey{
+			Name:      "default",
+			Namespace: operatorNamespace,
+		}, &cfg)
+		g.Expect(err).ToNot(HaveOccurred())
 
-	if flagName == operatorWebhookFlag && cfg.Spec.EnableOperatorWebhook != flagValue {
-		cfg.Spec.EnableOperatorWebhook = flagValue
-		clients.Update(context.TODO(), &cfg)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(cfg.Spec.EnableOperatorWebhook).To(Equal(flagValue))
+		switch flagName {
+		case operatorNetworkInjectorFlag:
+			if cfg.Spec.EnableInjector == flagValue {
+				return
+			}
+			cfg.Spec.EnableInjector = flagValue
+		case operatorWebhookFlag:
+			if cfg.Spec.EnableOperatorWebhook == flagValue {
+				return
+			}
+			cfg.Spec.EnableOperatorWebhook = flagValue
+		default:
+			return
+		}
+
+		err = clients.Update(context.TODO(), &cfg)
+		g.Expect(err).ToNot(HaveOccurred())
 		ret = func() {
 			setSriovOperatorSpecFlag(flagName, !flagValue)
 		}
-	}
+	}, 1*time.Minute, 5*time.Second).WithOffset(1).Should(Succeed())
 
 	if flagValue {
 		Eventually(func(g Gomega) {
