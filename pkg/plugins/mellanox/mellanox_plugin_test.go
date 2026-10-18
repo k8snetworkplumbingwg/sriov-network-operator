@@ -57,6 +57,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 
 	Context("OnNodeStateChange", func() {
 		It("should return error if we are trying to configure mlx devices and the system is in lock down mode", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(true)
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{
 				{Name: "eno1",
@@ -83,6 +84,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should not return error the system is in lock down mode but we don't configure any mlx device", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(true)
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{}
 			sriovNetworkNodeState.Status.Interfaces = sriovnetworkv1.InterfaceExts{
@@ -101,6 +103,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should return error if the nic require fw changes but the nic is externally manage", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().GetMlxNicFwData("0000:d8:00.0").Return(&mlx.MlxNic{TotalVfs: 0}, &mlx.MlxNic{TotalVfs: 0}, nil)
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{
@@ -129,6 +132,10 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should return true on reboot if we need to update the number of vfs in the firmware", func() {
+			// Use non-zero generation (42) to verify propagation — catches regressions
+			// where SetGeneration(0) might be hardcoded
+			sriovNetworkNodeState.Generation = 42
+			h.EXPECT().SetGeneration(int64(42))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().GetMlxNicFwData("0000:d8:00.0").Return(&mlx.MlxNic{TotalVfs: 0}, &mlx.MlxNic{TotalVfs: 0}, nil)
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{
@@ -157,6 +164,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should return true on reboot adding vfs for one PF and removing for the other", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().GetMlxNicFwData("0000:d8:00.0").Return(&mlx.MlxNic{TotalVfs: 0}, &mlx.MlxNic{TotalVfs: 0}, nil)
 			h.EXPECT().GetMlxNicFwData("0000:d9:00.0").Return(&mlx.MlxNic{TotalVfs: 10}, &mlx.MlxNic{TotalVfs: 10}, nil)
@@ -203,6 +211,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should return false if we just need to reset the vfs", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().GetMlxNicFwData("0000:d8:00.0").Return(&mlx.MlxNic{TotalVfs: 10}, &mlx.MlxNic{TotalVfs: 10}, nil)
 			h.EXPECT().LoadPfsStatus("0000:d8:00.0").Return(&sriovnetworkv1.Interface{ExternallyManaged: false}, true, nil).AnyTimes()
@@ -229,6 +238,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should return error if we are not able to read the PF status file form host", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().LoadPfsStatus("0000:d8:00.0").Return(nil, false, fmt.Errorf("failed to read file"))
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{}
@@ -249,6 +259,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should failed if policy is externally manage and we need to change nic type", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().GetMlxNicFwData("0000:d8:00.0").Return(&mlx.MlxNic{TotalVfs: 10, LinkTypeP1: "ETH"}, &mlx.MlxNic{TotalVfs: 10, LinkTypeP1: "ETH"}, nil)
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{
@@ -281,6 +292,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should failed if not able to check if the nic is externally managed PF", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().LoadPfsStatus("0000:d8:00.0").Return(&sriovnetworkv1.Interface{ExternallyManaged: true}, true, nil).AnyTimes()
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{}
@@ -303,6 +315,7 @@ var _ = Describe("SRIOV", Ordered, func() {
 		})
 
 		It("should not reset the firmware if the device was not configured by us", func() {
+			h.EXPECT().SetGeneration(int64(0))
 			h.EXPECT().IsKernelLockdownMode().Return(false)
 			h.EXPECT().LoadPfsStatus("0000:d8:00.0").Return(nil, false, nil)
 			sriovNetworkNodeState.Spec.Interfaces = sriovnetworkv1.Interfaces{}

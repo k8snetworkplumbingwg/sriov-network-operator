@@ -2,6 +2,7 @@ package mlxutils
 
 import (
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -120,17 +121,30 @@ var _ = Describe("SRIOV", func() {
 			Expect(err.Error()).To(ContainSubstring("failed to reset VFs on secondary port"))
 		})
 
-		It("should not return error if firmware reset fails (best-effort)", func() {
+		It("should preserve cached firmware data if firmware reset fails (best-effort)", func() {
 			mellanoxNicsStatus["0000:d8:00."] = map[string]sriovnetworkv1.InterfaceExt{
 				"0000:d8:00.0": {PciAddress: "0000:d8:00.0", Vendor: "15b3"},
 			}
 
-			// VF reset succeeds but firmware reset fails
+			// Populate the cache before attempting the reset.
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(0, 0, "True", "True", "True", true, false, false), "", nil).Times(1)
+			current, next, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current).ToNot(BeNil())
+			Expect(next).ToNot(BeNil())
+
 			mockHostHelper.EXPECT().SetSriovNumVfs("0000:d8:00.0", 0).Return(nil)
 			u.EXPECT().RunCommand("mstfwreset", "-d", "0000:d8:00.0", "--skip_driver", "-l", "3", "-y", "reset").Return("", "-E- Failed to open the device", testError)
 
-			err := m.MlxResetFW([]string{"0000:d8:00.0"}, mellanoxNicsStatus)
+			err = m.MlxResetFW([]string{"0000:d8:00.0"}, mellanoxNicsStatus)
 			Expect(err).ToNot(HaveOccurred())
+
+			// A failed firmware reset must not invalidate the cached query result.
+			current, next, err = m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current).ToNot(BeNil())
+			Expect(next).ToNot(BeNil())
 		})
 
 		It("should handle multiple single-port NICs", func() {
@@ -226,6 +240,17 @@ var _ = Describe("SRIOV", func() {
 			mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
 			Expect(err).To(HaveOccurred())
 			Expect(int(mode)).To(Equal(-1))
+		})
+
+		It("should return an error and not cache malformed unrelated mstconfig rows", func() {
+			output := "        NUM_OF_VFS malformed\n" + getBFMstconfigOutput(true, false)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(output, "", nil).Times(2)
+
+			for range 2 {
+				mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+				Expect(err).To(HaveOccurred())
+				Expect(int(mode)).To(Equal(-1))
+			}
 		})
 
 		It("should return -1 if the card is not a BF", func() {
@@ -598,6 +623,453 @@ var _ = Describe("SRIOV", func() {
 		It("should handle different PCI prefixes", func() {
 			result := getOtherPortPCIAddress("0000:d9:00.0")
 			Expect(result).To(Equal("0000:d9:00.1"))
+		})
+	})
+
+	Context("Cache - GetMlxNicFwData", func() {
+		It("should share one query with BlueField mode when firmware data is read first", func() {
+			queryOutput := getMstconfigOutput(10, 10, "True", "True", "True", true, false, false) +
+				getBFMstconfigOutput(false, false)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(queryOutput, "", nil).Times(1)
+
+			m.SetGeneration(1)
+			current, next, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+			Expect(next.TotalVfs).To(Equal(10))
+
+			mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mode).To(Equal(BluefieldConnectXMode))
+		})
+
+		It("should share one query with firmware data when BlueField mode is read first", func() {
+			queryOutput := getMstconfigOutput(10, 10, "True", "True", "True", true, false, false) +
+				getBFMstconfigOutput(false, false)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(queryOutput, "", nil).Times(1)
+
+			m.SetGeneration(1)
+			mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mode).To(Equal(BluefieldConnectXMode))
+
+			current, next, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+			Expect(next.TotalVfs).To(Equal(10))
+		})
+
+		It("should requery after BlueField parsing fails on cached firmware query data", func() {
+			firmwareOutput := getMstconfigOutput(10, 10, "True", "True", "True", true, false, false)
+			fullOutput := firmwareOutput + getBFMstconfigOutput(false, false)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				firmwareOutput, "", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				fullOutput, "", nil).Times(1)
+
+			m.SetGeneration(1)
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).To(HaveOccurred())
+
+			mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mode).To(Equal(BluefieldConnectXMode))
+		})
+
+		It("should requery after firmware parsing fails on cached BlueField query data", func() {
+			blueFieldOutput := strings.ReplaceAll(getBFMstconfigOutput(false, false), TotalVfs, "NO_VFS")
+			fullOutput := getMstconfigOutput(10, 10, "True", "True", "True", true, false, false) +
+				blueFieldOutput
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				blueFieldOutput, "", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				fullOutput, "", nil).Times(1)
+
+			m.SetGeneration(1)
+			mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mode).To(Equal(BluefieldConnectXMode))
+
+			_, _, err = m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).To(HaveOccurred())
+
+			current, next, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+			Expect(next.TotalVfs).To(Equal(10))
+		})
+
+		It("should retry mstconfig after a query error", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return("", "query failed", testError).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false), "", nil).Times(1)
+
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).To(HaveOccurred())
+			current, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+		})
+
+		It("should retry mstconfig after firmware data parsing fails", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return("", "", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false), "", nil).Times(1)
+
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).To(HaveOccurred())
+			current, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+		})
+
+		It("should retry mstconfig after BlueField mode parsing fails", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false), "", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getBFMstconfigOutput(false, false), "", nil).Times(1)
+
+			_, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).To(HaveOccurred())
+			mode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mode).To(Equal(BluefieldConnectXMode))
+		})
+
+		It("should return cached result on second call (no mstconfig query)", func() {
+			// First call - triggers mstconfig
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1) // Only called once
+
+			m.SetGeneration(1)
+
+			current1, next1, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current1.TotalVfs).To(Equal(10))
+			Expect(next1.TotalVfs).To(Equal(10))
+
+			// Second call - should use cache, no RunCommand expected
+			current2, next2, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current2.TotalVfs).To(Equal(10))
+			Expect(next2.TotalVfs).To(Equal(10))
+		})
+
+		It("should invalidate cache when generation changes", func() {
+			// First call with generation 1
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			m.SetGeneration(1)
+			current, next, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+			Expect(next.TotalVfs).To(Equal(10))
+
+			// Change generation - cache should be invalidated
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(20, 20, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			m.SetGeneration(2)
+			current, next, err = m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(20))
+			Expect(next.TotalVfs).To(Equal(20))
+		})
+
+		It("should not invalidate cache when same generation is set", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1) // Only called once
+
+			m.SetGeneration(1)
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+
+			// Set same generation - cache should stay valid
+			m.SetGeneration(1)
+			_, _, err = m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should cache multiple PCI addresses independently", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d9:00.0", "q").Return(
+				getMstconfigOutput(20, 20, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			m.SetGeneration(1)
+
+			current1, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current1.TotalVfs).To(Equal(10))
+
+			current2, _, err := m.GetMlxNicFwData("0000:d9:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current2.TotalVfs).To(Equal(20))
+
+			// Both should be cached - no more RunCommand calls
+			current1Again, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current1Again.TotalVfs).To(Equal(10))
+
+			current2Again, _, err := m.GetMlxNicFwData("0000:d9:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current2Again.TotalVfs).To(Equal(20))
+		})
+	})
+
+	Context("Cache - dual-port invalidation", func() {
+		for _, port := range []string{"0000:d8:00.0", "0000:d8:00.1"} {
+			for _, reset := range []bool{false, true} {
+				for _, fail := range []bool{false, true} {
+					It(fmt.Sprintf("refreshes paired data for port %s reset=%t failure=%t", port, reset, fail), func() {
+						addresses := []string{"0000:d8:00.0", "0000:d8:00.1", "0000:d9:00.0"}
+						before := getMstconfigOutput(10, 11, "True", "True", "True", true, false, false) +
+							getBFMstconfigOutput(false, false)
+						after := getMstconfigOutput(20, 21, "True", "True", "True", true, false, false) +
+							getBFMstconfigOutput(true, false)
+						check := func(address string, currentVfs, nextVfs int, mode BlueFieldMode) {
+							current, next, err := m.GetMlxNicFwData(address)
+							Expect(err).ToNot(HaveOccurred())
+							Expect(current.TotalVfs).To(Equal(currentVfs))
+							Expect(next.TotalVfs).To(Equal(nextVfs))
+							actualMode, err := m.GetMellanoxBlueFieldMode(address)
+							Expect(err).ToNot(HaveOccurred())
+							Expect(actualMode).To(Equal(mode))
+						}
+						m.SetGeneration(42)
+						for _, address := range addresses {
+							u.EXPECT().RunCommand("mstconfig", "-e", "-d", address, "q").Return(before, "", nil).Times(1)
+							check(address, 10, 11, BluefieldConnectXMode)
+						}
+						var writeError error
+						if fail {
+							writeError = testError
+						}
+						if reset {
+							mockHostHelper.EXPECT().SetSriovNumVfs(port, 0).Return(nil)
+							mockHostHelper.EXPECT().SetSriovNumVfs(getOtherPortPCIAddress(port), 0).Return(nil)
+							u.EXPECT().RunCommand("mstfwreset", "-d", port, "--skip_driver", "-l", "3", "-y", "reset").
+								Return("", "", writeError)
+							status := map[string]map[string]sriovnetworkv1.InterfaceExt{
+								"0000:d8:00.": {
+									addresses[0]: {PciAddress: addresses[0]},
+									addresses[1]: {PciAddress: addresses[1]},
+								},
+							}
+							Expect(m.MlxResetFW([]string{port}, status)).To(Succeed())
+						} else {
+							u.EXPECT().RunCommand("mstconfig", "-d", port, "-y", "set", "SRIOV_EN=True", "NUM_OF_VFS=21").
+								Return("", "", writeError)
+							err := m.MlxConfigFW(map[string]MlxNic{port: {EnableSriov: true, TotalVfs: 21}})
+							if fail {
+								Expect(err).To(MatchError(testError))
+							} else {
+								Expect(err).ToNot(HaveOccurred())
+							}
+						}
+						m.SetGeneration(42)
+						for _, address := range addresses[:2] {
+							if fail {
+								check(address, 10, 11, BluefieldConnectXMode)
+							} else {
+								u.EXPECT().RunCommand("mstconfig", "-e", "-d", address, "q").Return(after, "", nil).Times(1)
+								check(address, 20, 21, BluefieldDpu)
+								check(address, 20, 21, BluefieldDpu)
+							}
+						}
+						check(addresses[2], 10, 11, BluefieldConnectXMode)
+					})
+				}
+			}
+		}
+
+		It("handles absent siblings and non-paired addresses safely", func() {
+			helper := m.(*mellanoxHelper)
+			for _, address := range []string{"", "0000:d8:00.2", "0000:d8:00.0", "0000:d8:00.1"} {
+				helper.cache[address] = &MlxNicFwDataCache{}
+				if address == "" || strings.HasSuffix(address, ".2") {
+					helper.cache["0000:d8:00.0"] = &MlxNicFwDataCache{}
+				}
+				helper.cache["0000:d8:00.3"] = &MlxNicFwDataCache{}
+				helper.invalidateCacheEntry(address)
+				Expect(helper.cache).ToNot(HaveKey(address))
+				if address == "" || strings.HasSuffix(address, ".2") {
+					Expect(helper.cache).To(HaveKey("0000:d8:00.0"))
+				}
+				Expect(helper.cache).To(HaveKey("0000:d8:00.3"))
+			}
+		})
+	})
+
+	Context("Cache - MlxConfigFW invalidation", func() {
+		It("should invalidate cache entry after successful mstconfig set", func() {
+			// Firmware data and BlueField mode share one parsed query.
+			queryOutput := getMstconfigOutput(0, 0, "True", "True", "True", true, false, false) +
+				getBFMstconfigOutput(false, false)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(queryOutput, "", nil).Times(1)
+
+			m.SetGeneration(1)
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+
+			bfMode, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bfMode).To(Equal(BluefieldConnectXMode))
+
+			// Write FW config - should invalidate cache for this PCI address
+			u.EXPECT().RunCommand("mstconfig", "-d", "0000:d8:00.0", "-y", "set", "SRIOV_EN=True", "NUM_OF_VFS=10").Return("", "", nil)
+
+			err = m.MlxConfigFW(map[string]MlxNic{
+				"0000:d8:00.0": {EnableSriov: true, TotalVfs: 10},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			// Next query should hit mstconfig again (cache was invalidated)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			current, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+		})
+	})
+
+	Context("Cache - MlxResetFW invalidation", func() {
+		It("should invalidate cache entry after successful firmware reset", func() {
+			// First query - populates cache
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			m.SetGeneration(1)
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+
+			// Reset FW - should invalidate cache
+			mockHostHelper.EXPECT().SetSriovNumVfs("0000:d8:00.0", 0).Return(nil)
+			u.EXPECT().RunCommand("mstfwreset", "-d", "0000:d8:00.0", "--skip_driver", "-l", "3", "-y", "reset").Return("", "", nil)
+
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": {"0000:d8:00.0": {PciAddress: "0000:d8:00.0"}},
+			}
+
+			err = m.MlxResetFW([]string{"0000:d8:00.0"}, mellanoxNicsStatus)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Next query should hit mstconfig again (cache was invalidated)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(0, 0, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			current, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(0))
+		})
+
+		It("should not invalidate cache entry if firmware reset fails", func() {
+			// First query - populates cache
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			m.SetGeneration(1)
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+
+			// Reset FW - fails
+			mockHostHelper.EXPECT().SetSriovNumVfs("0000:d8:00.0", 0).Return(nil)
+			u.EXPECT().RunCommand("mstfwreset", "-d", "0000:d8:00.0", "--skip_driver", "-l", "3", "-y", "reset").Return("", "error", testError)
+
+			mellanoxNicsStatus := map[string]map[string]sriovnetworkv1.InterfaceExt{
+				"0000:d8:00.": {"0000:d8:00.0": {PciAddress: "0000:d8:00.0"}},
+			}
+
+			err = m.MlxResetFW([]string{"0000:d8:00.0"}, mellanoxNicsStatus)
+			Expect(err).ToNot(HaveOccurred()) // mstfwreset failure is best-effort, no error returned
+
+			// Cache should still be valid - invalidation only happens on success path
+			current, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.TotalVfs).To(Equal(10))
+		})
+	})
+
+	Context("Cache - GetMellanoxBlueFieldMode", func() {
+		It("should return cached BlueFieldMode on second call", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getBFMstconfigOutput(false, false),
+				"", nil).Times(1) // Only called once
+
+			m.SetGeneration(1)
+			bfMode1, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bfMode1).To(Equal(BluefieldConnectXMode))
+
+			// Second call - should use cache
+			bfMode2, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bfMode2).To(Equal(BluefieldConnectXMode))
+		})
+
+		It("should cache DPU mode correctly", func() {
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getBFMstconfigOutput(true, false),
+				"", nil).Times(1) // Only called once
+
+			m.SetGeneration(1)
+			bfMode1, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bfMode1).To(Equal(BluefieldDpu))
+
+			// Second call - should use cache
+			bfMode2, err := m.GetMellanoxBlueFieldMode("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bfMode2).To(Equal(BluefieldDpu))
+		})
+	})
+
+	Context("Cache - InvalidateCache", func() {
+		It("should clear all cached entries", func() {
+			// Populate cache for two PCI addresses
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d9:00.0", "q").Return(
+				getMstconfigOutput(20, 20, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			m.SetGeneration(1)
+			_, _, err := m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			_, _, err = m.GetMlxNicFwData("0000:d9:00.0")
+			Expect(err).ToNot(HaveOccurred())
+
+			// Invalidate cache explicitly
+			m.InvalidateCache()
+
+			// Both should require fresh queries
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d8:00.0", "q").Return(
+				getMstconfigOutput(10, 10, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+			u.EXPECT().RunCommand("mstconfig", "-e", "-d", "0000:d9:00.0", "q").Return(
+				getMstconfigOutput(20, 20, "True", "True", "True", true, false, false),
+				"", nil).Times(1)
+
+			_, _, err = m.GetMlxNicFwData("0000:d8:00.0")
+			Expect(err).ToNot(HaveOccurred())
+			_, _, err = m.GetMlxNicFwData("0000:d9:00.0")
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })
