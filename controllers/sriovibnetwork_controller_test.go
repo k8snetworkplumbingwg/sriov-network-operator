@@ -503,7 +503,7 @@ func generateExpectedIBNetConfig(cr *sriovnetworkv1.SriovIBNetwork) string {
 	state := getLinkState(cr.Spec.LinkState)
 
 	if cr.Spec.IPAM != "" {
-		ipam = cr.Spec.IPAM
+		ipam = sortJSONKeys(cr.Spec.IPAM)
 	}
 	configStr, err := formatJSON(fmt.Sprintf(`{ "cniVersion":"1.0.0", "name":"%s","type":"ib-sriov",%s"ipam":%s }`, cr.GetName(), state, ipam))
 	if err != nil {

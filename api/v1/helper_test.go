@@ -7,11 +7,13 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
 
 	v1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
@@ -218,7 +220,7 @@ func TestIBRendering(t *testing.T) {
 				Spec: v1.SriovIBNetworkSpec{
 					NetworkNamespace: "testnamespace",
 					ResourceName:     "testresource",
-					Capabilities:     "foo",
+					Capabilities:     `{"infinibandGUID": true}`,
 				},
 			},
 		},
@@ -337,6 +339,311 @@ func TestOVSRendering(t *testing.T) {
 
 			assert.Equal(t, string(g), b.String(), "bytes do not match .golden file [%s]", gp)
 		})
+	}
+}
+
+func TestRenderRejectsInvalidJSON(t *testing.T) {
+	tests := []struct {
+		tname   string
+		network v1.SriovNetwork
+	}{
+		{
+			tname: "invalid capabilities",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName: "res",
+					Capabilities: `not-json`,
+				},
+			},
+		},
+		{
+			tname: "invalid ipam",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName: "res",
+					IPAM:         `not-json`,
+				},
+			},
+		},
+		{
+			tname: "invalid metaplugins",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName:      "res",
+					MetaPluginsConfig: `not-json`,
+				},
+			},
+		},
+		{
+			tname: "nested metaplugin array",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName:      "res",
+					MetaPluginsConfig: `[{"type":"vrf"}]`,
+				},
+			},
+		},
+		{
+			tname: "empty metaplugin array",
+			network: v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName:      "res",
+					MetaPluginsConfig: `[]`,
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.tname, func(t *testing.T) {
+			_, err := tc.network.RenderNetAttDef()
+			if err == nil {
+				t.Error("expected render to fail with invalid JSON input")
+			}
+		})
+	}
+}
+
+func TestRenderRejectsInvalidObjectFields(t *testing.T) {
+	renderers := []struct {
+		name   string
+		render func(capabilities, ipam string) error
+	}{
+		{"SriovNetwork", func(capabilities, ipam string) error {
+			cr := &v1.SriovNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec:       v1.SriovNetworkSpec{ResourceName: "res", Capabilities: capabilities, IPAM: ipam},
+			}
+			_, err := cr.RenderNetAttDef()
+			return err
+		}},
+		{"SriovIBNetwork", func(capabilities, ipam string) error {
+			cr := &v1.SriovIBNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovIBNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec:       v1.SriovIBNetworkSpec{ResourceName: "res", Capabilities: capabilities, IPAM: ipam},
+			}
+			_, err := cr.RenderNetAttDef()
+			return err
+		}},
+		{"OVSNetwork", func(capabilities, ipam string) error {
+			cr := &v1.OVSNetwork{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "OVSNetwork"},
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec:       v1.OVSNetworkSpec{ResourceName: "res", Capabilities: capabilities, IPAM: ipam},
+			}
+			_, err := cr.RenderNetAttDef()
+			return err
+		}},
+	}
+	inputs := []struct {
+		name         string
+		field        string
+		capabilities string
+		ipam         string
+	}{
+		{"capabilities null", "capabilities", `null`, ""},
+		{"capabilities array", "capabilities", `[]`, ""},
+		{"capabilities scalar", "capabilities", `"value"`, ""},
+		{"ipam null", "ipam", "", `null`},
+		{"ipam array", "ipam", "", `[]`},
+		{"ipam scalar", "ipam", "", `"value"`},
+	}
+	for _, renderer := range renderers {
+		for _, input := range inputs {
+			t.Run(renderer.name+"/"+input.name, func(t *testing.T) {
+				err := renderer.render(input.capabilities, input.ipam)
+				if err == nil {
+					t.Fatalf("expected %s to reject %s", renderer.name, input.name)
+				}
+				if !strings.Contains(err.Error(), "invalid "+input.field+" JSON") {
+					t.Fatalf("expected %s error, got %v", input.field, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRenderProducesValidNADConfigAndPreservesLargeNumbers(t *testing.T) {
+	network := v1.SriovNetwork{
+		TypeMeta:   metav1.TypeMeta{APIVersion: v1.GroupVersion.String(), Kind: "SriovNetwork"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+		Spec: v1.SriovNetworkSpec{
+			ResourceName:      "res",
+			Capabilities:      `{"mac": true, "largeNumber": 9007199254740993}`,
+			IPAM:              `{"type": "host-local", "subnet": "10.10.0.0/16", "largeNumber": 9007199254740993}`,
+			MetaPluginsConfig: `{"type": "vrf", "vrfname": "blue", "largeNumber": 9007199254740993}, {"type": "tuning"}`,
+			LogFile:           "sriov.log",
+		},
+	}
+
+	rendered, err := network.RenderNetAttDef()
+	if err != nil {
+		t.Fatal("failed rendering:", err)
+	}
+
+	spec, ok := rendered.Object["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("missing spec in rendered object")
+	}
+	config, ok := spec["config"].(string)
+	if !ok {
+		t.Fatal("missing spec.config in rendered object")
+	}
+
+	if !json.Valid([]byte(config)) {
+		t.Fatalf("rendered NAD config is not valid JSON:\n%s", config)
+	}
+	var parsed map[string]any
+	decoder := json.NewDecoder(strings.NewReader(config))
+	decoder.UseNumber()
+	if err := decoder.Decode(&parsed); err != nil {
+		t.Fatalf("failed to decode rendered NAD config: %v\nconfig: %s", err, config)
+	}
+	plugins, ok := parsed["plugins"].([]any)
+	if !ok {
+		t.Fatalf("missing plugins array in rendered config: %s", config)
+	}
+	if len(plugins) != 3 {
+		t.Fatalf("expected primary plugin plus two metaplugins, got %d: %s", len(plugins), config)
+	}
+	assertLargeNumber := func(label string, value any) {
+		t.Helper()
+		fields, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("%s is not an object: %#v", label, value)
+		}
+		number, ok := fields["largeNumber"].(json.Number)
+		if !ok {
+			t.Fatalf("%s largeNumber is not a JSON number: %#v", label, fields["largeNumber"])
+		}
+		if got := number.String(); got != "9007199254740993" {
+			t.Errorf("%s largeNumber = %s, want 9007199254740993", label, got)
+		}
+	}
+	for i, rawPlugin := range plugins {
+		plugin, ok := rawPlugin.(map[string]any)
+		if !ok {
+			t.Fatalf("plugins[%d] is not a plugin object: %#v", i, rawPlugin)
+		}
+		if i == 0 {
+			assertLargeNumber("capabilities", plugin["capabilities"])
+			assertLargeNumber("ipam", plugin["ipam"])
+		} else if i == 1 {
+			assertLargeNumber("first metaplugin", plugin)
+		}
+	}
+}
+
+func TestRenderPreservesQuotedValues(t *testing.T) {
+	renderers := []struct {
+		name   string
+		render func(capabilities, ipam, metaPlugins, value string) (*unstructured.Unstructured, error)
+	}{
+		{"SriovNetwork", func(capabilities, ipam, metaPlugins, value string) (*unstructured.Unstructured, error) {
+			cr := &v1.SriovNetwork{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovNetworkSpec{
+					ResourceName: "res", Capabilities: capabilities, IPAM: ipam,
+					MetaPluginsConfig: metaPlugins, LogFile: value,
+				},
+			}
+			return cr.RenderNetAttDef()
+		}},
+		{"SriovIBNetwork", func(capabilities, ipam, metaPlugins, value string) (*unstructured.Unstructured, error) {
+			cr := &v1.SriovIBNetwork{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.SriovIBNetworkSpec{
+					ResourceName: "res", Capabilities: capabilities, IPAM: ipam,
+					MetaPluginsConfig: metaPlugins,
+				},
+			}
+			return cr.RenderNetAttDef()
+		}},
+		{"OVSNetwork", func(capabilities, ipam, metaPlugins, value string) (*unstructured.Unstructured, error) {
+			cr := &v1.OVSNetwork{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "test"},
+				Spec: v1.OVSNetworkSpec{
+					ResourceName: "res", Capabilities: capabilities, IPAM: ipam,
+					MetaPluginsConfig: metaPlugins, Bridge: value, InterfaceType: value,
+				},
+			}
+			return cr.RenderNetAttDef()
+		}},
+	}
+	inputs := []struct {
+		name, jsonValue, value string
+	}{
+		{"unicode apostrophe", `"/tmp/team\u0027s"`, "/tmp/team's"},
+		{"unicode next line", `"/tmp/team\u0085s"`, "/tmp/team\u0085s"},
+		{"literal next line", "\"/tmp/team\u0085s\"", "/tmp/team\u0085s"},
+		{"unicode DEL", `"/tmp/team\u007fs"`, "/tmp/team\u007fs"},
+		{"literal DEL", "\"/tmp/team\u007fs\"", "/tmp/team\u007fs"},
+		{"unicode C1 controls", `"/tmp/\u0080\u009fs"`, "/tmp/\u0080\u009fs"},
+		{"literal C1 controls", "\"/tmp/\u0080\u009fs\"", "/tmp/\u0080\u009fs"},
+		{"literal control escapes", `"/tmp/\\u007f\\u0085\\u009f"`, `/tmp/\u007f\u0085\u009f`},
+		{"unicode separators", `"/tmp/team\u2028s\u2029log"`, "/tmp/team\u2028s\u2029log"},
+		{"literal apostrophe", `"/tmp/team's"`, "/tmp/team's"},
+		{"consecutive apostrophes", `"/tmp/team''s"`, "/tmp/team''s"},
+		{"mixed escapes", `"/tmp/team's\"log\\file\n"`, "/tmp/team's\"log\\file\n"},
+		{"literal unicode escape", `"/tmp/team\\u0027s"`, `/tmp/team\u0027s`},
+	}
+	for _, renderer := range renderers {
+		for _, input := range inputs {
+			t.Run(renderer.name+"/"+input.name, func(t *testing.T) {
+				capabilities := `{` + input.jsonValue + `:true}`
+				ipam := `{"type":"host-local","dataDir":` + input.jsonValue + `}`
+				metaPlugins := `{"type":"vrf","vrfname":` + input.jsonValue + `}, {"type":"tuning"}`
+				rendered, err := renderer.render(capabilities, ipam, metaPlugins, input.value)
+				if err != nil {
+					t.Fatal("failed rendering:", err)
+				}
+				config, found, err := unstructured.NestedString(rendered.Object, "spec", "config")
+				if err != nil || !found {
+					t.Fatalf("missing spec.config: %v", err)
+				}
+				var parsed struct {
+					Plugins []struct {
+						Type          string          `json:"type"`
+						Capabilities  map[string]bool `json:"capabilities"`
+						IPAM          map[string]any  `json:"ipam"`
+						VRFName       string          `json:"vrfname"`
+						LogFile       string          `json:"logFile"`
+						Bridge        string          `json:"bridge"`
+						InterfaceType string          `json:"interface_type"`
+					} `json:"plugins"`
+				}
+				if err := json.Unmarshal([]byte(config), &parsed); err != nil {
+					t.Fatalf("invalid rendered JSON: %v\nconfig: %s", err, config)
+				}
+				if len(parsed.Plugins) != 3 {
+					t.Fatalf("expected three plugins, got %d", len(parsed.Plugins))
+				}
+				primary := parsed.Plugins[0]
+				assert.Equal(t, map[string]bool{input.value: true}, primary.Capabilities)
+				assert.Equal(t, map[string]any{"type": "host-local", "dataDir": input.value}, primary.IPAM)
+				assert.Equal(t, "vrf", parsed.Plugins[1].Type)
+				assert.Equal(t, input.value, parsed.Plugins[1].VRFName)
+				assert.Equal(t, "tuning", parsed.Plugins[2].Type)
+				switch renderer.name {
+				case "SriovNetwork":
+					assert.Equal(t, input.value, primary.LogFile)
+				case "OVSNetwork":
+					assert.Equal(t, input.value, primary.Bridge)
+					assert.Equal(t, input.value, primary.InterfaceType)
+				}
+			})
+		}
 	}
 }
 
