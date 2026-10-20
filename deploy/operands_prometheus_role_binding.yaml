@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-k8s
+  namespace: $NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-k8s
+subjects:
+  - kind: ServiceAccount
+    name: $METRICS_EXPORTER_PROMETHEUS_OPERATOR_SERVICE_ACCOUNT
+    namespace: $METRICS_EXPORTER_PROMETHEUS_OPERATOR_NAMESPACE
