@@ -1,5 +1,44 @@
 # SR-IOV Network Operator Helm Chart
 
+## Migrating legacy operand ownership
+
+Before upgrading an installation where the operator created operand ServiceAccounts
+or namespaced RBAC, use installation credentials with get/list and patch access
+and install `jq`. Stop the old operator before changing its permissions:
+
+```sh
+kubectl -n sriov-network-operator scale deployment/sriov-network-operator --replicas=0
+kubectl -n sriov-network-operator wait --for=delete pod -l name=sriov-network-operator --timeout=120s
+OPERATOR_EXEC=kubectl bash hack/migrate-operand-rbac-ownership.sh sriov-network-operator
+```
+
+Substitute your installation namespace in every command. Confirm that all operator
+pods have terminated, including terminating replicas; stop any locally running
+operator too. Keep it stopped until installation completes. Do not delete the
+default SriovOperatorConfig as a migration step.
+
+The helper removes only matching legacy configuration owners from the fixed
+operand ServiceAccount/Role/RoleBinding inventory, including disabled Prometheus
+grants. It preserves other owners and metadata. It refuses conflicting owners,
+API failures, or an active operator. Fresh installations and already migrated
+objects need no shutdown. If migration fails partway, resolve the reported error
+and rerun it while the operator remains stopped; completed objects are safe to
+revisit.
+
+For direct kubectl installation, run the helper before applying new operator
+permissions and starting the new Deployment. `hack/deploy-setup.sh NAMESPACE`
+runs it in that order. For direct Helm adoption, run it before
+`helm upgrade --take-ownership` (Helm 3.17+). The script runs it only with
+`HELM_MODE=upgrade HELM_TAKE_OWNERSHIP=true`; adoption is an explicit one-time
+choice. Migration does not grant Helm ownership by itself.
+
+Rollback has not been validated against a live cluster. An older controller may
+reattach configuration owners after rollback: stop it and repeat normalization
+before re-upgrading. The helper never automatically reattaches ownership.
+Actual Kubernetes garbage collection, interrupted upgrades and rollback require
+live-cluster validation; the local regression uses a mocked API.
+
+
 SR-IOV Network Operator Helm Chart provides an easy way to install, configure and manage
 the lifecycle of SR-IOV network operator.
 
@@ -23,7 +62,7 @@ SR-IOV Network Operator features:
 ### Prerequisites
 
 - Kubernetes v1.17+
-- Helm v3
+- Helm v3.17+
 
 ### Install Helm
 
@@ -61,6 +100,16 @@ In the case that [Pod Security Admission](https://kubernetes.io/docs/concepts/se
 ```
 $ kubectl label ns sriov-network-operator pod-security.kubernetes.io/enforce=privileged
 ```
+
+### Upgrading from older versions
+
+When upgrading from a version where the operator created operand RBAC at runtime, use the `--take-ownership` flag (Helm 3.17+) on the first upgrade:
+
+```
+$ helm upgrade --take-ownership -n sriov-network-operator sriov-network-operator ./deployment/sriov-network-operator-chart
+```
+
+This is needed once to let Helm adopt the existing RBAC resources. Subsequent upgrades work normally without the flag. When using `hack/deploy-operator-helm.sh`, explicitly opt in for that one-time adoption with `HELM_MODE=upgrade HELM_TAKE_OWNERSHIP=true`; ordinary upgrades omit ownership transfer.
 
 ## Chart parameters
 

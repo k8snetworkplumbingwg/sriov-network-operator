@@ -6,8 +6,8 @@ root="$(readlink --canonicalize "$here/..")"
 
 export ADMISSION_CONTROLLERS_ENABLED=true
 export ADMISSION_CONTROLLERS_CERTIFICATES_CERT_MANAGER_ENABLED=true
-export NAMESPACE="sriov-network-operator"
-export OPERATOR_NAMESPACE="sriov-network-operator"
+export NAMESPACE="${NAMESPACE:-sriov-network-operator}"
+export OPERATOR_NAMESPACE="${NAMESPACE}"
 
 source hack/env.sh
 
@@ -27,6 +27,12 @@ HELM_VALUES_OPTS="\
 
 PATH=$PATH:${root}/bin
 make helm
+HELM_EXTRA_OPTS=""
+if [ "${HELM_MODE}" = "upgrade" ] && [ "${HELM_TAKE_OWNERSHIP:-false}" = "true" ]; then
+  bash "${here}/migrate-operand-rbac-ownership.sh" "${NAMESPACE}"
+  HELM_EXTRA_OPTS="--take-ownership"
+fi
+
 helm  ${HELM_MODE} -n ${NAMESPACE} --create-namespace \
-  $HELM_VALUES_OPTS \
+  $HELM_VALUES_OPTS $HELM_EXTRA_OPTS \
   --wait sriov-network-operator ./deployment/sriov-network-operator-chart
