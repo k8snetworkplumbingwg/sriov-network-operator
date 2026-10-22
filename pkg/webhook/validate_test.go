@@ -218,6 +218,122 @@ func TestValidateSriovOperatorConfigDisableDrain(t *testing.T) {
 	g.Expect(ok).To(Equal(true))
 }
 
+func TestValidateSriovOperatorConfigLogConfig(t *testing.T) {
+	g := NewGomegaWithT(t)
+	client = fake.NewClientBuilder().WithScheme(vars.Scheme).Build()
+
+	folderName := "custom-sriov-network-operator"
+	fullPath := "/var/log/custom-sriov-network-operator/first_rotation_logs/"
+	outsidePath := "/tmp/logs"
+
+	config := newDefaultOperatorConfig()
+	config.Spec.DisableDrain = false
+	config.Spec.LogConfig = &LogConfig{ComponentLogConfig: ComponentLogConfig{HostPath: &folderName}}
+	ok, _, err := validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	config.Spec.LogConfig = &LogConfig{ComponentLogConfig: ComponentLogConfig{HostPath: &fullPath}}
+	ok, _, err = validateSriovOperatorConfig(config, "UPDATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	config.Spec.LogConfig = &LogConfig{ComponentLogConfig: ComponentLogConfig{HostPath: &outsidePath}}
+	ok, _, err = validateSriovOperatorConfig(config, "UPDATE")
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("invalid LogConfig"))
+	g.Expect(ok).To(Equal(false))
+}
+
+func TestValidateSriovOperatorConfigLogConfigComponentOverrides(t *testing.T) {
+	g := NewGomegaWithT(t)
+	client = fake.NewClientBuilder().WithScheme(vars.Scheme).Build()
+
+	enabled := true
+	disabled := false
+	validPath := "custom-logs"
+	invalidPath := "/tmp/invalid"
+
+	// Test: configDaemon override with valid hostPath
+	config := newDefaultOperatorConfig()
+	config.Spec.LogConfig = &LogConfig{
+		ComponentLogConfig: ComponentLogConfig{Enabled: &enabled},
+		ConfigDaemon: &ComponentLogConfig{
+			HostPath: &validPath,
+		},
+	}
+	ok, _, err := validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	// Test: devicePlugin override with valid hostPath
+	config = newDefaultOperatorConfig()
+	config.Spec.LogConfig = &LogConfig{
+		ComponentLogConfig: ComponentLogConfig{Enabled: &enabled},
+		DevicePlugin: &ComponentLogConfig{
+			HostPath: &validPath,
+		},
+	}
+	ok, _, err = validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	// Test: configDaemon override with invalid hostPath should fail
+	config = newDefaultOperatorConfig()
+	config.Spec.LogConfig = &LogConfig{
+		ComponentLogConfig: ComponentLogConfig{Enabled: &enabled},
+		ConfigDaemon: &ComponentLogConfig{
+			HostPath: &invalidPath,
+		},
+	}
+	ok, _, err = validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("invalid LogConfig for configDaemon"))
+	g.Expect(ok).To(Equal(false))
+
+	// Test: devicePlugin override with invalid hostPath should fail
+	config = newDefaultOperatorConfig()
+	config.Spec.LogConfig = &LogConfig{
+		ComponentLogConfig: ComponentLogConfig{Enabled: &enabled},
+		DevicePlugin: &ComponentLogConfig{
+			HostPath: &invalidPath,
+		},
+	}
+	ok, _, err = validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("invalid LogConfig for devicePlugin"))
+	g.Expect(ok).To(Equal(false))
+
+	// Test: component can disable when global is enabled (valid config)
+	config = newDefaultOperatorConfig()
+	config.Spec.LogConfig = &LogConfig{
+		ComponentLogConfig: ComponentLogConfig{Enabled: &enabled},
+		DevicePlugin: &ComponentLogConfig{
+			Enabled: &disabled,
+		},
+	}
+	ok, _, err = validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+
+	// Test: independent hostPaths for both components
+	daemonPath := "daemon-logs"
+	dpPath := "dp-logs"
+	config = newDefaultOperatorConfig()
+	config.Spec.LogConfig = &LogConfig{
+		ComponentLogConfig: ComponentLogConfig{Enabled: &enabled},
+		ConfigDaemon: &ComponentLogConfig{
+			HostPath: &daemonPath,
+		},
+		DevicePlugin: &ComponentLogConfig{
+			HostPath: &dpPath,
+		},
+	}
+	ok, _, err = validateSriovOperatorConfig(config, "CREATE")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(ok).To(Equal(true))
+}
+
 func TestValidateSriovNetworkPoolConfigWithDefault(t *testing.T) {
 	g := NewGomegaWithT(t)
 

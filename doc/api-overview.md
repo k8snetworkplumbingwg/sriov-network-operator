@@ -11,7 +11,7 @@ The SR-IOV network operator introduces the following Custom Resource Definitions
 | **SriovNetworkNodeState** | Represent SR-IOV interface states on each node | Operator (read-only for users)     |
 | **SriovNetworkNodePolicy** | Configure SR-IOV interfaces and device plugin on selected nodes | Cluster Admin                      |
 | **SriovNetworkPoolConfig** | Manage groups of nodes for parallel operations and RDMA configuration | Cluster Admin                      |
-| **SriovOperatorConfig** | Configure operator-wide settings, feature gates, and plugin management | Cluster Admin                      |
+| **SriovOperatorConfig** | Configure operator-wide settings, feature gates, plugin management, and config-daemon host logging | Cluster Admin                      |
 
 ## Resource Relationships
 

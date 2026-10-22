@@ -39,7 +39,7 @@ func init() {
 
 func runCleanupCmd(cmd *cobra.Command, args []string) error {
 	// init logger
-	snolog.InitLog()
+	snolog.InitLogConsole()
 	setupLog := log.Log.WithName("sriov-network-operator-config-cleanup")
 	setupLog.Info("Run sriov-network-operator-config-cleanup")
 

@@ -54,7 +54,27 @@ func validateSriovOperatorConfig(cr *sriovnetworkv1.SriovOperatorConfig, operati
 		return false, warnings, err
 	}
 
+	if err := validateSriovOperatorConfigLogConfig(cr); err != nil {
+		return false, warnings, err
+	}
+
 	return true, warnings, nil
+}
+
+// validateSriovOperatorConfigLogConfig validates Spec.LogConfig (incl. HostPath).
+func validateSriovOperatorConfigLogConfig(cr *sriovnetworkv1.SriovOperatorConfig) error {
+	if cr.Spec.LogConfig == nil {
+		return nil
+	}
+	// Validate config-daemon effective config
+	if _, err := sriovnetworkv1.GetEffectiveConfigDaemonLogConfig(cr.Spec.LogConfig); err != nil {
+		return fmt.Errorf("invalid LogConfig for configDaemon: %w", err)
+	}
+	// Validate device-plugin effective config
+	if _, err := sriovnetworkv1.GetEffectiveDevicePluginLogConfig(cr.Spec.LogConfig); err != nil {
+		return fmt.Errorf("invalid LogConfig for devicePlugin: %w", err)
+	}
+	return nil
 }
 
 // validateSriovOperatorConfigDisableDrain checks if the user is setting `.Spec.DisableDrain` from false to true while
