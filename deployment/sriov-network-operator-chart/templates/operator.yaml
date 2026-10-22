@@ -91,6 +91,10 @@ spec:
               value: {{ .Values.operator.metricsExporter.certificates.secretName }}
             - name: METRICS_EXPORTER_KUBE_RBAC_PROXY_IMAGE
               value: {{ .Values.images.metricsExporterKubeRbacProxy }}
+            {{- if .Values.operator.metricsExporter.seLinuxType }}
+            - name: METRICS_EXPORTER_SELINUX_TYPE
+              value: {{ .Values.operator.metricsExporter.seLinuxType | quote }}
+            {{- end }}
             {{- if .Values.operator.externalDrainer.enabled }}
             - name: USE_EXTERNAL_DRAINER
               value: {{ .Values.operator.externalDrainer.enabled | quote }}

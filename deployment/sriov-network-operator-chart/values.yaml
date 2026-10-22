@@ -52,6 +52,9 @@ operator:
   staleNodeStateCleanupDelayMinutes: "30"
   metricsExporter:
     port: "9110"
+    # Optional SELinux type for the metrics-exporter container to access host files.
+    # Leave empty to use the container runtime's default SELinux type.
+    seLinuxType: ""
     certificates:
       secretName: "metrics-exporter-cert"
     prometheusOperator:
