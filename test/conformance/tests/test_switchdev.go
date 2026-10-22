@@ -74,7 +74,7 @@ var _ = Describe("[sriov] Switchdev", Ordered, func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "test-switchdev-pool", Namespace: operatorNamespace},
 			Spec: sriovv1.SriovNetworkPoolConfigSpec{
 				NodeSelector:             &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}},
-				OvsHardwareOffloadConfig: sriovv1.OvsHardwareOffloadConfig{OvsConfig: map[string]string{"hw-offload": "true", "tc-policy": "none"}},
+				OvsHardwareOffloadConfig: &sriovv1.OvsHardwareOffloadConfig{OvsConfig: map[string]string{"hw-offload": "true", "tc-policy": "none"}},
 			},
 		}
 		if os.Getenv("CLUSTER_TYPE") == string(consts.ClusterTypeOpenshift) {
