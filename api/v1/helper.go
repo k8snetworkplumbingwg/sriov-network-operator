@@ -244,7 +244,8 @@ func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
 							// We do this check only if a Node GUID is set to ensure that we were able to read the
 							// Node GUID. We intentionally skip empty Node GUID in vfStatus because this may happen
 							// when the VF is allocated to a workload.
-							if vfStatus.GUID == consts.UninitializedNodeGUID {
+							// Accept both sysfs and netlink representations of an uninitialized GUID.
+							if vfStatus.GUID == consts.UninitializedNodeGUID || vfStatus.GUID == consts.UninitializedNodeGUIDNetlink {
 								log.V(0).Info("NeedToUpdateSriov(): VF GUID needs update",
 									"vf", vfStatus.VfID, "current", vfStatus.GUID)
 								return true
