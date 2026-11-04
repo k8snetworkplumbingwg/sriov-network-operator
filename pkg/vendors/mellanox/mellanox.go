@@ -36,17 +36,19 @@ const (
 	disabled = "DISABLED"
 	enabled  = "ENABLED"
 
-	VendorMellanox = "15b3"
-	DeviceBF2      = "a2d6"
-	DeviceBF3      = "a2dc"
-
+	VendorMellanox        = "15b3"
+	DeviceBF2             = "a2d6"
+	DeviceBF3             = "a2dc"
 	PreconfiguredLinkType = "Preconfigured"
 	UnknownLinkType       = "Unknown"
-	TotalVfs              = "NUM_OF_VFS"
-	EnableSriov           = "SRIOV_EN"
-	LinkTypeP1            = "LINK_TYPE_P1"
-	LinkTypeP2            = "LINK_TYPE_P2"
-	MellanoxVendorID      = "15b3"
+)
+
+const (
+	TotalVfs         = "NUM_OF_VFS"
+	EnableSriov      = "SRIOV_EN"
+	LinkTypeP1       = "LINK_TYPE_P1"
+	LinkTypeP2       = "LINK_TYPE_P2"
+	MellanoxVendorID = "15b3"
 )
 
 type MlxNic struct {
@@ -54,6 +56,22 @@ type MlxNic struct {
 	TotalVfs    int
 	LinkTypeP1  string
 	LinkTypeP2  string
+}
+
+// MlxNicFwDataCache holds all cached mstconfig query results for a single NIC.
+type MlxNicFwDataCache struct {
+	FwCurrent     *MlxNic
+	FwNext        *MlxNic
+	BlueFieldMode BlueFieldMode
+	BfModeQueried bool // whether BlueFieldMode was populated (since zero-value is a valid mode)
+	queryData     *mstConfigData
+}
+
+// mstConfigData holds parsed current and next values from a successful query.
+// Keeping the parsed attributes lets both accessors share one mstconfig call.
+type mstConfigData struct {
+	current map[string]string
+	next    map[string]string
 }
 
 //go:generate ../../../bin/mockgen -destination mock/mock_mellanox.go -source mellanox.go
@@ -64,17 +82,47 @@ type MellanoxInterface interface {
 
 	MlxConfigFW(attributesToChange map[string]MlxNic) error
 	MlxResetFW(pciAddresses []string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) error
+
+	// SetGeneration sets the NodeState generation for cache invalidation.
+	// If the generation differs from the cached one, the cache is fully invalidated.
+	SetGeneration(gen int64)
+	// InvalidateCache clears the entire mstconfig query cache.
+	InvalidateCache()
 }
 
 type mellanoxHelper struct {
-	utils      utils.CmdInterface
-	hostHelper host.HostManagerInterface
+	utils           utils.CmdInterface
+	hostHelper      host.HostManagerInterface
+	cacheGeneration int64
+	cache           map[string]*MlxNicFwDataCache // keyed by PCI address
 }
 
 func New(utilsHelper utils.CmdInterface, hostHelper host.HostManagerInterface) MellanoxInterface {
 	return &mellanoxHelper{
 		utils:      utilsHelper,
 		hostHelper: hostHelper,
+		cache:      make(map[string]*MlxNicFwDataCache),
+	}
+}
+
+func (m *mellanoxHelper) SetGeneration(gen int64) {
+	if m.cacheGeneration != gen {
+		log.Log.V(2).Info("mellanox cache: generation changed, invalidating cache",
+			"old", m.cacheGeneration, "new", gen)
+		m.InvalidateCache()
+		m.cacheGeneration = gen
+	}
+}
+
+func (m *mellanoxHelper) InvalidateCache() {
+	m.cache = make(map[string]*MlxNicFwDataCache)
+}
+
+// invalidateCacheEntry removes the PCI address and its paired port because firmware is shared by the NIC.
+func (m *mellanoxHelper) invalidateCacheEntry(pciAddress string) {
+	delete(m.cache, pciAddress)
+	if strings.HasSuffix(pciAddress, ".0") || strings.HasSuffix(pciAddress, ".1") {
+		delete(m.cache, getOtherPortPCIAddress(pciAddress))
 	}
 }
 
@@ -85,66 +133,115 @@ func (m *mellanoxHelper) MstConfigReadData(pciAddress string) (string, string, e
 	return stdout, stderr, err
 }
 
+// queryMstConfigData returns parsed values for a PCI address, querying the NIC only on a cache miss.
+func (m *mellanoxHelper) queryMstConfigData(pciAddress string) (*mstConfigData, string, error) {
+	if entry := m.cache[pciAddress]; entry != nil && entry.queryData != nil {
+		return entry.queryData, "", nil
+	}
+
+	stdout, stderr, err := m.MstConfigReadData(pciAddress)
+	if err != nil {
+		return nil, stderr, err
+	}
+
+	attrs := []string{
+		TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2,
+		internalCPUPageSupplier, internalCPUEswitchManager, internalCPUIbVporto,
+		internalCPUOffloadEngine, internalCPUModel,
+	}
+	current, next, err := ParseMstconfigOutput(stdout, attrs)
+	if err != nil {
+		return nil, stderr, fmt.Errorf("failed to parse mstconfig output: %w", err)
+	}
+	data := &mstConfigData{current: current, next: next}
+	return data, stderr, nil
+}
+
+// cacheMstConfigData stores a query after an accessor has successfully parsed its result.
+func (m *mellanoxHelper) cacheMstConfigData(pciAddress string, data *mstConfigData) {
+	entry := m.cacheEntry(pciAddress)
+	if entry.queryData == nil {
+		entry.queryData = data
+	}
+}
+
+// cacheEntry returns the cache entry for a PCI address, creating it if needed.
+func (m *mellanoxHelper) cacheEntry(pciAddress string) *MlxNicFwDataCache {
+	if entry := m.cache[pciAddress]; entry != nil {
+		return entry
+	}
+
+	entry := &MlxNicFwDataCache{}
+	m.cache[pciAddress] = entry
+	return entry
+}
+
 func (m *mellanoxHelper) GetMellanoxBlueFieldMode(PciAddress string) (BlueFieldMode, error) {
 	log.Log.V(2).Info("MellanoxBlueFieldMode(): checking mode for device", "device", PciAddress)
-	stdout, stderr, err := m.MstConfigReadData(PciAddress)
+	if entry, ok := m.cache[PciAddress]; ok && entry.BfModeQueried {
+		log.Log.V(2).Info("MellanoxBlueFieldMode(): returning cached result", "device", PciAddress)
+		return entry.BlueFieldMode, nil
+	}
+
+	queryData, stderr, err := m.queryMstConfigData(PciAddress)
 	if err != nil {
 		log.Log.Error(err, "MellanoxBlueFieldMode(): failed to get mlx nic fw data", "stderr", stderr)
 		return -1, fmt.Errorf("failed to get mlx nic fw data %w", err)
 	}
 
-	attrs := []string{internalCPUPageSupplier,
-		internalCPUEswitchManager,
-		internalCPUIbVporto,
-		internalCPUOffloadEngine,
-		internalCPUModel}
-	mstCurrentData, _ := ParseMstconfigOutput(stdout, attrs)
-
-	internalCPUPageSupplierstatus, exist := mstCurrentData[internalCPUPageSupplier]
+	internalCPUPageSupplierstatus, exist := queryData.current[internalCPUPageSupplier]
 	if !exist {
+		m.invalidateCacheEntry(PciAddress)
 		return -1, fmt.Errorf("failed to find %s in the mstconfig output command", internalCPUPageSupplier)
 	}
-
-	internalCPUEswitchManagerStatus, exist := mstCurrentData[internalCPUEswitchManager]
+	internalCPUEswitchManagerStatus, exist := queryData.current[internalCPUEswitchManager]
 	if !exist {
+		m.invalidateCacheEntry(PciAddress)
 		return -1, fmt.Errorf("failed to find %s in the mstconfig output command", internalCPUEswitchManager)
 	}
-
-	internalCPUIbVportoStatus, exist := mstCurrentData[internalCPUIbVporto]
+	internalCPUIbVportoStatus, exist := queryData.current[internalCPUIbVporto]
 	if !exist {
+		m.invalidateCacheEntry(PciAddress)
 		return -1, fmt.Errorf("failed to find %s in the mstconfig output command", internalCPUIbVporto)
 	}
-
-	internalCPUOffloadEngineStatus, exist := mstCurrentData[internalCPUOffloadEngine]
+	internalCPUOffloadEngineStatus, exist := queryData.current[internalCPUOffloadEngine]
 	if !exist {
+		m.invalidateCacheEntry(PciAddress)
 		return -1, fmt.Errorf("failed to find %s in the mstconfig output command", internalCPUOffloadEngine)
 	}
-
-	internalCPUModelStatus, exist := mstCurrentData[internalCPUModel]
+	internalCPUModelStatus, exist := queryData.current[internalCPUModel]
 	if !exist {
+		m.invalidateCacheEntry(PciAddress)
 		return -1, fmt.Errorf("failed to find %s in the mstconfig output command", internalCPUModel)
 	}
 
-	// check for DPU
+	var bfMode BlueFieldMode
 	if strings.Contains(internalCPUPageSupplierstatus, ecpf) &&
 		strings.Contains(internalCPUEswitchManagerStatus, ecpf) &&
 		strings.Contains(internalCPUIbVportoStatus, ecpf) &&
 		strings.Contains(internalCPUOffloadEngineStatus, enabled) &&
 		strings.Contains(internalCPUModelStatus, embeddedCPU) {
 		log.Log.V(2).Info("MellanoxBlueFieldMode(): device in DPU mode", "device", PciAddress)
-		return BluefieldDpu, nil
+		bfMode = BluefieldDpu
 	} else if strings.Contains(internalCPUPageSupplierstatus, extHostPf) &&
 		strings.Contains(internalCPUEswitchManagerStatus, extHostPf) &&
 		strings.Contains(internalCPUIbVportoStatus, extHostPf) &&
 		strings.Contains(internalCPUOffloadEngineStatus, disabled) &&
 		strings.Contains(internalCPUModelStatus, embeddedCPU) {
 		log.Log.V(2).Info("MellanoxBlueFieldMode(): device in ConnectX mode", "device", PciAddress)
-		return BluefieldConnectXMode, nil
+		bfMode = BluefieldConnectXMode
+	} else {
+		log.Log.Error(nil, "MellanoxBlueFieldMode(): unknown device status",
+			"device", PciAddress, "mstconfig-output", "unrecognized")
+		m.invalidateCacheEntry(PciAddress)
+		return -1, fmt.Errorf("MellanoxBlueFieldMode(): unknown device status for %s", PciAddress)
 	}
 
-	log.Log.Error(err, "MellanoxBlueFieldMode(): unknown device status",
-		"device", PciAddress, "mstconfig-output", stdout)
-	return -1, fmt.Errorf("MellanoxBlueFieldMode(): unknown device status for %s", PciAddress)
+	m.cacheMstConfigData(PciAddress, queryData)
+	entry := m.cacheEntry(PciAddress)
+	entry.BlueFieldMode = bfMode
+	entry.BfModeQueried = true
+	return bfMode, nil
 }
 
 func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) error {
@@ -156,11 +253,9 @@ func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus ma
 			log.Log.Error(err, "failed to set SR-IOV number of VFs to 0 before firmware reset", "pciAddress", pciAddress)
 			return err
 		}
-
 		if IsDualPort(pciAddress, mellanoxNicsStatus) {
 			otherPortPCIAddress := getOtherPortPCIAddress(pciAddress)
-			err := m.hostHelper.SetSriovNumVfs(otherPortPCIAddress, 0)
-			if err != nil {
+			if err := m.hostHelper.SetSriovNumVfs(otherPortPCIAddress, 0); err != nil {
 				log.Log.Error(err, "failed to set SR-IOV number of VFs to 0 before firmware reset", "pciAddress", otherPortPCIAddress)
 				return err
 			}
@@ -168,10 +263,11 @@ func (m *mellanoxHelper) MlxResetFW(pciAddresses []string, mellanoxNicsStatus ma
 
 		cmdArgs := []string{"-d", pciAddress, "--skip_driver", "-l", "3", "-y", "reset"}
 		log.Log.Info("mellanox-plugin: resetFW()", "cmd-args", cmdArgs)
-		// We have to ensure that pciutils is installed into the container image Dockerfile.sriov-network-config-daemon
 		_, stderr, err := m.utils.RunCommand("mstfwreset", cmdArgs...)
 		if err != nil {
 			log.Log.Error(err, "mellanox-plugin resetFW(): mstfwreset failed, continuing as best-effort", "stderr", stderr, "pciAddress", pciAddress)
+		} else {
+			m.invalidateCacheEntry(pciAddress)
 		}
 	}
 
@@ -183,11 +279,9 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 	for pciAddr, fwArgs := range attributesToChange {
 		bfMode, err := m.GetMellanoxBlueFieldMode(pciAddr)
 		if err != nil {
-			// NIC is not a DPU or mstconfig failed. It's safe to continue FW configuration
 			log.Log.V(2).Info("mellanox-plugin: configFW(): can't get DPU mode for NIC", "pciAddress", pciAddr)
 		}
 		if bfMode == BluefieldDpu {
-			// Host reboot won't re-load NIC firmware in DPU mode. To apply FW changes power cycle is required or mstfwreset could be used.
 			return errors.Errorf("NIC %s is in DPU mode. Firmware configuration changes are not supported in this mode.", pciAddr)
 		}
 		cmdArgs := []string{"-d", pciAddr, "-y", "set"}
@@ -210,38 +304,53 @@ func (m *mellanoxHelper) MlxConfigFW(attributesToChange map[string]MlxNic) error
 		if len(cmdArgs) <= 4 {
 			continue
 		}
-		_, strerr, err := m.utils.RunCommand("mstconfig", cmdArgs...)
+		_, stderr, err := m.utils.RunCommand("mstconfig", cmdArgs...)
 		if err != nil {
-			log.Log.Error(err, "mellanox-plugin configFW(): failed", "stderr", strerr)
+			log.Log.Error(err, "mellanox-plugin configFW(): failed", "stderr", stderr)
 			return err
 		}
+		m.invalidateCacheEntry(pciAddr)
 	}
 	return nil
 }
 
 func (m *mellanoxHelper) GetMlxNicFwData(pciAddress string) (current, next *MlxNic, err error) {
 	log.Log.Info("mellanox-plugin getMlnxNicFwData()", "device", pciAddress)
-	attrs := []string{TotalVfs, EnableSriov, LinkTypeP1, LinkTypeP2}
+	if entry, ok := m.cache[pciAddress]; ok && entry.FwCurrent != nil && entry.FwNext != nil {
+		log.Log.V(2).Info("mellanox-plugin getMlnxNicFwData(): returning cached result", "device", pciAddress)
+		currentCopy := *entry.FwCurrent
+		nextCopy := *entry.FwNext
+		return &currentCopy, &nextCopy, nil
+	}
 
-	out, stderr, err := m.MstConfigReadData(pciAddress)
+	queryData, stderr, err := m.queryMstConfigData(pciAddress)
 	if err != nil {
 		log.Log.Error(err, "mellanox-plugin getMlnxNicFwData(): failed", "stderr", stderr)
-		return
+		return nil, nil, err
 	}
-	mstCurrentData, mstNextData := ParseMstconfigOutput(out, attrs)
-	current, err = mlnxNicFromMap(mstCurrentData)
+	current, err = mlnxNicFromMap(queryData.current)
 	if err != nil {
 		log.Log.Error(err, "mellanox-plugin mlnxNicFromMap() for current mstconfig data failed")
+		m.invalidateCacheEntry(pciAddress)
 		return
 	}
-	next, err = mlnxNicFromMap(mstNextData)
+	next, err = mlnxNicFromMap(queryData.next)
 	if err != nil {
 		log.Log.Error(err, "mellanox-plugin mlnxNicFromMap() for next mstconfig data failed")
+		m.invalidateCacheEntry(pciAddress)
+		return
 	}
+
+	m.cacheMstConfigData(pciAddress, queryData)
+	entry := m.cacheEntry(pciAddress)
+	currentCopy := *current
+	nextCopy := *next
+	entry.FwCurrent = &currentCopy
+	entry.FwNext = &nextCopy
 	return
 }
 
-func ParseMstconfigOutput(mstOutput string, attributes []string) (fwCurrent, fwNext map[string]string) {
+func ParseMstconfigOutput(mstOutput string, attributes []string) (fwCurrent, fwNext map[string]string, err error) {
 	log.Log.Info("ParseMstconfigOutput()", "attributes", attributes)
 	fwCurrent = map[string]string{}
 	fwNext = map[string]string{}
@@ -251,13 +360,16 @@ func ParseMstconfigOutput(mstOutput string, attributes []string) (fwCurrent, fwN
 		for _, line := range mstOutputLines {
 			if strings.Contains(line, attr) {
 				regexResult := formatRegex.FindStringSubmatch(line)
+				if len(regexResult) < 5 {
+					return nil, nil, fmt.Errorf("malformed mstconfig output for attribute %s", attr)
+				}
 				fwCurrent[attr] = regexResult[3]
 				fwNext[attr] = regexResult[4]
 				break
 			}
 		}
 	}
-	return
+	return fwCurrent, fwNext, nil
 }
 
 func GetPciAddressPrefix(pciAddress string) string {
@@ -274,19 +386,13 @@ func IsDualPort(pciAddress string, mellanoxNicsStatus map[string]map[string]srio
 func HandleTotalVfs(fwCurrent, fwNext, attrs *MlxNic, ifaceSpec sriovnetworkv1.Interface, isDualPort bool, mellanoxNicsSpec map[string]sriovnetworkv1.Interface) (
 	totalVfs int, needReboot, changeWithoutReboot bool) {
 	totalVfs = ifaceSpec.NumVfs
-	// Check if the other port is changing the number of VF
 	if isDualPort {
 		otherPortPCIAddress := getOtherPortPCIAddress(ifaceSpec.PciAddress)
-		otherIfaceSpec, ok := mellanoxNicsSpec[otherPortPCIAddress]
-		if ok {
-			if otherIfaceSpec.NumVfs > totalVfs {
-				totalVfs = otherIfaceSpec.NumVfs
-			}
+		if otherIfaceSpec, ok := mellanoxNicsSpec[otherPortPCIAddress]; ok && otherIfaceSpec.NumVfs > totalVfs {
+			totalVfs = otherIfaceSpec.NumVfs
 		}
 	}
 
-	// if the PF is externally managed we just need to check the totalVfs requested in the policy is not higher than
-	// the configured amount
 	if ifaceSpec.ExternallyManaged {
 		if totalVfs > fwCurrent.TotalVfs {
 			log.Log.Error(nil, "The nic is externallyManaged and TotalVfs configured on the system is lower then requested VFs, failing configuration",
@@ -303,15 +409,12 @@ func HandleTotalVfs(fwCurrent, fwNext, attrs *MlxNic, ifaceSpec sriovnetworkv1.I
 		attrs.TotalVfs = totalVfs
 		needReboot = true
 	}
-
-	// Remove policy then re-apply it
 	if !needReboot && fwNext.TotalVfs != totalVfs {
 		log.Log.V(2).Info("Changing TotalVfs to same as Next Boot value, doesn't require rebooting",
 			"current", fwCurrent.TotalVfs, "next", fwNext.TotalVfs, "requested", totalVfs)
 		attrs.TotalVfs = totalVfs
 		changeWithoutReboot = true
 	}
-
 	return
 }
 
@@ -323,14 +426,13 @@ func HandleEnableSriov(totalVfs int, fwCurrent, fwNext, attrs *MlxNic) (needRebo
 		attrs.EnableSriov = false
 		return true, false
 	} else if totalVfs > 0 && !fwCurrent.EnableSriov {
-		log.Log.V(2).Info("enabling Sriov, needs reboot")
+		log.Log.V(2).Info("enabling sriov, needs reboot")
 		attrs.EnableSriov = true
 		return true, false
 	} else if totalVfs > 0 && !fwNext.EnableSriov {
 		attrs.EnableSriov = true
 		return false, true
 	}
-
 	return false, false
 }
 
@@ -339,7 +441,6 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 	mellanoxNicsSpec map[string]sriovnetworkv1.Interface,
 	mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) (bool, error) {
 	needReboot := false
-
 	pciAddress := pciPrefix + "0"
 	if firstPortSpec, ok := mellanoxNicsSpec[pciAddress]; ok {
 		ifaceStatus := getIfaceStatus(pciAddress, mellanoxNicsStatus)
@@ -347,7 +448,6 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 		if err != nil {
 			return false, err
 		}
-
 		if needChange {
 			log.Log.V(2).Info("Changing LinkTypeP1, needs reboot",
 				"from", fwData.LinkTypeP1, "to", firstPortSpec.LinkType)
@@ -355,7 +455,6 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 			needReboot = true
 		}
 	}
-
 	pciAddress = pciPrefix + "1"
 	if secondPortSpec, ok := mellanoxNicsSpec[pciAddress]; ok {
 		ifaceStatus := getIfaceStatus(pciAddress, mellanoxNicsStatus)
@@ -363,7 +462,6 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 		if err != nil {
 			return false, err
 		}
-
 		if needChange {
 			log.Log.V(2).Info("Changing LinkTypeP2, needs reboot",
 				"from", fwData.LinkTypeP2, "to", secondPortSpec.LinkType)
@@ -371,7 +469,6 @@ func HandleLinkType(pciPrefix string, fwData, attr *MlxNic,
 			needReboot = true
 		}
 	}
-
 	return needReboot, nil
 }
 
@@ -385,13 +482,11 @@ func mlnxNicFromMap(mstData map[string]string) (*MlxNic, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	fwData.TotalVfs = i
 	fwData.LinkTypeP1 = getLinkType(mstData[LinkTypeP1])
 	if linkTypeP2, ok := mstData[LinkTypeP2]; ok {
 		fwData.LinkTypeP2 = getLinkType(linkTypeP2)
 	}
-
 	return fwData, nil
 }
 
@@ -405,10 +500,9 @@ func getLinkType(linkType string) string {
 		log.Log.Error(nil, "mellanox-plugin getLinkType(): link type is not one of [ETH, IB], treating as unknown",
 			"link-type", linkType)
 		return UnknownLinkType
-	} else {
-		log.Log.Info("mellanox-plugin getLinkType(): LINK_TYPE_P* attribute was not found, treating as preconfigured link type")
-		return PreconfiguredLinkType
 	}
+	log.Log.Info("mellanox-plugin getLinkType(): LINK_TYPE_P* attribute was not found, treating as preconfigured link type")
+	return PreconfiguredLinkType
 }
 
 func isLinkTypeRequireChange(iface sriovnetworkv1.Interface, ifaceStatus sriovnetworkv1.InterfaceExt, fwLinkType string) (bool, error) {
@@ -424,25 +518,20 @@ func isLinkTypeRequireChange(iface sriovnetworkv1.Interface, ifaceStatus sriovne
 		if fwLinkType == PreconfiguredLinkType {
 			return false, fmt.Errorf("mellanox-plugin OnNodeStateChange(): Network card %s does not support link type change", iface.PciAddress)
 		}
-
 		return true, nil
 	}
-
 	return false, nil
 }
 
-func getOtherPortPCIAddress(pciAddress string) string {
-	log.Log.Info("mellanox-plugin getOtherPortSpec()", "pciAddress", pciAddress)
-	pciAddrPrefix := GetPciAddressPrefix(pciAddress)
-	pciAddrSuffix := pciAddress[len(pciAddrPrefix):]
-
-	if pciAddrSuffix == "0" {
-		return pciAddrPrefix + "1"
-	}
-
-	return pciAddrPrefix + "0"
+func getIfaceStatus(pciAddress string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) sriovnetworkv1.InterfaceExt {
+	pciAddressPrefix := GetPciAddressPrefix(pciAddress)
+	return mellanoxNicsStatus[pciAddressPrefix][pciAddress]
 }
 
-func getIfaceStatus(pciAddress string, mellanoxNicsStatus map[string]map[string]sriovnetworkv1.InterfaceExt) sriovnetworkv1.InterfaceExt {
-	return mellanoxNicsStatus[GetPciAddressPrefix(pciAddress)][pciAddress]
+func getOtherPortPCIAddress(pciAddress string) string {
+	log.Log.Info("mellanox-plugin getOtherPortPCIAddress()", "device", pciAddress)
+	if strings.HasSuffix(pciAddress, "0") {
+		return pciAddress[:len(pciAddress)-1] + "1"
+	}
+	return pciAddress[:len(pciAddress)-1] + "0"
 }
