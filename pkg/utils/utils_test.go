@@ -32,8 +32,8 @@ func TestValidateOvsConfig(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name:      "value with special characters other than single quote",
-			config:    map[string]string{"key": `value with "double" quotes and $pecial`},
+			name:      "value with shell and systemd special characters is escaped, not rejected",
+			config:    map[string]string{"key": "value with \"double\" and 'single' quotes, $pecial and 100%"},
 			expectErr: false,
 		},
 		{
@@ -57,14 +57,32 @@ func TestValidateOvsConfig(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name:      "value with single quote",
-			config:    map[string]string{"key": "val'ue"},
+			name:      "value is only a single quote",
+			config:    map[string]string{"key": "'"},
+			expectErr: false,
+		},
+		{
+			// A line break would end the ExecStartPre line, so it cannot be escaped.
+			name:      "value with a newline",
+			config:    map[string]string{"key": "val\nue"},
 			expectErr: true,
 		},
 		{
-			name:      "value is only a single quote",
-			config:    map[string]string{"key": "'"},
+			name:      "value with a carriage return",
+			config:    map[string]string{"key": "val\rue"},
 			expectErr: true,
+		},
+		{
+			// systemd stops reading the line at a NUL and then rejects the unit for
+			// unbalanced quoting.
+			name:      "value with a NUL byte",
+			config:    map[string]string{"key": "val\x00ue"},
+			expectErr: true,
+		},
+		{
+			name:      "value with other control characters is accepted",
+			config:    map[string]string{"key": "val\tue\x1b"},
+			expectErr: false,
 		},
 		{
 			name:      "second key invalid",
@@ -137,13 +155,35 @@ func TestRenderOtherOvsConfigOption(t *testing.T) {
 			wantOtherConfig: `"other_config:key=%%n $HOME; $(exit 73)" `,
 		},
 		{
+			name:            "value with single quote is kept as-is",
+			config:          map[string]string{"key": "val'ue"},
+			wantExternalIds: "key",
+			wantOtherConfig: `"other_config:key=val'ue" `,
+		},
+		{
+			name:            "value with backslash is escaped by %q",
+			config:          map[string]string{"key": `a\nb`},
+			wantExternalIds: "key",
+			wantOtherConfig: `"other_config:key=a\\nb" `,
+		},
+		{
 			name:      "invalid key with dot returns error",
 			config:    map[string]string{"bad.key": "value"},
 			expectErr: true,
 		},
 		{
-			name:      "value with single quote returns error",
-			config:    map[string]string{"key": "val'ue"},
+			name:      "value with a newline returns error",
+			config:    map[string]string{"key": "val\nue"},
+			expectErr: true,
+		},
+		{
+			name:      "value with a carriage return returns error",
+			config:    map[string]string{"key": "val\rue"},
+			expectErr: true,
+		},
+		{
+			name:      "value with a NUL byte returns error",
+			config:    map[string]string{"key": "val\x00ue"},
 			expectErr: true,
 		},
 	}
