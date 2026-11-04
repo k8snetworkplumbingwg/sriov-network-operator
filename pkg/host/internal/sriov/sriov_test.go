@@ -84,10 +84,13 @@ var _ = Describe("SRIOV", func() {
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil)
 
 			mac, _ := net.ParseMAC("08:c0:eb:70:74:4e")
+			vfAdminMac, err := net.ParseMAC("4e:fd:3d:08:59:b1")
+			Expect(err).NotTo(HaveOccurred())
 			pfLinkMock.EXPECT().Attrs().Return(&netlink.LinkAttrs{
 				MTU:          1500,
 				HardwareAddr: mac,
 				EncapType:    "ether",
+				Vfs:          []netlink.VfInfo{{ID: 0, Mac: vfAdminMac}},
 			}).MinTimes(1)
 			hostMock.EXPECT().GetNetDevLinkSpeed("enp216s0f0np0").Return("100000 Mb/s")
 			hostMock.EXPECT().GetNetDevLinkAdminState("enp216s0f0np0").Return("up")
@@ -139,6 +142,7 @@ var _ = Describe("SRIOV", func() {
 				VFs: []sriovnetworkv1.VirtualFunction{{
 					Name:            "enp216s0f0v0",
 					Mac:             "4e:fd:3d:08:59:b1",
+					AdminMac:        "4e:fd:3d:08:59:b1",
 					Driver:          "mlx5_core",
 					PciAddress:      "0000:d8:00.2",
 					Vendor:          "15b3",

@@ -149,13 +149,13 @@ func (s *sriov) ResetSriovDevice(ifaceStatus sriovnetworkv1.InterfaceExt) error 
 	return nil
 }
 
-func (s *sriov) getVfInfos(ctx context.Context, vfAddrs []string, pfName string, eswitchMode string, devices []*ghw.PCIDevice) []sriovnetworkv1.VirtualFunction {
+func (s *sriov) getVfInfos(ctx context.Context, vfAddrs []string, pfName string, eswitchMode string, devices []*ghw.PCIDevice, pfVfs []netlink.VfInfo) []sriovnetworkv1.VirtualFunction {
 	results := make(chan vfInfoResult, len(vfAddrs))
 	for index, vfAddr := range vfAddrs {
 		go func(index int, vfAddr string) {
 			results <- vfInfoResult{
 				index: index,
-				vf:    s.getVfInfo(ctx, vfAddr, pfName, eswitchMode, devices),
+				vf:    s.getVfInfo(ctx, vfAddr, pfName, eswitchMode, devices, pfVfs),
 			}
 		}(index, vfAddr)
 	}
@@ -201,7 +201,7 @@ func (s *sriov) getVfDriverNameWithRetry(ctx context.Context, vfAddr string, att
 	return driver, nil
 }
 
-func (s *sriov) getVfInfo(ctx context.Context, vfAddr string, pfName string, eswitchMode string, devices []*ghw.PCIDevice) sriovnetworkv1.VirtualFunction {
+func (s *sriov) getVfInfo(ctx context.Context, vfAddr string, pfName string, eswitchMode string, devices []*ghw.PCIDevice, pfVfs []netlink.VfInfo) sriovnetworkv1.VirtualFunction {
 	driver, err := s.getVfDriverName(ctx, vfAddr)
 	if err != nil {
 		log.Log.Error(err, "getVfInfo(): unable to get VF driver", "device", vfAddr)
@@ -237,6 +237,17 @@ func (s *sriov) getVfInfo(ctx context.Context, vfAddr string, pfName string, esw
 		}
 	}
 	vf.GUID = s.networkHelper.GetNetDevNodeGUID(vfAddr)
+
+	// the admin mac is the mac address the PF enforces for this VF. It is left empty when
+	// the PF doesn't report it, which is treated as "unknown" by NeedToUpdateSriov
+	for _, pfVf := range pfVfs {
+		if pfVf.ID == id {
+			if len(pfVf.Mac) > 0 {
+				vf.AdminMac = pfVf.Mac.String()
+			}
+			break
+		}
+	}
 
 	for _, device := range devices {
 		if vfAddr == device.Address {
@@ -395,7 +406,7 @@ func (s *sriov) DiscoverSriovDevices(storeManager store.ManagerInterface) ([]sri
 						"device", device)
 					continue
 				}
-				iface.VFs = append(iface.VFs, s.getVfInfos(context.Background(), vfs, pfNetName, iface.EswitchMode, devices)...)
+				iface.VFs = append(iface.VFs, s.getVfInfos(context.Background(), vfs, pfNetName, iface.EswitchMode, devices, link.Attrs().Vfs)...)
 			}
 		}
 		pfList = append(pfList, iface)
