@@ -1012,4 +1012,5 @@ var _ = Describe("SriovNetworkNodePolicyReconciler", Ordered, func() {
 		})
 
 	})
+
 })

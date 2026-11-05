@@ -17,14 +17,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -35,6 +39,98 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
 )
+
+var _ = Describe("Device plugin ConfigMap transition cleanup", func() {
+	DescribeTable("reconciles the ConfigMap with the provider transition", func(draEnabled, pluginExists, configMapExists bool, failure string) {
+		ctx := context.Background()
+		scheme := runtime.NewScheme()
+		for _, add := range []func(*runtime.Scheme) error{
+			sriovnetworkv1.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme,
+			rbacv1.AddToScheme, resourceapi.AddToScheme,
+		} {
+			Expect(add(scheme)).To(Succeed())
+		}
+		config := makeDefaultSriovOpConfig()
+		config.Spec.FeatureGates = map[string]bool{consts.DynamicResourceAllocationFeatureGate: draEnabled}
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: consts.ConfigMapName, Namespace: testNamespace},
+			Data:       map[string]string{"worker-0": `{"resourceList":[]}`},
+		}
+		objects := []client.Object{config}
+		if configMapExists {
+			objects = append(objects, cm)
+		}
+		if pluginExists {
+			objects = append(objects, &appsv1.DaemonSet{
+				ObjectMeta: metav1.ObjectMeta{Name: devicePluginDaemonSetName, Namespace: testNamespace},
+			})
+		}
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if failure == "plugin cleanup" && obj.GetName() == devicePluginDaemonSetName {
+					return fmt.Errorf("plugin cleanup failed")
+				}
+				if failure == "ConfigMap cleanup" && obj.GetName() == consts.ConfigMapName {
+					return fmt.Errorf("ConfigMap cleanup failed")
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+		orchestrator := orchestratorMock.NewMockInterface(gomock.NewController(GinkgoT()))
+		orchestrator.EXPECT().ClusterType().Return(consts.ClusterTypeKubernetes).AnyTimes()
+		orchestrator.EXPECT().GetTLSConfig(gomock.Any()).Return(nil, nil).AnyTimes()
+		r := &SriovOperatorConfigReconciler{
+			Client: cl, Scheme: scheme, FeatureGate: featuregate.New(),
+			Orchestrator: orchestrator, StatusPatcher: &fakeStatusPatcher{},
+			renderManifestFn: func(path string, data *render.RenderData) ([]*unstructured.Unstructured, error) {
+				// Exercise the real provider manifests; unrelated components need no objects here.
+				if path == consts.PluginPath || path == consts.DRADriverPath {
+					return testRenderManifests(path, data)
+				}
+				return nil, nil
+			},
+			applyManifestFn: func(ctx context.Context, c client.Client, obj *unstructured.Unstructured) error {
+				if failure == "DRA deployment" {
+					return fmt.Errorf("DRA deployment failed")
+				}
+				return testApplyManifest(ctx, c, obj)
+			},
+			ensureProviderRolloutFn: func(context.Context, string) error {
+				// Configuration must remain available until the replacement is ready.
+				if configMapExists {
+					Expect(cl.Get(ctx, client.ObjectKeyFromObject(cm), &corev1.ConfigMap{})).To(Succeed())
+				}
+				if failure == "DRA rollout" {
+					return fmt.Errorf("DRA rollout failed")
+				}
+				return nil
+			},
+		}
+		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(config)})
+		if failure != "" {
+			Expect(err).To(MatchError(ContainSubstring(failure + " failed")))
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		found := &corev1.ConfigMap{}
+		err = cl.Get(ctx, client.ObjectKeyFromObject(cm), found)
+		if configMapExists && (!draEnabled || failure != "") {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found.Data).To(Equal(cm.Data))
+		} else {
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+		}
+	},
+		Entry("removes configuration after a successful switch", true, true, true, ""),
+		Entry("retains configuration when deployment fails", true, true, true, "DRA deployment"),
+		Entry("retains configuration while rollout is pending", true, true, true, "DRA rollout"),
+		Entry("retains configuration when plugin cleanup fails", true, true, true, "plugin cleanup"),
+		Entry("reports ConfigMap deletion failures for retry", true, true, true, "ConfigMap cleanup"),
+		Entry("removes leftover configuration after the plugin is gone", true, false, true, ""),
+		Entry("succeeds when configuration is already absent", true, false, false, ""),
+		Entry("retains configuration in device-plugin mode", false, true, true, ""),
+	)
+})
 
 var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 	var cancel context.CancelFunc
@@ -85,12 +181,13 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 			}).AnyTimes()
 
 		err = (&SriovOperatorConfigReconciler{
-			Client:            k8sManager.GetClient(),
-			Scheme:            k8sManager.GetScheme(),
-			Orchestrator:      orchestrator,
-			FeatureGate:       featuregate.New(),
-			StatusPatcher:     statusPatcher,
-			UncachedAPIReader: k8sManager.GetAPIReader(),
+			Client:                  k8sManager.GetClient(),
+			Scheme:                  k8sManager.GetScheme(),
+			Orchestrator:            orchestrator,
+			FeatureGate:             featuregate.New(),
+			StatusPatcher:           statusPatcher,
+			UncachedAPIReader:       k8sManager.GetAPIReader(),
+			ensureProviderRolloutFn: envtestEnsureProviderDaemonSetRolledOut(k8sManager.GetClient()),
 		}).SetupWithManager(k8sManager)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -1165,12 +1262,42 @@ func (f *fakeStatusPatcher) ApplyStatus(_ context.Context, _ client.Object, _ ma
 // Reconcile invocations against the envtest API.
 func newDirectSriovOperatorConfigReconciler(orchestrator *orchestratorMock.MockInterface) *SriovOperatorConfigReconciler {
 	return &SriovOperatorConfigReconciler{
-		Client:            k8sClient,
-		Scheme:            vars.Scheme,
-		Orchestrator:      orchestrator,
-		FeatureGate:       featuregate.New(),
-		StatusPatcher:     status.NewPatcher(k8sClient, nil, vars.Scheme, "direct-test"),
-		UncachedAPIReader: k8sClient,
+		Client:                  k8sClient,
+		Scheme:                  vars.Scheme,
+		Orchestrator:            orchestrator,
+		FeatureGate:             featuregate.New(),
+		StatusPatcher:           status.NewPatcher(k8sClient, nil, vars.Scheme, "direct-test"),
+		UncachedAPIReader:       k8sClient,
+		ensureProviderRolloutFn: envtestEnsureProviderDaemonSetRolledOut(k8sClient),
+	}
+}
+
+// envtestEnsureProviderDaemonSetRolledOut returns a rollout checker for envtest.
+// The API server does not run the DaemonSet controller, so status is patched once
+// the provider DaemonSet object exists.
+func envtestEnsureProviderDaemonSetRolledOut(c client.Client) func(context.Context, string) error {
+	return func(ctx context.Context, name string) error {
+		if err := ensureDaemonSetRolledOut(ctx, c, name); err == nil {
+			return nil
+		}
+		ds := &appsv1.DaemonSet{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: name}, ds); err != nil {
+			return fmt.Errorf("get DaemonSet %s: %w", name, err)
+		}
+		desired := ds.Status.DesiredNumberScheduled
+		if desired == 0 {
+			desired = 1
+		}
+		updated := ds.DeepCopy()
+		updated.Status.ObservedGeneration = updated.Generation
+		updated.Status.DesiredNumberScheduled = desired
+		updated.Status.CurrentNumberScheduled = desired
+		updated.Status.NumberReady = desired
+		updated.Status.UpdatedNumberScheduled = desired
+		if err := c.Status().Update(ctx, updated); err != nil {
+			return fmt.Errorf("mark DaemonSet %s rolled out for envtest: %w", name, err)
+		}
+		return nil
 	}
 }
 
