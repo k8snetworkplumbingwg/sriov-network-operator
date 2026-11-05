@@ -398,7 +398,7 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 	}
 	// Sync DaemonSets
 	for _, obj := range objs {
-		if obj.GetKind() == "DaemonSet" {
+		if obj.GetKind() == consts.DaemonSet {
 			err = updateDaemonsetNodeSelector(obj, dc.Spec.ConfigDaemonNodeSelector)
 			if err != nil {
 				return err
@@ -429,6 +429,7 @@ func (r *SriovOperatorConfigReconciler) syncMetricsExporter(ctx context.Context,
 	data.Data["MetricsExporterSecretName"] = os.Getenv("METRICS_EXPORTER_SECRET_NAME")
 	data.Data["MetricsExporterPort"] = os.Getenv("METRICS_EXPORTER_PORT")
 	data.Data["MetricsExporterKubeRbacProxyImage"] = os.Getenv("METRICS_EXPORTER_KUBE_RBAC_PROXY_IMAGE")
+	data.Data["MetricsExporterSELinuxType"] = os.Getenv("METRICS_EXPORTER_SELINUX_TYPE")
 
 	data.Data["IsOpenshift"] = r.Orchestrator.ClusterType() == consts.ClusterTypeOpenshift
 
