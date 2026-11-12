@@ -16,7 +16,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1023,12 +1022,7 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 					os.Setenv("METRICS_EXPORTER_PROMETHEUS_OPERATOR_ENABLED", "true")
 					DeferCleanup(os.Setenv, "METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES", os.Getenv("METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES"))
 					os.Setenv("METRICS_EXPORTER_PROMETHEUS_DEPLOY_RULES", "true")
-
-					err := util.WaitForNamespacedObject(&rbacv1.Role{}, k8sClient, testNamespace, "prometheus-k8s", util.RetryInterval, util.APITimeout)
-					Expect(err).ToNot(HaveOccurred())
-
-					err = util.WaitForNamespacedObject(&rbacv1.RoleBinding{}, k8sClient, testNamespace, "prometheus-k8s", util.RetryInterval, util.APITimeout)
-					Expect(err).ToNot(HaveOccurred())
+					Expect(util.TriggerSriovOperatorConfigReconcile(k8sClient, testNamespace)).To(Succeed())
 
 					assertResourceExists(
 						schema.GroupVersionKind{
@@ -1125,10 +1119,15 @@ func makeDefaultSriovOpConfig() *sriovnetworkv1.SriovOperatorConfig {
 }
 
 func assertResourceExists(gvk schema.GroupVersionKind, key client.ObjectKey) {
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(gvk)
-	err := k8sClient.Get(context.Background(), key, u)
-	Expect(err).NotTo(HaveOccurred())
+	Eventually(func() error {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(gvk)
+		return k8sClient.Get(context.Background(), key, u)
+	}).
+		WithOffset(1).
+		WithPolling(util.RetryInterval).
+		WithTimeout(util.APITimeout).
+		Should(Succeed())
 }
 
 func assertResourceDoesNotExist(gvk schema.GroupVersionKind, key client.ObjectKey) {
