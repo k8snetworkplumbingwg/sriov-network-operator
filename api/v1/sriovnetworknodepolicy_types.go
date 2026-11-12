@@ -66,6 +66,11 @@ type SriovNetworkNodePolicySpec struct {
 	// contains bridge configuration for matching PFs,
 	// valid only for eSwitchMode==switchdev
 	Bridge Bridge `json:"bridge,omitempty"`
+	// +optional
+	// DevlinkParams is a map of devlink parameter names to values to set on the PF
+	// before configuring SR-IOV. Valid only for eSwitchMode==switchdev.
+	// Example: {"flow_steering_mode": "hmfs"}
+	DevlinkParams map[string]string `json:"devlinkParams,omitempty"`
 }
 
 type SriovNetworkNicSelector struct {

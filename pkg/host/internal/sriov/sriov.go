@@ -516,6 +516,9 @@ func (s *sriov) configureHWOptionsForSwitchdev(iface *sriovnetworkv1.Interface) 
 		return err
 	}
 	desiredFlowSteeringMode := "smfs"
+	if v, ok := iface.DevlinkParams["flow_steering_mode"]; ok && v != "" {
+		desiredFlowSteeringMode = v
+	}
 	currentFlowSteeringMode, err := s.networkHelper.GetDevlinkDeviceParam(iface.PciAddress, "flow_steering_mode")
 	if err != nil {
 		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENODEV) {

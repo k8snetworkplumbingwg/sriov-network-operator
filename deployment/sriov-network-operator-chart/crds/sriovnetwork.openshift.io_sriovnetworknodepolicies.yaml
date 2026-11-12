@@ -133,6 +133,14 @@ spec:
                 - netdevice
                 - vfio-pci
                 type: string
+              devlinkParams:
+                additionalProperties:
+                  type: string
+                description: |-
+                  DevlinkParams is a map of devlink parameter names to values to set on the PF
+                  before configuring SR-IOV. Valid only for eSwitchMode==switchdev.
+                  Example: {"flow_steering_mode": "hmfs"}
+                type: object
               eSwitchMode:
                 description: NIC Device Mode. Allowed value "legacy","switchdev".
                 enum:
