@@ -410,8 +410,8 @@ var _ = Describe("SriovnetworkNodePolicy controller", Ordered, func() {
 
 			Eventually(func(g Gomega) {
 				err := k8sClient.Get(context.Background(), k8sclient.ObjectKey{Name: node.Name, Namespace: testNamespace}, nodeState)
-				Expect(err).To(HaveOccurred())
-				Expect(errors.IsNotFound(err)).To(BeTrue())
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(errors.IsNotFound(err)).To(BeTrue())
 			}, time.Minute, time.Second).Should(Succeed())
 		})
 
