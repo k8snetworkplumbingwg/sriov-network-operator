@@ -406,9 +406,20 @@ func SriovStable(operatorNamespace string, clients *testclient.ClientSet) (bool,
 			configuredNodes++
 		}
 	}
+	config := &sriovv1.SriovOperatorConfig{}
+	if err := clients.Get(context.Background(), runtimeclient.ObjectKey{
+		Namespace: operatorNamespace, Name: consts.DefaultConfigName,
+	}, config); err != nil {
+		return false, fmt.Errorf("failed to fetch operator config: %w", err)
+	}
+	providerName, providerNodes := "sriov-device-plugin", configuredNodes
+	if config.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate] {
+		// DRA runs on all managed nodes, including nodes with no configured VFs.
+		providerName, providerNodes = consts.DRADriverDaemonSetName, len(nodeStates.Items)
+	}
 	for name, expected := range map[string]int{
 		"sriov-network-config-daemon": len(nodeStates.Items),
-		"sriov-device-plugin":         configuredNodes,
+		providerName:                  providerNodes,
 	} {
 		if expected == 0 {
 			continue
