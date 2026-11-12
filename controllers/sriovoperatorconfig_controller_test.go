@@ -1001,6 +1001,35 @@ var _ = Describe("SriovOperatorConfig controller", Ordered, func() {
 					Expect(err).ToNot(HaveOccurred())
 				})
 
+				It("should apply the optional SELinux type only to the metrics exporter", func() {
+					for _, seLinuxType := range []string{"", "spc_t", "sriov_metrics_t", ""} {
+						By(fmt.Sprintf("Set exporter SELinux type to %q", seLinuxType))
+						GinkgoT().Setenv("METRICS_EXPORTER_SELINUX_TYPE", seLinuxType)
+						Expect(util.TriggerSriovOperatorConfigReconcile(k8sClient, testNamespace)).To(Succeed())
+
+						Eventually(func(g Gomega) {
+							daemonSet := &appsv1.DaemonSet{}
+							g.Expect(k8sClient.Get(ctx, types.NamespacedName{
+								Name: "sriov-network-metrics-exporter", Namespace: testNamespace,
+							}, daemonSet)).To(Succeed())
+							g.Expect(daemonSet.Spec.Template.Spec.Containers).To(ContainElement(HaveField("Name", "metrics-exporter")))
+							g.Expect(daemonSet.Spec.Template.Spec.Containers).To(ContainElement(HaveField("Name", "kube-rbac-proxy")))
+
+							for _, container := range daemonSet.Spec.Template.Spec.Containers {
+								securityContext := container.SecurityContext
+								g.Expect(securityContext).NotTo(BeNil())
+								if container.Name == "metrics-exporter" && seLinuxType != "" {
+									g.Expect(securityContext.SELinuxOptions).To(HaveValue(HaveField("Type", seLinuxType)))
+								} else {
+									g.Expect(securityContext.SELinuxOptions).To(BeNil())
+								}
+								g.Expect(securityContext.ReadOnlyRootFilesystem).To(HaveValue(BeTrue()))
+								g.Expect(securityContext.AllowPrivilegeEscalation).To(HaveValue(BeFalse()))
+							}
+						}, util.APITimeout, util.RetryInterval).Should(Succeed())
+					}
+				})
+
 				It("should deploy the sriov-network-metrics-exporter using the Spec.ConfigDaemonNodeSelector field", func() {
 					nodeSelector := map[string]string{
 						"node-role.kubernetes.io/worker": "",
