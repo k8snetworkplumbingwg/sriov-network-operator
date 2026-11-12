@@ -84,10 +84,13 @@ var _ = Describe("SRIOV", func() {
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil)
 
 			mac, _ := net.ParseMAC("08:c0:eb:70:74:4e")
+			vfAdminMac, err := net.ParseMAC("4e:fd:3d:08:59:b1")
+			Expect(err).NotTo(HaveOccurred())
 			pfLinkMock.EXPECT().Attrs().Return(&netlink.LinkAttrs{
 				MTU:          1500,
 				HardwareAddr: mac,
 				EncapType:    "ether",
+				Vfs:          []netlink.VfInfo{{ID: 0, Mac: vfAdminMac}},
 			}).MinTimes(1)
 			hostMock.EXPECT().GetNetDevLinkSpeed("enp216s0f0np0").Return("100000 Mb/s")
 			hostMock.EXPECT().GetNetDevLinkAdminState("enp216s0f0np0").Return("up")
@@ -139,6 +142,7 @@ var _ = Describe("SRIOV", func() {
 				VFs: []sriovnetworkv1.VirtualFunction{{
 					Name:            "enp216s0f0v0",
 					Mac:             "4e:fd:3d:08:59:b1",
+					AdminMac:        "4e:fd:3d:08:59:b1",
 					Driver:          "mlx5_core",
 					PciAddress:      "0000:d8:00.2",
 					Vendor:          "15b3",
@@ -149,6 +153,114 @@ var _ = Describe("SRIOV", func() {
 					GUID:            "guid1",
 				}},
 			}))
+		})
+	})
+
+	Context("getVfInfo", func() {
+		const vfAddr = "0000:d8:00.2"
+
+		expectVfDiscovery := func(vfAddr string, vfID int) {
+			dputilsLibMock.EXPECT().GetDriverName(vfAddr).Return("mlx5_core", nil)
+			dputilsLibMock.EXPECT().GetVFID(vfAddr).Return(vfID, nil)
+			hostMock.EXPECT().DiscoverVDPAType(vfAddr).Return("")
+			hostMock.EXPECT().TryGetInterfaceName(vfAddr).Return("")
+			hostMock.EXPECT().GetNetDevNodeGUID(vfAddr).Return("")
+		}
+
+		parseMAC := func(mac string) net.HardwareAddr {
+			hw, err := net.ParseMAC(mac)
+			Expect(err).NotTo(HaveOccurred())
+			return hw
+		}
+
+		It("sets AdminMac from the PF VF record matching the VF ID", func() {
+			expectVfDiscovery(vfAddr, 1)
+			pfVfs := map[int]netlink.VfInfo{
+				0: {ID: 0, Mac: parseMAC("aa:aa:aa:aa:aa:00")},
+				1: {ID: 1, Mac: parseMAC("aa:aa:aa:aa:aa:01")},
+			}
+
+			vf, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0", "legacy", nil, pfVfs)
+
+			Expect(valid).To(BeTrue())
+			Expect(vf.VfID).To(Equal(1))
+			Expect(vf.AdminMac).To(Equal("aa:aa:aa:aa:aa:01"))
+		})
+
+		It("leaves AdminMac empty when the VF ID is not in the PF VF records", func() {
+			expectVfDiscovery(vfAddr, 2)
+			pfVfs := map[int]netlink.VfInfo{
+				0: {ID: 0, Mac: parseMAC("aa:aa:aa:aa:aa:00")},
+			}
+
+			vf, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0", "legacy", nil, pfVfs)
+
+			Expect(valid).To(BeTrue())
+			Expect(vf.VfID).To(Equal(2))
+			Expect(vf.AdminMac).To(BeEmpty())
+		})
+
+		It("leaves AdminMac empty when the PF reports no MAC for the VF", func() {
+			expectVfDiscovery(vfAddr, 0)
+			pfVfs := map[int]netlink.VfInfo{0: {ID: 0}}
+
+			vf, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0", "legacy", nil, pfVfs)
+
+			Expect(valid).To(BeTrue())
+			Expect(vf.AdminMac).To(BeEmpty())
+		})
+
+		It("leaves AdminMac empty when the PF VF records are nil", func() {
+			expectVfDiscovery(vfAddr, 0)
+
+			vf, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0", "legacy", nil, nil)
+
+			Expect(valid).To(BeTrue())
+			Expect(vf.AdminMac).To(BeEmpty())
+		})
+
+		It("skips the VF when the VF ID cannot be read", func() {
+			dputilsLibMock.EXPECT().GetDriverName(vfAddr).Return("mlx5_core", nil)
+			dputilsLibMock.EXPECT().GetVFID(vfAddr).Return(-1, errors.New("unable to read VF id"))
+			pfVfs := map[int]netlink.VfInfo{
+				0: {ID: 0, Mac: parseMAC("aa:aa:aa:aa:aa:00")},
+			}
+
+			_, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0", "legacy", nil, pfVfs)
+
+			Expect(valid).To(BeFalse())
+		})
+
+		It("skips the VF when the VF ID is negative without an error", func() {
+			dputilsLibMock.EXPECT().GetDriverName(vfAddr).Return("mlx5_core", nil)
+			dputilsLibMock.EXPECT().GetVFID(vfAddr).Return(-1, nil)
+
+			_, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0", "legacy", nil, nil)
+
+			Expect(valid).To(BeFalse())
+		})
+	})
+
+	Context("getVfInfos", func() {
+		It("does not report VFs with an unknown VF ID and keeps the order of the others", func() {
+			expectedVfs := map[string]int{"0000:d8:00.2": 0, "0000:d8:00.4": 2}
+			for addr, id := range expectedVfs {
+				dputilsLibMock.EXPECT().GetDriverName(addr).Return("mlx5_core", nil)
+				dputilsLibMock.EXPECT().GetVFID(addr).Return(id, nil)
+				hostMock.EXPECT().DiscoverVDPAType(addr).Return("")
+				hostMock.EXPECT().TryGetInterfaceName(addr).Return("")
+				hostMock.EXPECT().GetNetDevNodeGUID(addr).Return("")
+			}
+			dputilsLibMock.EXPECT().GetDriverName("0000:d8:00.3").Return("mlx5_core", nil)
+			dputilsLibMock.EXPECT().GetVFID("0000:d8:00.3").Return(-1, errors.New("unable to read VF id"))
+
+			vfs := s.(*sriov).getVfInfos(context.Background(),
+				[]string{"0000:d8:00.2", "0000:d8:00.3", "0000:d8:00.4"},
+				"enp216s0f0np0", "legacy", nil, nil)
+
+			Expect(vfs).To(HaveLen(2))
+			Expect(vfs[0].PciAddress).To(Equal("0000:d8:00.2"))
+			Expect(vfs[1].PciAddress).To(Equal("0000:d8:00.4"))
 		})
 	})
 
