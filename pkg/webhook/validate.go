@@ -285,6 +285,25 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 		return false, fmt.Errorf("software bridge management can't be used when the device externally managed")
 	}
 
+	// devlink params require switchdev mode
+	if len(cr.Spec.DevlinkParams) > 0 && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
+		return false, fmt.Errorf("devlinkParams requires the device to be configured in switchdev mode")
+	}
+	// reject unsupported devlink param keys
+	for k := range cr.Spec.DevlinkParams {
+		if k != "flow_steering_mode" {
+			return false, fmt.Errorf("unsupported devlink parameter %q, only flow_steering_mode is supported", k)
+		}
+	}
+	// validate known devlink param values
+	if fsm, ok := cr.Spec.DevlinkParams["flow_steering_mode"]; ok {
+		switch fsm {
+		case "smfs", "dmfs", "hmfs":
+		default:
+			return false, fmt.Errorf("invalid flow_steering_mode value %q, allowed values: smfs, dmfs, hmfs", fsm)
+		}
+	}
+
 	return true, nil
 }
 

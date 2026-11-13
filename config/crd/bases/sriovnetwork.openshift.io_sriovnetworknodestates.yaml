@@ -157,6 +157,10 @@ spec:
               interfaces:
                 items:
                   properties:
+                    devlinkParams:
+                      additionalProperties:
+                        type: string
+                      type: object
                     eSwitchMode:
                       type: string
                     externallyManaged:
