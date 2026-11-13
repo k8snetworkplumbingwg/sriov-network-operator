@@ -289,6 +289,12 @@ func staticValidateSriovNetworkNodePolicy(cr *sriovnetworkv1.SriovNetworkNodePol
 	if len(cr.Spec.DevlinkParams) > 0 && cr.Spec.EswitchMode != sriovnetworkv1.ESwithModeSwitchDev {
 		return false, fmt.Errorf("devlinkParams requires the device to be configured in switchdev mode")
 	}
+	// reject unsupported devlink param keys
+	for k := range cr.Spec.DevlinkParams {
+		if k != "flow_steering_mode" {
+			return false, fmt.Errorf("unsupported devlink parameter %q, only flow_steering_mode is supported", k)
+		}
+	}
 	// validate known devlink param values
 	if fsm, ok := cr.Spec.DevlinkParams["flow_steering_mode"]; ok {
 		switch fsm {
