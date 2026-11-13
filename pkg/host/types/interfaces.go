@@ -117,6 +117,11 @@ type ServiceInterface interface {
 	// systemd service. Unlike UpdateSystemService, it overwrites the file on every
 	// call so that stale directives from a previous configuration are never left behind.
 	WriteServiceDropin(service *Service) error
+	// RemoveServiceDropin removes an operator-owned drop-in file for a systemd service.
+	// It is not an error if the drop-in doesn't exist.
+	RemoveServiceDropin(service *Service) error
+	// ReloadServiceDaemon asks systemd to reload its unit files (systemctl daemon-reload)
+	ReloadServiceDaemon() error
 }
 
 type SriovInterface interface {

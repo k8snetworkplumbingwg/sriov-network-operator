@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -179,6 +180,30 @@ func (s *service) WriteServiceDropin(service *types.Service) error {
 		return err
 	}
 	return os.WriteFile(path.Join(consts.Chroot, service.Path), []byte(service.Content), 0o644)
+}
+
+// RemoveServiceDropin removes the drop-in file for service. A missing drop-in is
+// not an error. The counterpart of WriteServiceDropin, used when the operator no
+// longer has anything to configure for the service.
+func (s *service) RemoveServiceDropin(service *types.Service) error {
+	err := os.Remove(path.Join(consts.Chroot, service.Path))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// ReloadServiceDaemon asks systemd on the host to reload its unit files
+// (systemctl daemon-reload), so that added or removed drop-ins are picked up.
+func (s *service) ReloadServiceDaemon() error {
+	exit, err := s.utilsHelper.Chroot(consts.Chroot)
+	if err != nil {
+		return err
+	}
+	defer exit()
+
+	_, _, err = s.utilsHelper.RunCommand("systemctl", "daemon-reload")
+	return err
 }
 
 // ReadServiceManifestFile reads service file

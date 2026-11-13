@@ -16,13 +16,17 @@ source "$here/run-e2e-conformance-common"
 NUM_OF_WORKERS=${NUM_OF_WORKERS:-2}
 total_number_of_nodes=$((1 + NUM_OF_WORKERS))
 
-# Optional switchdev mock driver, installed from the repository's main branch.
-MOCK_SMARTNIC_REPO=${MOCK_SMARTNIC_REPO:-}
-declare -A MOCK_SMARTNIC_BOOTS=()
-if [[ -n $MOCK_SMARTNIC_REPO ]]; then
-  validate_mock_driver_repo "$MOCK_SMARTNIC_REPO"
-  export DEV_MODE=TRUE
+MOCK_SMARTNIC_REPO=${MOCK_SMARTNIC_REPO:-https://github.com/SchSeba/switchdev-mock-driver.git}
+validate_mock_driver_repo "$MOCK_SMARTNIC_REPO"
+export MOCK_DRIVER_WORKDIR
+MOCK_DRIVER_WORKDIR=$(mktemp -d /tmp/mock-smartnic-k8s.XXXXXX)
+export MOCK_DRIVER_SOURCE=${MOCK_DRIVER_SOURCE:-$root/../switchdev-mock-driver}
+if [[ ! -d $MOCK_DRIVER_SOURCE ]]; then
+  export MOCK_DRIVER_SOURCE=$MOCK_DRIVER_WORKDIR/source
 fi
+fetch_mock_driver_source "$MOCK_SMARTNIC_REPO" "$MOCK_DRIVER_SOURCE"
+declare -A MOCK_SMARTNIC_BOOTS=()
+export DEV_MODE=TRUE
 
 ## Global configuration
 export NAMESPACE="sriov-network-operator"
@@ -41,7 +45,7 @@ export MULTUS_NAMESPACE="kube-system"
 
 
 check_requirements() {
-  for cmd in kcli virsh virt-edit podman make go python3 timeout; do
+  for cmd in kcli virsh virt-edit podman make go python3 timeout git tar; do
     if ! command -v "$cmd" &> /dev/null; then
       echo "$cmd is not available"
       exit 1
@@ -278,11 +282,18 @@ for ((num=0; num<NUM_OF_WORKERS; num++))
 do
   printf -v native_mac '52:54:00:fa:%02x:02' "$num"
   update_host "$cluster_name-worker-$num" "$native_mac"
-  if [[ -n $MOCK_SMARTNIC_REPO ]]; then
-    boot=$(timeout 20 kcli ssh "$cluster_name-worker-$num" cat /proc/sys/kernel/random/boot_id)
-    [[ $boot =~ ^[0-9a-f-]{36}$ ]] || { echo 'Cannot record worker boot ID' >&2; exit 1; }
-    MOCK_SMARTNIC_BOOTS[$cluster_name-worker-$num]=$boot
-  fi
+  # The mock driver builds against the running kernel, and CentOS Stream drops kernel-devel
+  # for superseded kernels: boot the newest kernel with its exactly matching headers.
+  timeout 900 kcli ssh "$cluster_name-worker-$num" "sudo bash -s" << 'KERNEL'
+set -euo pipefail
+dnf -y install kernel
+latest=$(rpm -q kernel --qf '%{BUILDTIME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | sort -n | tail -1 | cut -d' ' -f2)
+dnf -y install "kernel-devel-$latest"
+grubby --set-default "/boot/vmlinuz-$latest"
+KERNEL
+  boot=$(timeout 20 kcli ssh "$cluster_name-worker-$num" cat /proc/sys/kernel/random/boot_id)
+  [[ $boot =~ ^[0-9a-f-]{36}$ ]] || { echo 'Cannot record worker boot ID' >&2; exit 1; }
+  MOCK_SMARTNIC_BOOTS[$cluster_name-worker-$num]=$boot
   sleep 5
   kcli ssh $cluster_name-worker-$num sudo reboot || true
 done
@@ -320,12 +331,15 @@ PYXML
     sleep 5
   done
   $ready || { echo "Timed out waiting for $vm SSH" >&2; return 1; }
-  printf -v args '%q ' "$MOCK_SMARTNIC_REPO" "$mac" "$native_mac"
+  # kcli re-evaluates the remote command, so it must not contain variables or nested quotes.
+  # mkdir without -p refuses to reuse an existing checkout.
+  tar -C "$MOCK_DRIVER_SOURCE" --exclude=.git -cz . | timeout 300 kcli ssh "$vm" \
+    "sudo mkdir /var/tmp/switchdev-mock-driver && sudo tar -xz -C /var/tmp/switchdev-mock-driver"
+  printf -v args '%q ' "$mac" "$native_mac"
   {
-    declare -f fetch_mock_driver_source
     cat <<'WORKER'
 set -Eeuo pipefail
-repo=$1 mac=$2 native_mac=$3
+mac=$1 native_mac=$2
 # Assert the regular-test filter refers to the attested native secondary PF.
 [[ $(cat /sys/class/net/sriovtest0/address) == "$native_mac" ]]
 [[ $(basename "$(readlink -f /sys/class/net/sriovtest0/device/driver)") == igb ]]
@@ -338,22 +352,17 @@ done
 ((${#names[@]} == 1))
 pf=$(basename "$(readlink -f "${names[0]}/device")")
 checkout=/var/tmp/switchdev-mock-driver
-[[ ! -e $checkout ]] || { echo "Refusing to overwrite $checkout" >&2; exit 1; }
-command -v git >/dev/null || dnf install -y git
-fetch_mock_driver_source "$repo" "$checkout"
-git -C "$checkout" rev-parse HEAD
 "$checkout/scripts/setup-worker.sh" --pf "$pf" --emulated-pf
 WORKER
   } | timeout 900 kcli ssh "$vm" "sudo --preserve-env=SSH_CONNECTION bash -s -- $args"
 }
 
-if [[ -n $MOCK_SMARTNIC_REPO ]]; then
-  for ((num=0; num<NUM_OF_WORKERS; num++)); do
-    printf -v native_mac '52:54:00:fa:%02x:02' "$num"
-    printf -v mock_mac '52:54:00:fa:%02x:03' "$num"
-    setup_mock_smartnic "$cluster_name-worker-$num" "$native_mac" "$mock_mac"
-  done
-fi
+git -C "$MOCK_DRIVER_SOURCE" rev-parse HEAD || true
+for ((num=0; num<NUM_OF_WORKERS; num++)); do
+  printf -v native_mac '52:54:00:fa:%02x:02' "$num"
+  printf -v mock_mac '52:54:00:fa:%02x:03' "$num"
+  setup_mock_smartnic "$cluster_name-worker-$num" "$native_mac" "$mock_mac"
+done
 
 # remove the patch after multus bug is fixed
 # https://github.com/k8snetworkplumbingwg/multus-cni/issues/1221
@@ -525,11 +534,9 @@ done
 
 # Deploy the sriov operator via helm
 hack/deploy-operator-helm.sh
-if [[ -n $MOCK_SMARTNIC_REPO ]]; then
-  # The Helm helper does not pass the shell's DEV_MODE into chart extraEnv.
-  kubectl -n "$NAMESPACE" set env deployment/sriov-network-operator DEV_MODE=TRUE
-  kubectl -n "$NAMESPACE" rollout status deployment/sriov-network-operator --timeout=400s
-fi
+# The Helm helper does not pass the shell's DEV_MODE into chart extraEnv.
+kubectl -n "$NAMESPACE" set env deployment/sriov-network-operator DEV_MODE=TRUE
+kubectl -n "$NAMESPACE" rollout status deployment/sriov-network-operator --timeout=400s
 
 echo "## create certificates for webhook"
 cat <<EOF | kubectl apply -f -
