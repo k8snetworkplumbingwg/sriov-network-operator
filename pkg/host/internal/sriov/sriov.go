@@ -559,8 +559,15 @@ func (s *sriov) configureHWOptionsForSwitchdev(iface *sriovnetworkv1.Interface) 
 				log.Log.Error(err, "configureHWOptionsForSwitchdev(): fail to configure flow steering mode after switching to legacy, restoring previous config", "device", iface.PciAddress)
 				if restoreErr := s.setEswitchModeAndNumVFs(iface.PciAddress, previousMode, previousNumVFs); restoreErr != nil {
 					log.Log.Error(restoreErr, "configureHWOptionsForSwitchdev(): failed to restore previous eswitch config", "device", iface.PciAddress)
+					return err
 				}
-				return err
+				// restoration succeeded — return nil so the caller does not
+				// reset the PF and destroy the restored VFs. The previous
+				// flow_steering_mode remains active. VF configuration will
+				// proceed normally.
+				log.Log.Info("configureHWOptionsForSwitchdev(): previous eswitch config restored, continuing with previous flow_steering_mode",
+					"device", iface.PciAddress, "flow_steering_mode", currentFlowSteeringMode)
+				return nil
 			}
 		} else {
 			log.Log.Error(err, "configureHWOptionsForSwitchdev(): fail to configure flow steering mode for the device", "device", iface.PciAddress)
