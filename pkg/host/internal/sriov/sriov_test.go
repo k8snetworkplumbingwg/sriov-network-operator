@@ -868,7 +868,7 @@ var _ = Describe("SRIOV", func() {
 			})
 
 			dputilsLibMock.EXPECT().GetSriovVFcapacity("0000:d8:00.0").Return(1)
-			dputilsLibMock.EXPECT().GetVFconfigured("0000:d8:00.0").Return(0)
+			dputilsLibMock.EXPECT().GetVFconfigured("0000:d8:00.0").Return(0).AnyTimes()
 			dputilsLibMock.EXPECT().GetDriverName("0000:d8:00.0").Return("mlx5_core", nil).Times(2)
 			hostMock.EXPECT().RemoveDisableNMUdevRule("0000:d8:00.0").Return(nil)
 			hostMock.EXPECT().RemovePersistPFNameUdevRule("0000:d8:00.0").Return(nil)
@@ -886,7 +886,11 @@ var _ = Describe("SRIOV", func() {
 				Attrs: netlink.DevlinkDevAttrs{Eswitch: netlink.DevlinkDevEswitchAttr{Mode: sriovnetworkv1.ESwithModeSwitchDev}}}, nil).Times(6)
 			netlinkLibMock.EXPECT().DevLinkSetEswitchMode(gomock.Any(), "legacy").Return(nil).Times(2)
 			netlinkLibMock.EXPECT().DevLinkSetEswitchMode(gomock.Any(), "switchdev").Return(nil)
-			hostMock.EXPECT().SetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode", "smfs").Return(nil)
+			// first attempt fails (device requires legacy mode), second attempt after legacy switch succeeds
+			gomock.InOrder(
+				hostMock.EXPECT().SetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode", "smfs").Return(fmt.Errorf("device busy")),
+				hostMock.EXPECT().SetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode", "smfs").Return(nil),
+			)
 
 			dputilsLibMock.EXPECT().GetVFID("0000:d8:00.2").Return(0, nil).Times(2)
 			hostMock.EXPECT().Unbind("0000:d8:00.2").Return(nil).Times(3)
