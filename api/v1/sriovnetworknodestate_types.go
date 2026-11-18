@@ -41,8 +41,9 @@ type Interface struct {
 	Name              string    `json:"name,omitempty"`
 	LinkType          string    `json:"linkType,omitempty"`
 	EswitchMode       string    `json:"eSwitchMode,omitempty"`
-	VfGroups          []VfGroup `json:"vfGroups,omitempty"`
-	ExternallyManaged bool      `json:"externallyManaged,omitempty"`
+	VfGroups          []VfGroup         `json:"vfGroups,omitempty"`
+	ExternallyManaged bool              `json:"externallyManaged,omitempty"`
+	DevlinkParams     map[string]string `json:"devlinkParams,omitempty"`
 }
 
 type VfGroup struct {

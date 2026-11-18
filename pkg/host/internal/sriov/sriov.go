@@ -516,6 +516,9 @@ func (s *sriov) configureHWOptionsForSwitchdev(iface *sriovnetworkv1.Interface) 
 		return err
 	}
 	desiredFlowSteeringMode := "smfs"
+	if v, ok := iface.DevlinkParams["flow_steering_mode"]; ok && v != "" {
+		desiredFlowSteeringMode = v
+	}
 	currentFlowSteeringMode, err := s.networkHelper.GetDevlinkDeviceParam(iface.PciAddress, "flow_steering_mode")
 	if err != nil {
 		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENODEV) {
@@ -534,21 +537,42 @@ func (s *sriov) configureHWOptionsForSwitchdev(iface *sriovnetworkv1.Interface) 
 	if currentFlowSteeringMode == desiredFlowSteeringMode {
 		return nil
 	}
-	// flow steering mode can be changed only when NIC is in legacy mode
-	if s.GetNicSriovMode(iface.PciAddress) != sriovnetworkv1.ESwithModeLegacy {
-		err = s.setEswitchModeAndNumVFs(iface.PciAddress, sriovnetworkv1.ESwithModeLegacy, 0)
-		if err != nil {
-			log.Log.Error(err, "falied to switch Eswitch mode to legacy and reset number of vfs to 0")
-			return err
-		}
-	}
+	// Try setting the mode first. If the device rejects it outright
+	// (ENOTSUP), we skip without tearing down existing VFs. If it fails
+	// because the NIC needs to be in legacy mode, tear down and retry.
 	if err := s.networkHelper.SetDevlinkDeviceParam(iface.PciAddress, "flow_steering_mode", desiredFlowSteeringMode); err != nil {
 		if errors.Is(err, syscall.ENOTSUP) {
 			log.Log.V(2).Info("configureHWOptionsForSwitchdev(): device doesn't support changing of flow_steering_mode, skip", "device", iface.PciAddress)
 			return nil
 		}
-		log.Log.Error(err, "configureHWOptionsForSwitchdev(): fail to configure flow steering mode for the device", "device", iface.PciAddress)
-		return err
+		// the device may require legacy mode to change the param
+		// save previous state (mode and vfs) in case the flow_steering_mode change fails even after legacy switch
+		previousMode := s.GetNicSriovMode(iface.PciAddress)
+		if previousMode != sriovnetworkv1.ESwithModeLegacy {
+
+			previousNumVFs := s.dputilsLib.GetVFconfigured(iface.PciAddress)
+			if err := s.setEswitchModeAndNumVFs(iface.PciAddress, sriovnetworkv1.ESwithModeLegacy, 0); err != nil {
+				log.Log.Error(err, "failed to switch eswitch mode to legacy and reset number of VFs to 0")
+				return err
+			}
+			if err := s.networkHelper.SetDevlinkDeviceParam(iface.PciAddress, "flow_steering_mode", desiredFlowSteeringMode); err != nil {
+				log.Log.Error(err, "configureHWOptionsForSwitchdev(): fail to configure flow steering mode after switching to legacy, restoring previous config", "device", iface.PciAddress)
+				if restoreErr := s.setEswitchModeAndNumVFs(iface.PciAddress, previousMode, previousNumVFs); restoreErr != nil {
+					log.Log.Error(restoreErr, "configureHWOptionsForSwitchdev(): failed to restore previous eswitch config", "device", iface.PciAddress)
+					return err
+				}
+				// restoration succeeded — return nil so the caller does not
+				// reset the PF and destroy the restored VFs. The previous
+				// flow_steering_mode remains active. VF configuration will
+				// proceed normally.
+				log.Log.Info("configureHWOptionsForSwitchdev(): previous eswitch config restored, continuing with previous flow_steering_mode",
+					"device", iface.PciAddress, "flow_steering_mode", currentFlowSteeringMode)
+				return nil
+			}
+		} else {
+			log.Log.Error(err, "configureHWOptionsForSwitchdev(): fail to configure flow steering mode for the device", "device", iface.PciAddress)
+			return err
+		}
 	}
 	return nil
 }

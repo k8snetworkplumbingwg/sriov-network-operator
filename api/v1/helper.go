@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -363,6 +364,7 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 				EswitchMode:       p.Spec.EswitchMode,
 				NumVfs:            p.Spec.NumVfs,
 				ExternallyManaged: p.Spec.ExternallyManaged,
+				DevlinkParams:     maps.Clone(p.Spec.DevlinkParams),
 			}
 			if p.Spec.NumVfs > 0 {
 				group, err := p.generatePfNameVfGroup(&iface)
@@ -479,6 +481,17 @@ func (iface Interface) mergeConfigs(input *Interface, equalPriority bool) {
 	}
 	if input.NumVfs < iface.NumVfs {
 		input.NumVfs = iface.NumVfs
+	}
+	// merge devlink params: higher priority wins per key
+	if len(iface.DevlinkParams) > 0 {
+		if input.DevlinkParams == nil {
+			input.DevlinkParams = make(map[string]string)
+		}
+		for k, v := range iface.DevlinkParams {
+			if _, exists := input.DevlinkParams[k]; !exists {
+				input.DevlinkParams[k] = v
+			}
+		}
 	}
 }
 
