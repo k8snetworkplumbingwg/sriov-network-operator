@@ -6,8 +6,11 @@ import (
 	"time"
 
 	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -474,6 +477,174 @@ var _ = Describe("All Network Controllers", Ordered, func() {
 	})
 
 })
+
+var _ = Describe("Generic network reconciler stale namespace cleanup", func() {
+	AfterEach(func() {
+		for _, name := range []string{"stale-ns-existing-target", "stale-ns-missing-target"} {
+			key := client.ObjectKey{Name: name, Namespace: testNamespace}
+			network := &sriovnetworkv1.SriovNetwork{}
+			err := k8sClient.Get(context.Background(), key, network)
+			if !apierrors.IsNotFound(err) {
+				Expect(err).NotTo(HaveOccurred())
+				if len(network.GetFinalizers()) > 0 {
+					network.SetFinalizers(nil)
+					Expect(k8sClient.Update(context.Background(), network)).To(Succeed())
+				}
+				Expect(client.IgnoreNotFound(k8sClient.Delete(context.Background(), network))).To(Succeed())
+			}
+
+			target := &netattdefv1.NetworkAttachmentDefinition{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+			Expect(client.IgnoreNotFound(k8sClient.Delete(context.Background(), target))).To(Succeed())
+		}
+	})
+
+	DescribeTable("removes the stale namespace annotation before reconciling an existing target NAD", func(concurrent bool) {
+		const (
+			name           = "stale-ns-existing-target"
+			oldNamespace   = "removed-network-namespace"
+			unrelatedKey   = "example.com/unrelated"
+			unrelatedValue = "preserve-me"
+		)
+
+		trackedClient := &deleteTrackingClient{Client: k8sClient}
+		injected := false
+		if concurrent {
+			trackedClient.beforePatch = func(ctx context.Context, obj client.Object) {
+				if _, ok := obj.(*sriovnetworkv1.SriovNetwork); !ok || injected {
+					return
+				}
+				injected = true
+				fresh := &sriovnetworkv1.SriovNetwork{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), fresh)).To(Succeed())
+				Expect(fresh.Annotations).To(HaveLen(1))
+				fresh.Annotations[unrelatedKey] = unrelatedValue
+				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+			}
+		}
+		reconciler := newGenericNetworkReconciler(
+			trackedClient,
+			scheme.Scheme,
+			&SriovNetworkReconciler{},
+			status.NewPatcher(trackedClient, nil, scheme.Scheme, "generic-network-test"),
+		)
+
+		target := &netattdefv1.NetworkAttachmentDefinition{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		}
+		Expect(k8sClient.Create(context.Background(), target)).To(Succeed())
+		targetUID := target.UID
+
+		network := &sriovnetworkv1.SriovNetwork{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: testNamespace,
+				Annotations: map[string]string{
+					sriovnetworkv1.LASTNETWORKNAMESPACE: oldNamespace,
+					unrelatedKey:                        unrelatedValue,
+				},
+			},
+			Spec: sriovnetworkv1.SriovNetworkSpec{NetworkNamespace: "default"},
+		}
+		if concurrent {
+			delete(network.Annotations, unrelatedKey)
+		}
+		Expect(k8sClient.Create(context.Background(), network)).To(Succeed())
+
+		req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(network)}
+		_, err := reconciler.Reconcile(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+
+		updatedNetwork := &sriovnetworkv1.SriovNetwork{}
+		Expect(k8sClient.Get(context.Background(), req.NamespacedName, updatedNetwork)).To(Succeed())
+		Expect(updatedNetwork.GetAnnotations()).NotTo(HaveKey(sriovnetworkv1.LASTNETWORKNAMESPACE))
+		Expect(updatedNetwork.GetAnnotations()).To(HaveKeyWithValue(unrelatedKey, unrelatedValue))
+
+		updatedTarget := &netattdefv1.NetworkAttachmentDefinition{}
+		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(target), updatedTarget)).To(Succeed())
+		Expect(updatedTarget.UID).To(Equal(targetUID))
+
+		_, err = reconciler.Reconcile(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(injected).To(Equal(concurrent))
+		Expect(trackedClient.deletedNamespaces).To(Equal([]string{oldNamespace}))
+		Expect(k8sClient.Get(context.Background(), req.NamespacedName, updatedNetwork)).To(Succeed())
+		Expect(updatedNetwork.Annotations).NotTo(HaveKey(sriovnetworkv1.LASTNETWORKNAMESPACE))
+		Expect(updatedNetwork.Annotations).To(HaveKeyWithValue(unrelatedKey, unrelatedValue))
+
+		updatedTarget = &netattdefv1.NetworkAttachmentDefinition{}
+		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(target), updatedTarget)).To(Succeed())
+		Expect(updatedTarget.UID).To(Equal(targetUID))
+	}, Entry("pre-existing unrelated annotation", false), Entry("concurrent unrelated annotation", true))
+
+	It("records the target namespace after creating a missing target NAD", func() {
+		const (
+			name         = "stale-ns-missing-target"
+			oldNamespace = "removed-network-namespace"
+		)
+
+		trackedClient := &deleteTrackingClient{Client: k8sClient}
+		reconciler := newGenericNetworkReconciler(
+			trackedClient,
+			scheme.Scheme,
+			&SriovNetworkReconciler{},
+			status.NewPatcher(trackedClient, nil, scheme.Scheme, "generic-network-test"),
+		)
+
+		network := &sriovnetworkv1.SriovNetwork{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: testNamespace,
+				Annotations: map[string]string{
+					sriovnetworkv1.LASTNETWORKNAMESPACE: oldNamespace,
+				},
+			},
+			Spec: sriovnetworkv1.SriovNetworkSpec{NetworkNamespace: "default"},
+		}
+		Expect(k8sClient.Create(context.Background(), network)).To(Succeed())
+
+		req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(network)}
+		_, err := reconciler.Reconcile(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+
+		updatedNetwork := &sriovnetworkv1.SriovNetwork{}
+		Expect(k8sClient.Get(context.Background(), req.NamespacedName, updatedNetwork)).To(Succeed())
+		Expect(updatedNetwork.GetAnnotations()).To(HaveKeyWithValue(sriovnetworkv1.LASTNETWORKNAMESPACE, "default"))
+
+		target := &netattdefv1.NetworkAttachmentDefinition{}
+		targetKey := client.ObjectKey{Namespace: "default", Name: name}
+		Expect(k8sClient.Get(context.Background(), targetKey, target)).To(Succeed())
+		targetUID := target.UID
+
+		_, err = reconciler.Reconcile(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(trackedClient.deletedNamespaces).To(Equal([]string{oldNamespace}))
+
+		target = &netattdefv1.NetworkAttachmentDefinition{}
+		Expect(k8sClient.Get(context.Background(), targetKey, target)).To(Succeed())
+		Expect(target.UID).To(Equal(targetUID))
+	})
+})
+
+type deleteTrackingClient struct {
+	client.Client
+	deletedNamespaces []string
+	beforePatch       func(context.Context, client.Object)
+}
+
+// Patch injects a deterministic concurrent write immediately before cleanup.
+func (c *deleteTrackingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if c.beforePatch != nil {
+		c.beforePatch(ctx, obj)
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (c *deleteTrackingClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*netattdefv1.NetworkAttachmentDefinition); ok {
+		c.deletedNamespaces = append(c.deletedNamespaces, obj.GetNamespace())
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
 
 func cleanNetworksInNamespace(namespace string) {
 	ctx := context.Background()
