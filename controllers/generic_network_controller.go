@@ -174,9 +174,8 @@ func (r *genericNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			}
 			reqLogger.Info("Old NetworkAttachmentDefinition not found, skipping deletion", "Namespace", lnns, "Name", instance.GetName())
 		}
-		// Clear the stale annotation so we don't retry deletion.
-		// It will be re-set at creation time (L192).
-		if err := utils.AnnotateObject(ctx, instance, sriovnetworkv1.LASTNETWORKNAMESPACE, "", r.Client); err != nil {
+		// Remove the key so a later reconcile cannot treat an empty namespace as a stale NAD location.
+		if err := utils.RemoveAnnotationFromObject(ctx, instance, sriovnetworkv1.LASTNETWORKNAMESPACE, r.Client); err != nil {
 			reqLogger.Error(err, "Couldn't clear LASTNETWORKNAMESPACE annotation", "Name", instance.GetName())
 			return reconcile.Result{}, err
 		}
