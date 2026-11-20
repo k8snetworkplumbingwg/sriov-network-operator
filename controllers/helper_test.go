@@ -288,7 +288,7 @@ var _ = Describe("Helper DRA", func() {
 			Expect(client.Get(ctx, k8sclient.ObjectKeyFromObject(extra), &corev1.ConfigMap{})).To(MatchError(ContainSubstring("not found")))
 		}, Entry("DRA", true), Entry("device plugin", false))
 
-		It("deletes DaemonSets before bindings, roles and service accounts, and protects cluster objects by UID", func() {
+		It("deletes DaemonSets before bindings, roles and service accounts, and protects cluster objects by UID and resource version", func() {
 			objs, err := renderDRADriverObjs(config, testRenderManifests)
 			Expect(err).NotTo(HaveOccurred())
 			objects := make([]k8sclient.Object, 0, len(objs))
@@ -311,6 +311,7 @@ var _ = Describe("Helper DRA", func() {
 						}
 						Expect(deleteOptions.Preconditions).NotTo(BeNil())
 						Expect(deleteOptions.Preconditions.UID).To(HaveValue(Equal(obj.GetUID())))
+						Expect(deleteOptions.Preconditions.ResourceVersion).To(HaveValue(Equal(obj.GetResourceVersion())))
 					}
 					return c.Delete(ctx, obj, opts...)
 				},
@@ -455,7 +456,89 @@ var _ = Describe("Helper DRA", func() {
 		})
 	})
 
-	Context("ensureDaemonSetRolledOut", func() {
+	Context("syncDsObject DeviceClass ownership", func() {
+		var (
+			ctx     context.Context
+			scheme  *runtime.Scheme
+			desired *unstructured.Unstructured
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			scheme = runtime.NewScheme()
+			utilruntime.Must(resourceapi.AddToScheme(scheme))
+			desired = &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "resource.k8s.io/v1",
+				"kind":       deviceClassResourceName,
+				"metadata":   map[string]interface{}{"name": consts.DRADriverBaseDeviceClassName},
+				"spec": map[string]interface{}{"selectors": []interface{}{
+					map[string]interface{}{"cel": map[string]interface{}{"expression": "true"}},
+				}},
+			}}
+		})
+
+		DescribeTable("checks existing ownership before applying", func(exists bool, labels map[string]string, allowed bool) {
+			client := fake.NewClientBuilder().WithScheme(scheme).Build()
+			existing := &resourceapi.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{Name: desired.GetName(), Labels: labels},
+				Spec: resourceapi.DeviceClassSpec{Selectors: []resourceapi.DeviceSelector{
+					{CEL: &resourceapi.CELDeviceSelector{Expression: "false"}},
+				}},
+			}
+			if exists {
+				Expect(client.Create(ctx, existing)).To(Succeed())
+			}
+			original := existing.DeepCopy()
+			originalDesired := desired.DeepCopy()
+			applied := false
+			applyFn := func(ctx context.Context, c k8sclient.Client, obj *unstructured.Unstructured) error {
+				applied = true
+				return testApplyManifest(ctx, c, obj)
+			}
+			err := syncDsObject(ctx, client, scheme, &sriovnetworkv1.SriovOperatorConfig{}, desired, applyFn)
+			Expect(applied).To(Equal(allowed))
+			actual := &resourceapi.DeviceClass{}
+			Expect(client.Get(ctx, k8sclient.ObjectKeyFromObject(existing), actual)).To(Succeed())
+			if allowed {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(objectHasOperatorManagedLabel(actual)).To(BeTrue())
+				Expect(actual.Spec.Selectors[0].CEL.Expression).To(Equal("true"))
+			} else {
+				Expect(err).To(MatchError(ContainSubstring("exists but is not managed by the SR-IOV Network Operator")))
+				Expect(actual).To(Equal(original))
+				Expect(desired).To(Equal(originalDesired))
+			}
+		},
+			Entry("creates an absent object", false, nil, true),
+			Entry("updates an operator-managed object", true, dra.OperatorGeneratedByLabels(), true),
+			Entry("rejects an unmarked object", true, nil, false),
+			Entry("rejects an object marked for another manager", true, map[string]string{dra.GeneratedByLabel: "other"}, false),
+		)
+
+		DescribeTable("does not apply when the ownership read fails", func(readErr error, message string) {
+			client := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(context.Context, k8sclient.WithWatch, k8sclient.ObjectKey, k8sclient.Object, ...k8sclient.GetOption) error {
+					return readErr
+				},
+			}).Build()
+			original := desired.DeepCopy()
+			applyFn := func(context.Context, k8sclient.Client, *unstructured.Unstructured) error {
+				Fail("apply must not run after a failed ownership read")
+				return nil
+			}
+			err := syncDsObject(ctx, client, scheme, &sriovnetworkv1.SriovOperatorConfig{}, desired, applyFn)
+			Expect(err).To(MatchError(ContainSubstring(message)))
+			Expect(err).To(MatchError(readErr))
+			Expect(desired).To(Equal(original))
+		},
+			Entry("read error", fmt.Errorf("read denied"), "read denied"),
+			Entry("unavailable API", &meta.NoKindMatchError{
+				GroupKind: schema.GroupKind{Group: "resource.k8s.io", Kind: deviceClassResourceName},
+			}, "DeviceClass API is unavailable"),
+		)
+	})
+
+	Context("daemonSetRolledOut", func() {
 		var (
 			ctx    context.Context
 			scheme *runtime.Scheme
@@ -471,20 +554,22 @@ var _ = Describe("Helper DRA", func() {
 			utilruntime.Must(appsv1.AddToScheme(scheme))
 		})
 
-		It("fails when the DaemonSet is missing", func() {
+		It("waits when the DaemonSet is missing", func() {
 			client := fake.NewClientBuilder().WithScheme(scheme).Build()
-			err := ensureDaemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
-			Expect(err).To(MatchError(ContainSubstring("does not exist")))
+			ready, err := daemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeFalse())
 		})
 
-		It("fails when the DaemonSet is not rolled out", func() {
+		It("waits when the DaemonSet is not rolled out", func() {
 			ds := &appsv1.DaemonSet{
 				ObjectMeta: metav1.ObjectMeta{Name: consts.DRADriverDaemonSetName, Namespace: testNamespace, Generation: 1},
 				Status:     appsv1.DaemonSetStatus{ObservedGeneration: 0, DesiredNumberScheduled: 2, NumberReady: 0},
 			}
 			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ds).Build()
-			err := ensureDaemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
-			Expect(err).To(MatchError(ContainSubstring("is not rolled out")))
+			ready, err := daemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeFalse())
 		})
 
 		It("succeeds when the DaemonSet has finished rolling out", func() {
@@ -498,7 +583,9 @@ var _ = Describe("Helper DRA", func() {
 				},
 			}
 			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ds).Build()
-			Expect(ensureDaemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)).To(Succeed())
+			ready, err := daemonSetRolledOut(ctx, client, consts.DRADriverDaemonSetName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeTrue())
 		})
 	})
 

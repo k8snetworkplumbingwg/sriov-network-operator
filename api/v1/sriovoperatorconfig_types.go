@@ -71,9 +71,27 @@ type SriovOperatorConfigSpec struct {
 	ConfigDaemonEnvVars map[string]string `json:"configDaemonEnvVars,omitempty"`
 }
 
+// ResourceProvider identifies the accepted device allocation providers.
+// Currently exactly one provider is enabled; both false means uninitialized.
+type ResourceProvider struct {
+	// DevicePlugin enables the SR-IOV device plugin.
+	// +optional
+	// +kubebuilder:default=false
+	DevicePlugin bool `json:"devicePlugin"`
+	// DRA enables the SR-IOV DRA driver.
+	// +optional
+	// +kubebuilder:default=false
+	DRA bool `json:"dra"`
+}
+
 // SriovOperatorConfigStatus defines the observed state of SriovOperatorConfig
 type SriovOperatorConfigStatus struct {
-	ConditionStatus `json:",inline"`
+	// ResourceProvider is the provider mode accepted by the operator. A requested
+	// change is accepted only while no node policies exist. Consumers use this
+	// field so a rejected change cannot take effect after a process restart.
+	// +optional
+	ResourceProvider ResourceProvider `json:"resourceProvider,omitempty"`
+	ConditionStatus  `json:",inline"`
 	// Show the runtime status of the network resource injector webhook
 	Injector string `json:"injector,omitempty"`
 	// Show the runtime status of the operator admission controller webhook

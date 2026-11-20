@@ -75,8 +75,6 @@ spec:
               value: $SRIOV_DRA_DRIVER_IMAGE
             - name: DRA_DRIVER_CDI_ROOT
               value: /var/run/cdi
-            - name: DRA_DRIVER_DEFAULT_INTERFACE_PREFIX
-              value: net
             - name: NETWORK_RESOURCES_INJECTOR_IMAGE
               value: $NETWORK_RESOURCES_INJECTOR_IMAGE
             - name: OPERATOR_NAME

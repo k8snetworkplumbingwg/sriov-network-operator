@@ -122,7 +122,97 @@ func TestConfigDeletionCleansGeneratedDeviceClasses(t *testing.T) {
 	}
 }
 
-var _ = Describe("Device plugin ConfigMap transition cleanup", func() {
+func TestReconcileBlockedResourceProvider(t *testing.T) {
+	for _, currentDRA := range []bool{false, true} {
+		for _, failure := range []string{"", "list", "patch"} {
+			t.Run(fmt.Sprintf("currentDRA=%t/failure=%s", currentDRA, failure), func(t *testing.T) {
+				g := NewWithT(t)
+				ctx := context.Background()
+				scheme := runtime.NewScheme()
+				g.Expect(sriovnetworkv1.AddToScheme(scheme)).To(Succeed())
+				config := &sriovnetworkv1.SriovOperatorConfig{
+					ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: vars.Namespace},
+					Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+						EnableInjector: true, EnableOperatorWebhook: true,
+						FeatureGates: map[string]bool{
+							consts.DynamicResourceAllocationFeatureGate:      !currentDRA,
+							consts.ParallelNicConfigFeatureGate:              true,
+							consts.ResourceInjectorMatchConditionFeatureGate: true,
+						},
+					},
+					Status: sriovnetworkv1.SriovOperatorConfigStatus{
+						ResourceProvider: sriovnetworkv1.ResourceProvider{DevicePlugin: !currentDRA, DRA: currentDRA},
+					},
+				}
+				policy := &sriovnetworkv1.SriovNetworkNodePolicy{ObjectMeta: metav1.ObjectMeta{Name: "existing", Namespace: vars.Namespace}}
+				objects := []client.Object{config, policy}
+				if failure == "patch" {
+					// With no policies, acceptance must persist the requested provider.
+					objects = []client.Object{config}
+				}
+				apiErr := fmt.Errorf("%s API failure", failure)
+				cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(config).WithObjects(objects...).
+					WithInterceptorFuncs(interceptor.Funcs{
+						List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+							if failure == "list" {
+								return apiErr
+							}
+							return c.List(ctx, list, opts...)
+						},
+						SubResourcePatch: func(ctx context.Context, c client.Client, subResource string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+							if failure == "patch" {
+								return apiErr
+							}
+							return c.SubResource(subResource).Patch(ctx, obj, patch, opts...)
+						},
+					}).Build()
+				orchestrator := orchestratorMock.NewMockInterface(gomock.NewController(t))
+				orchestrator.EXPECT().ClusterType().Return(consts.ClusterTypeKubernetes).AnyTimes()
+				orchestrator.EXPECT().GetTLSConfig(gomock.Any()).Return(nil, nil).AnyTimes()
+				patcher := &fakeStatusPatcher{}
+				rendered := map[string]map[string]interface{}{}
+				applied := []string{}
+				r := &SriovOperatorConfigReconciler{
+					Client: cl, UncachedAPIReader: cl, Scheme: scheme, FeatureGate: featuregate.New(),
+					Orchestrator: orchestrator, StatusPatcher: patcher,
+					renderManifestFn: func(path string, data *render.RenderData) ([]*unstructured.Unstructured, error) {
+						rendered[path] = data.Data
+						return []*unstructured.Unstructured{{Object: map[string]interface{}{
+							"apiVersion": "v1", "kind": "ConfigMap",
+							"metadata": map[string]interface{}{"name": path},
+						}}}, nil
+					},
+					applyManifestFn: func(_ context.Context, _ client.Client, obj *unstructured.Unstructured) error {
+						applied = append(applied, obj.GetName())
+						return nil
+					},
+				}
+				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(config)})
+				g.Expect(err).To(HaveOccurred())
+				persisted := &sriovnetworkv1.SriovOperatorConfig{}
+				g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(config), persisted)).To(Succeed())
+				g.Expect(persisted.Status.ResourceProvider).To(Equal(config.Status.ResourceProvider))
+				if failure != "" {
+					g.Expect(err).To(MatchError(ContainSubstring(apiErr.Error())))
+					g.Expect(rendered).To(BeEmpty(), "API failures must stop independent reconciliation")
+					g.Expect(patcher.conditions).To(ContainElement(And(
+						HaveField("Status", metav1.ConditionFalse), HaveField("Reason", sriovnetworkv1.ReasonOperatorConfigSyncFailed))))
+					return
+				}
+				g.Expect(err).To(MatchError(ContainSubstring("remove all policies before switching providers")))
+				g.Expect(applied).To(ConsistOf(consts.InjectorWebHookPath, consts.OperatorWebHookPath, consts.ConfigDaemonPath))
+				g.Expect(rendered).To(HaveLen(3), "a blocked switch must not reconcile provider manifests")
+				g.Expect(rendered[consts.ConfigDaemonPath]["ParallelNicConfig"]).To(BeTrue())
+				g.Expect(rendered[consts.InjectorWebHookPath][consts.ResourceInjectorMatchConditionFeatureGate]).To(BeTrue())
+				g.Expect(r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate)).To(Equal(currentDRA))
+				g.Expect(patcher.conditions).To(ContainElement(And(
+					HaveField("Status", metav1.ConditionFalse), HaveField("Reason", "ResourceProviderSwitchBlocked"))))
+			})
+		}
+	}
+}
+
+var _ = Describe("Device plugin ConfigMap retention", func() {
 	DescribeTable("reconciles the ConfigMap with the provider transition", func(draEnabled, pluginExists, configMapExists bool, failure string) {
 		ctx := context.Background()
 		scheme := runtime.NewScheme()
@@ -147,13 +237,17 @@ var _ = Describe("Device plugin ConfigMap transition cleanup", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: devicePluginDaemonSetName, Namespace: testNamespace},
 			})
 		}
-		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{
+		configMapDeleteAttempts := 0
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(config).WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{
 			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 				if failure == "plugin cleanup" && obj.GetName() == devicePluginDaemonSetName {
 					return fmt.Errorf("plugin cleanup failed")
 				}
-				if failure == "ConfigMap cleanup" && obj.GetName() == consts.ConfigMapName {
-					return fmt.Errorf("ConfigMap cleanup failed")
+				if obj.GetName() == consts.ConfigMapName {
+					configMapDeleteAttempts++
+					if failure == "ConfigMap cleanup" {
+						return fmt.Errorf("ConfigMap cleanup failed")
+					}
 				}
 				return c.Delete(ctx, obj, opts...)
 			},
@@ -177,38 +271,64 @@ var _ = Describe("Device plugin ConfigMap transition cleanup", func() {
 				}
 				return testApplyManifest(ctx, c, obj)
 			},
-			ensureProviderRolloutFn: func(context.Context, string) error {
+			ensureProviderRolloutFn: func(context.Context, string) (bool, error) {
 				// Configuration must remain available until the replacement is ready.
 				if configMapExists {
 					Expect(cl.Get(ctx, client.ObjectKeyFromObject(cm), &corev1.ConfigMap{})).To(Succeed())
 				}
 				if failure == "DRA rollout" {
-					return fmt.Errorf("DRA rollout failed")
+					return false, nil
 				}
-				return nil
+				return true, nil
 			},
 		}
-		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(config)})
-		if failure != "" {
+		result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(config)})
+		Expect(configMapDeleteAttempts).To(BeZero(), "reconciliation must not attempt to delete the device-plugin ConfigMap")
+		if failure == "DRA rollout" {
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(r.StatusPatcher.(*fakeStatusPatcher).conditions).To(ContainElement(And(HaveField("Status", metav1.ConditionFalse), HaveField("Reason", "ResourceProviderRolloutPending"))))
+			Expect(cl.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: devicePluginDaemonSetName}, &appsv1.DaemonSet{})).To(Succeed())
+		}
+		if failure != "" && failure != "DRA rollout" && failure != "ConfigMap cleanup" {
 			Expect(err).To(MatchError(ContainSubstring(failure + " failed")))
 		} else {
 			Expect(err).NotTo(HaveOccurred())
 		}
 		found := &corev1.ConfigMap{}
 		err = cl.Get(ctx, client.ObjectKeyFromObject(cm), found)
-		if configMapExists && (!draEnabled || failure != "") {
+		if configMapExists {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(found.Data).To(Equal(cm.Data))
 		} else {
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 		}
+		if failure == "" {
+			accepted := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(cl.Get(ctx, client.ObjectKeyFromObject(config), accepted)).To(Succeed())
+			Expect(accepted.Status.ResourceProvider).To(Equal(config.RequestedResourceProvider()))
+			if draEnabled {
+				Expect(errors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: devicePluginDaemonSetName}, &appsv1.DaemonSet{}))).To(BeTrue())
+			}
+			_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(config)})
+			Expect(err).NotTo(HaveOccurred())
+			persisted := &sriovnetworkv1.SriovOperatorConfig{}
+			Expect(cl.Get(ctx, client.ObjectKeyFromObject(config), persisted)).To(Succeed())
+			Expect(persisted.Status.ResourceProvider).To(Equal(accepted.Status.ResourceProvider))
+			err = cl.Get(ctx, client.ObjectKeyFromObject(cm), found)
+			if configMapExists {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(found.Data).To(Equal(cm.Data))
+			} else {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+			}
+		}
 	},
-		Entry("removes configuration after a successful switch", true, true, true, ""),
+		Entry("retains configuration after a successful switch", true, true, true, ""),
 		Entry("retains configuration when deployment fails", true, true, true, "DRA deployment"),
 		Entry("retains configuration while rollout is pending", true, true, true, "DRA rollout"),
 		Entry("retains configuration when plugin cleanup fails", true, true, true, "plugin cleanup"),
-		Entry("reports ConfigMap deletion failures for retry", true, true, true, "ConfigMap cleanup"),
-		Entry("removes leftover configuration after the plugin is gone", true, false, true, ""),
+		Entry("never attempts ConfigMap deletion", true, true, true, "ConfigMap cleanup"),
+		Entry("retains configuration after the plugin is gone", true, false, true, ""),
 		Entry("succeeds when configuration is already absent", true, false, false, ""),
 		Entry("retains configuration in device-plugin mode", false, true, true, ""),
 	)
@@ -1357,14 +1477,14 @@ func newDirectSriovOperatorConfigReconciler(orchestrator *orchestratorMock.MockI
 // envtestEnsureProviderDaemonSetRolledOut returns a rollout checker for envtest.
 // The API server does not run the DaemonSet controller, so status is patched once
 // the provider DaemonSet object exists.
-func envtestEnsureProviderDaemonSetRolledOut(c client.Client) func(context.Context, string) error {
-	return func(ctx context.Context, name string) error {
-		if err := ensureDaemonSetRolledOut(ctx, c, name); err == nil {
-			return nil
+func envtestEnsureProviderDaemonSetRolledOut(c client.Client) func(context.Context, string) (bool, error) {
+	return func(ctx context.Context, name string) (bool, error) {
+		if ready, err := daemonSetRolledOut(ctx, c, name); err != nil || ready {
+			return ready, err
 		}
 		ds := &appsv1.DaemonSet{}
 		if err := c.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: name}, ds); err != nil {
-			return fmt.Errorf("get DaemonSet %s: %w", name, err)
+			return false, fmt.Errorf("get DaemonSet %s: %w", name, err)
 		}
 		desired := ds.Status.DesiredNumberScheduled
 		if desired == 0 {
@@ -1377,9 +1497,9 @@ func envtestEnsureProviderDaemonSetRolledOut(c client.Client) func(context.Conte
 		updated.Status.NumberReady = desired
 		updated.Status.UpdatedNumberScheduled = desired
 		if err := c.Status().Update(ctx, updated); err != nil {
-			return fmt.Errorf("mark DaemonSet %s rolled out for envtest: %w", name, err)
+			return false, fmt.Errorf("mark DaemonSet %s rolled out for envtest: %w", name, err)
 		}
-		return nil
+		return true, nil
 	}
 }
 

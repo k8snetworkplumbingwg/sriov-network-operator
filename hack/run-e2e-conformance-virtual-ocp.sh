@@ -863,8 +863,6 @@ podman rmi -fi ${SRIOV_NETWORK_CONFIG_DAEMON_IMAGE}
 retry_push "${SRIOV_NETWORK_WEBHOOK_IMAGE}"
 podman rmi -fi ${SRIOV_NETWORK_WEBHOOK_IMAGE}
 
-podman logout $registry
-
 echo "## apply CRDs"
 # Vendored CRDs (DRA DeviceAttributes/SriovResourcePolicy, Multus NAD) live in the
 # Helm chart. The k8s virtual lane installs them via helm; the OCP lane uses
@@ -918,6 +916,8 @@ if [[ -v LOCAL_SRIOV_NETWORK_METRICS_EXPORTER_IMAGE ]]; then
   podman_tag_and_push ${LOCAL_SRIOV_NETWORK_METRICS_EXPORTER_IMAGE} "$registry/$NAMESPACE/sriov-network-metrics-exporter:latest"
   export METRICS_EXPORTER_IMAGE="image-registry.openshift-image-registry.svc:5000/$NAMESPACE/sriov-network-metrics-exporter:latest"
 fi
+
+podman logout "$registry"
 
 echo "## deploying SRIOV Network Operator"
 hack/deploy-setup.sh $NAMESPACE

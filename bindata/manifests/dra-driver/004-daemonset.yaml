@@ -92,10 +92,6 @@ spec:
           value: /var/lib/kubelet/plugins
         - name: V
           value: "5"
-        - name: NRI_PLUGIN_NAME
-          value: "dra-driver-sriov"
-        - name: NRI_PLUGIN_IDX
-          value: "00"
         # gRPC health (HEALTHCHECK_PORT > 0) is disabled: the pod uses hostNetwork, so the
         # listen port is on the node network namespace. A fixed port can collide with other
         # hostNetwork SR-IOV pods or host services on the same node; we do not assign

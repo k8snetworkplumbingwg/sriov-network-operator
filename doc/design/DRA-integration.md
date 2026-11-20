@@ -356,7 +356,7 @@ New behavior (DRA mode, implemented):
 **Notes:**
 - `resourceFilters.drivers` is set for `deviceType: vfio-pci`, but the DRA driver does not filter on driver yet.
 - Per-node `SriovResourcePolicy` CRs require an existing `SriovNetworkNodeState`; there is no `SyncStatus` gate on CR creation.
-- VF ranges in PF selectors (for example, `ens1f0#2-5`) are currently unsupported in DRA mode. The operator resolves alternative PF names and preserves the range suffix, as it does for device-plugin configuration. The current DRA driver matches PF names literally, so a ranged entry matches no VFs. The operator does not translate ranges into VF PCI addresses or watch node-state inventory for range expansion. Use whole PF names in DRA mode, or retain device-plugin mode for VF-range partitioning until native range support is available in the DRA driver.
+- VF ranges in PF selectors (for example, `ens1f0#2-5`) are currently unsupported in DRA mode because the DRA driver matches PF names literally. Admission rejects ranged selectors when DRA is enabled. If a policy bypasses admission, reconciliation rejects it before writing node configuration and policy status reports `Ready=False` with reason `UnsupportedConfiguration`. Whole PF names, including alternative interface names, remain supported. Use device-plugin mode for VF-range partitioning until native range support is available in the DRA driver.
 - Existing namespaced DRA objects are reconciled only when they carry the operator's generated-by label or a controller reference to the current `SriovOperatorConfig`. Name collisions with unmarked user objects return a conflict; label drift on owned objects is repaired.
 
 Example auto-generated `DeviceAttributes` (attribute value is the extended resource name, e.g. `ResourcePrefix/resourceName` or plain `resourceName` if no prefix):
@@ -686,7 +686,7 @@ This basic DeviceClass:
 - When deploying the DRA driver DaemonSet (`sriov-dra-driver`), the operator passes configuration as:
   - Container image reference
   - Command-line arguments to the DRA driver
-  - Environment variables in the DRA driver container spec (including `CONFIGURATION_MODE=MULTUS`, NRI plugin settings)
+  - Environment variables in the DRA driver container spec (including `CONFIGURATION_MODE=MULTUS`; NRI plugin settings are not used)
   - Volume mounts for CDI root and other paths
 - DRA driver node placement uses `ConfigDaemonNodeSelector` only (unlike device plugin, it does not require `sriovnetwork.openshift.io/device-plugin=Enabled` node label)
 
@@ -829,13 +829,15 @@ When Policy Changes:
 - Consistent behavior for both device plugin and DRA modes
 
 **4. Mode Switching and Resource Management**
-- The validation webhook rejects enabling or disabling DRA while any non-default `SriovNetworkNodePolicy` exists in the operator namespace. This includes creating a DRA-enabled operator config, setting the gate to `false`, or removing the gate or the entire `featureGates` map when DRA was enabled. Updates that leave the mode unchanged remain allowed. This restriction does not verify that workloads have stopped or that policy cleanup and node reconfiguration have finished.
+- The validation webhook rejects enabling or disabling DRA while any `SriovNetworkNodePolicy` exists in the operator namespace. This includes creating a DRA-enabled operator config, setting the gate to `false`, or removing the gate or the entire `featureGates` map when DRA was enabled. Updates that leave the mode unchanged remain allowed. This restriction does not verify that workloads have stopped or that policy cleanup and node reconfiguration have finished.
 - *(Not yet implemented)* Switching between device plugin and DRA mode should be blocked if:
   - There are active pods using SR-IOV resources
   - There are existing ResourceClaims (when switching from DRA to device plugin)
 - *(Not yet implemented)* Validation webhook should enforce this
+- The config controller independently checks policies before accepting a mode change and persists the accepted mode in `SriovOperatorConfig.status.resourceProvider` (`{devicePlugin: true, dra: false}` or `{devicePlugin: false, dra: true}`). Both controllers and the config daemon use the accepted mode, so a rejected spec change stays blocked across restarts. On upgrade, the controller identifies the current provider from existing DaemonSets; an ambiguous installation with policies requires removing policies before initialization. Consumers wait for initialization instead of acting on the requested gate.
+- Policies must be created in the operator namespace. Admission rejects creation and updates elsewhere, allows deletion, and controllers list policies only in the operator namespace.
 - When switching to DRA mode:
-  - Operator stops updating `device-plugin-config` ConfigMap and deletes it after the provider-switch checks and device-plugin cleanup succeed
+  - Operator stops updating `device-plugin-config` ConfigMap and retains it for reuse when returning to device-plugin mode
   - Operator starts creating/updating `DeviceAttributes` CRs (per unique `resourceName`) and per-node `SriovResourcePolicy` CRs from policies (for nodes with a `SriovNetworkNodeState`; skips nodes where node state is not yet created)
   - Operator creates per-resourceName DeviceClasses with `extendedResourceName` via `syncExtendedResourceDeviceClasses()`
 - When switching to device plugin mode:
@@ -890,7 +892,7 @@ When Policy Changes:
 - Operator builds against `k8s.io/api` v0.36.x; validate against your cluster version
 - `dra-driver-sriov` container image (operator `go.mod` pins a pseudo-version; Helm default is `:latest` — pin both for production)
 - Container runtime with CDI support (containerd, CRI-O)
-- Container runtime with NRI support
+- NRI is not required in MULTUS mode; Multus handles network configuration
 
 **Required Upstream Changes for Multus Integration:**
 
@@ -908,10 +910,10 @@ When Policy Changes:
 
 1. **No Mixed Mode**: A cluster cannot run both device plugin and DRA driver simultaneously
 2. **Kubernetes Version**: DRA mode requires Kubernetes 1.34 or later (cluster admin prerequisite; not enforced by the operator)
-3. **Runtime Requirements**: DRA driver requires CDI and NRI support in the container runtime
+3. **Runtime Requirements**: DRA driver requires CDI support; NRI is not required in MULTUS mode
 4. **Migration Complexity**: Migrating existing workloads from device plugin to DRA requires pod recreation
 5. **Configuration Mapping**: Not all device plugin configurations map 1:1 to DRA configurations:
-   - `NicSelector.NetFilter` is not mapped to DRA `resourceFilters`. The webhook rejects creating or updating a policy with `netFilter` while DRA is enabled. Enabling DRA requires removing all non-default policies in the operator namespace first, including those using `netFilter`. The controller also skips `netFilter` policies defensively if admission validation is bypassed.
+   - `NicSelector.NetFilter` is not mapped to DRA `resourceFilters`. The webhook rejects creating or updating a policy with `netFilter` while DRA is enabled. Enabling DRA requires removing all policies in the operator namespace first, including those using `netFilter`. If admission validation is bypassed, the controller rejects `netFilter` policies before writing NodeState, and aggregate status reports `UnsupportedConfiguration` for the affected policies.
    - `resourceFilters.drivers` is emitted for `deviceType: vfio-pci`, but `dra-driver-sriov` does not filter on driver yet (TODO in driver)
    - The cluster `default` SriovNetworkNodePolicy is excluded from DRA generation
 
@@ -926,16 +928,14 @@ When Policy Changes:
 **Enabling DRA on Existing Cluster**
 1. Ensure Kubernetes version is 1.34+
 2. Stop affected SR-IOV workloads and prevent their controllers from recreating them during the migration. Wait for the pods to terminate
-3. Save and remove all non-default `SriovNetworkNodePolicy` objects in the operator namespace, and wait for policy cleanup and node reconfiguration to complete
+3. Save and remove all `SriovNetworkNodePolicy` objects in the operator namespace, and wait for policy cleanup and node reconfiguration to complete
 4. Enable the feature gate in `SriovOperatorConfig`:
    ```yaml
    spec:
      featureGates:
        dynamicResourceAllocation: true
    ```
-5. Operator will:
-   - Remove device plugin DaemonSet
-   - Deploy DRA driver DaemonSet
+5. Wait for `status.resourceProvider: {devicePlugin: false, dra: true}`, the DRA driver DaemonSet rollout, and the operator's `Ready` condition for the updated generation. The operator installs DRA before removing the device plugin.
 6. Reapply DRA-compatible policies. The operator auto-generates `SriovResourcePolicy` and `DeviceAttributes` CRs (CRDs are already installed). Wait for node configuration and device advertisement to complete
 7. Recreate workloads using ResourceClaims instead of device plugin resources
 
@@ -949,18 +949,14 @@ When Policy Changes:
 **Disabling DRA on Existing Cluster**
 1. Stop affected SR-IOV workloads using DRA and prevent their controllers from recreating them during the migration. Wait for the pods to terminate
 2. Release the affected SR-IOV ResourceClaims and wait for their cleanup while the DRA driver is still running
-3. Save and remove all non-default `SriovNetworkNodePolicy` objects in the operator namespace. Wait for policy cleanup and node reconfiguration to complete; an empty policy list alone does not prove completion
+3. Save and remove all `SriovNetworkNodePolicy` objects in the operator namespace. Wait for policy cleanup and node reconfiguration to complete; an empty policy list alone does not prove completion
 4. Disable the feature gate in `SriovOperatorConfig` (removing the gate also disables it):
    ```yaml
    spec:
      featureGates:
        dynamicResourceAllocation: false
    ```
-5. Operator will:
-   - Remove DRA driver DaemonSet and related RBAC/ServiceAccount/base DeviceClass
-   - Delete operator-generated `SriovResourcePolicy`, `DeviceAttributes`, and extended-resource `DeviceClass` CRs
-   - Deploy device plugin DaemonSet
-   - Recreate `device-plugin-config`; `SriovResourcePolicy` and `DeviceAttributes` CRDs remain installed
+5. Wait for `status.resourceProvider: {devicePlugin: true, dra: false}`, the device-plugin DaemonSet rollout, and the operator's `Ready` condition for the updated generation. The operator installs the device plugin before removing the DRA driver and its resources. It resumes updating the retained `device-plugin-config`; `SriovResourcePolicy` and `DeviceAttributes` CRDs remain installed.
 6. Reapply device-plugin-compatible policies and wait for node configuration and device advertisement to complete
 7. Recreate workloads using device plugin resource requests
 
@@ -994,7 +990,7 @@ Kubernetes 1.34 introduces an alpha feature called **Extended Resource Allocatio
 
 #### Kubernetes Feature Details
 
-**Feature state (Kubernetes `DRAExtendedResource` gate):** alpha in v1.34–v1.35, beta in v1.36, stable in v1.37 (disabled by default until stable).
+**Feature state (Kubernetes `DRAExtendedResource` feature gate):** disabled by default in v1.34–v1.35 (alpha), enabled by default in v1.36 (beta), and stable in v1.37. See the [Kubernetes feature gate reference](https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/).
 
 **Requirements:** Enable `DRAExtendedResource` on:
 - kube-apiserver
@@ -1054,6 +1050,7 @@ apiVersion: sriovnetwork.openshift.io/v1
 kind: SriovNetworkNodePolicy
 metadata:
   name: policy-intel-nic
+  namespace: sriov-network-operator
 spec:
   resourceName: intel_nic
   nodeSelector:
@@ -1080,6 +1077,7 @@ spec:
   - cel:
       expression: |
         device.driver == "sriovnetwork.k8snetworkplumbingwg.io" &&
+        has(device.attributes["k8s.cni.cncf.io"].resourceName) &&
         device.attributes["k8s.cni.cncf.io"].resourceName == "openshift.io/intel_nic"
 ```
 
@@ -1091,6 +1089,9 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: sriov-pod
+  # NetworkAttachmentDefinition still works the same way
+  annotations:
+    k8s.v1.cni.cncf.io/networks: sriov-network
 spec:
   containers:
   - name: app
@@ -1100,9 +1101,6 @@ spec:
         openshift.io/intel_nic: 2  # Same as device plugin!
       requests:
         openshift.io/intel_nic: 2
-    # NetworkAttachmentDefinition still works the same way
-  annotations:
-    k8s.v1.cni.cncf.io/networks: sriov-network
 ```
 
 #### Implementation Considerations
@@ -1138,6 +1136,7 @@ func buildDeviceClassCEL(resourceName string) string {
     extendedName := buildExtendedResourceName(resourceName) // e.g. openshift.io/intel_nic
     return fmt.Sprintf(
         `device.driver == "sriovnetwork.k8snetworkplumbingwg.io" && ` +
+        `has(device.attributes["k8s.cni.cncf.io"].resourceName) && ` +
         `device.attributes["k8s.cni.cncf.io"].resourceName == "%s"`,
         extendedName,
     )
@@ -1146,7 +1145,7 @@ func buildDeviceClassCEL(resourceName string) string {
 
 **4. Conflict Prevention**
 
-- **Implemented:** The admission webhook rejects `SriovNetworkNodePolicy` objects whose `resourceName` normalizes to the same DeviceClass name as another policy (`resourceNameToDeviceClassName()`), regardless of whether the `dynamicResourceAllocation` feature gate is enabled. The policy controller skips colliding names as a fallback if validation is bypassed (for example when the webhook is disabled).
+- **Implemented:** The admission webhook rejects `SriovNetworkNodePolicy` objects whose `resourceName` normalizes to the same DeviceClass name as another policy (`resourceNameToDeviceClassName()`), regardless of whether the `dynamicResourceAllocation` feature gate is enabled. In DRA mode, the policy controller rejects the entire policy set before changing node state or DRA objects if names collide, a resource name is empty, or device types conflict, including when the webhook is disabled. Admission and reconciliation share this validation.
 - *(Not yet implemented)* Validate during mode transitions that `extendedResourceName` values do not conflict with lingering device plugin state before DRA is fully active
 - *(Not yet implemented)* Add status field to indicate if DeviceClass creation succeeded or failed due to conflicts
 
@@ -1155,7 +1154,7 @@ func buildDeviceClassCEL(resourceName string) string {
 Document the migration path:
 - **Extended resource compatibility**: When cluster `DRAExtendedResource` is enabled, existing pod specs using `resources.limits` may work without changes (same extended resource names as device plugin)
 - **Cluster-wide mode switch**: DRA and device plugin are mutually exclusive at the cluster level; gradual per-node mixed mode is not supported
-- **Rollback safety**: Stop affected workloads, release their SR-IOV ResourceClaims, remove non-default policies, and wait for cleanup and node reconfiguration before disabling DRA. Reapply policies and recreate workloads using device plugin resource requests
+- **Rollback safety**: Stop affected workloads, release their SR-IOV ResourceClaims, remove policies, and wait for cleanup and node reconfiguration before disabling DRA. Reapply policies and recreate workloads using device plugin resource requests
 
 #### Advantages
 

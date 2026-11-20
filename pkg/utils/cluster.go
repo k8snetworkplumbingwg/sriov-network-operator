@@ -34,7 +34,7 @@ func ApplyDesiredLabels(obj metav1.Object, desired map[string]string) bool {
 	}
 	changed := false
 	for k, v := range desired {
-		if labels[k] != v {
+		if current, exists := labels[k]; !exists || current != v {
 			changed = true
 		}
 		labels[k] = v

@@ -59,6 +59,7 @@ import (
 )
 
 var errSystemdModeOnHypershift = errors.New("systemd mode is not supported on hypershift")
+var errProviderRolloutPending = errors.New("waiting for replacement resource provider rollout")
 
 // SriovOperatorConfigReconciler reconciles a SriovOperatorConfig object
 type SriovOperatorConfigReconciler struct {
@@ -74,7 +75,7 @@ type SriovOperatorConfigReconciler struct {
 	applyManifestFn  applyManifestFunc
 	deleteManifestFn applyManifestFunc
 	// ensureProviderRolloutFn overrides provider DaemonSet rollout checks (envtest has no DS controller).
-	ensureProviderRolloutFn func(ctx context.Context, daemonSetName string) error
+	ensureProviderRolloutFn func(ctx context.Context, daemonSetName string) (bool, error)
 }
 
 // renderManifests renders operator manifests using a reconciler-scoped renderer
@@ -107,11 +108,16 @@ func (r *SriovOperatorConfigReconciler) deleteManifest(ctx context.Context, c cl
 	return apply.DeleteObject(ctx, c, obj)
 }
 
-func (r *SriovOperatorConfigReconciler) ensureProviderDaemonSetRolledOut(ctx context.Context, name string) error {
+// providerDaemonSetRolledOut checks that the replacement provider has
+// completed its DaemonSet rollout before the previous provider is removed.
+// Tests can override the check with a reconciler-scoped function.
+// The informer cache may still report the generation from before installation,
+// so callers should pass an uncached reader.
+func (r *SriovOperatorConfigReconciler) providerDaemonSetRolledOut(ctx context.Context, reader client.Reader, name string) (bool, error) {
 	if r.ensureProviderRolloutFn != nil {
 		return r.ensureProviderRolloutFn(ctx, name)
 	}
-	return ensureDaemonSetRolledOut(ctx, r.Client, name)
+	return daemonSetRolledOut(ctx, reader, name)
 }
 
 // getTLSTemplateData retrieves TLS configuration data for manifest rendering.
@@ -206,8 +212,13 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	snolog.SetLogLevel(defaultConfig.Spec.LogLevel)
 
+	providerReady := true
 	defer func() {
-		conditionErr := r.applyReadyCondition(ctx, defaultConfig, err)
+		conditionCause := err
+		if conditionCause == nil && !providerReady {
+			conditionCause = errProviderRolloutPending
+		}
+		conditionErr := r.applyReadyCondition(ctx, defaultConfig, conditionCause)
 		if conditionErr == nil {
 			return
 		}
@@ -226,7 +237,13 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	r.FeatureGate.Init(defaultConfig.Spec.FeatureGates)
+	providerErr := r.acceptResourceProvider(ctx, defaultConfig)
+	if providerErr != nil && !errors.Is(providerErr, errResourceProviderSwitchBlocked) {
+		return reconcile.Result{}, providerErr
+	}
+	if err := defaultConfig.InitFeatureGates(r.FeatureGate); err != nil {
+		return reconcile.Result{}, err
+	}
 	logger.Info("enabled featureGates", "featureGates", r.FeatureGate.String())
 
 	if !defaultConfig.Spec.EnableInjector {
@@ -239,7 +256,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	// Fetch the SriovNetworkNodePolicyList
 	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
-	err = r.List(ctx, policyList, &client.ListOptions{})
+	err = r.List(ctx, policyList, client.InNamespace(vars.Namespace))
 	if err != nil {
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
@@ -260,54 +277,18 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	// Deploy either DRA driver or device plugin based on feature gate.
-	// Sync the replacement provider before cleaning up the old one so a failed
-	// switch does not leave the cluster without either provider. Wait for
-	// rollout only while the previous (stale) provider DaemonSet is still
-	// present; keep sync and cleanup unconditional so residual RBAC and
-	// related objects are still removed when the stale DaemonSet is already gone.
-	if r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
-		logger.Info("DRA feature gate enabled, deploying DRA driver instead of device plugin")
-		if err = syncDRADriverObjs(ctx, r.Client, r.Scheme, defaultConfig, r.renderManifests, r.applyManifest); err != nil {
-			return reconcile.Result{}, fmt.Errorf("sync DRA driver objects: %w", err)
-		}
-		staleDevicePlugin, err := daemonSetExists(ctx, r.Client, devicePluginDaemonSetName)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("check device plugin DaemonSet: %w", err)
-		}
-		if staleDevicePlugin {
-			if err = r.ensureProviderDaemonSetRolledOut(ctx, consts.DRADriverDaemonSetName); err != nil {
-				return reconcile.Result{}, fmt.Errorf("wait for DRA driver rollout: %w", err)
-			}
-		}
-		if err = cleanupDevicePluginObjs(ctx, r.Client, defaultConfig, r.FeatureGate, r.renderManifests); err != nil {
-			logger.Error(err, "Failed to cleanup device plugin objects")
-			return reconcile.Result{}, fmt.Errorf("cleanup device plugin objects: %w", err)
-		}
-		// This ConfigMap is generated by the node-policy controller, so it is not
-		// in the plugin manifests. Retain it until the provider switch succeeds.
-		if err = deleteIgnoringNotFound(ctx, r.Client, &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Namespace: vars.Namespace, Name: consts.ConfigMapName},
-		}); err != nil {
-			return reconcile.Result{}, fmt.Errorf("cleanup device plugin ConfigMap: %w", err)
-		}
-	} else {
-		if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
-			return reconcile.Result{}, fmt.Errorf("sync device plugin objects: %w", err)
-		}
-		staleDRADriver, err := daemonSetExists(ctx, r.Client, consts.DRADriverDaemonSetName)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("check DRA driver DaemonSet: %w", err)
-		}
-		if staleDRADriver {
-			if err = r.ensureProviderDaemonSetRolledOut(ctx, devicePluginDaemonSetName); err != nil {
-				return reconcile.Result{}, fmt.Errorf("wait for device plugin rollout: %w", err)
-			}
-		}
-		if err = cleanupDRADriverObjs(ctx, r.Client, defaultConfig, r.renderManifests); err != nil {
-			logger.Error(err, "Failed to cleanup DRA driver objects")
-			return reconcile.Result{}, fmt.Errorf("cleanup DRA driver objects: %w", err)
-		}
+	// Apply independent settings using the accepted provider before reporting a
+	// blocked switch. Do not install the requested provider until it is accepted.
+	if providerErr != nil {
+		return reconcile.Result{}, providerErr
+	}
+
+	providerReady, err = r.syncResourceProvider(ctx, defaultConfig)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if !providerReady {
+		return reconcile.Result{RequeueAfter: consts.DrainControllerRequeueTime}, nil
 	}
 
 	if err = r.syncMetricsExporter(ctx, defaultConfig); err != nil {
@@ -341,7 +322,11 @@ func (r *SriovOperatorConfigReconciler) applyReadyCondition(ctx context.Context,
 	if reconcileErr != nil {
 		conditionStatus = metav1.ConditionFalse
 		message = reconcileErr.Error()
-		if errors.Is(reconcileErr, errSystemdModeOnHypershift) {
+		if errors.Is(reconcileErr, errResourceProviderSwitchBlocked) {
+			reason = "ResourceProviderSwitchBlocked"
+		} else if errors.Is(reconcileErr, errProviderRolloutPending) {
+			reason = "ResourceProviderRolloutPending"
+		} else if errors.Is(reconcileErr, errSystemdModeOnHypershift) {
 			reason = sriovnetworkv1.ReasonUnsupportedConfiguration
 		} else {
 			reason = sriovnetworkv1.ReasonOperatorConfigSyncFailed
@@ -373,7 +358,13 @@ func (r *SriovOperatorConfigReconciler) SetupWithManager(mgr ctrl.Manager) error
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovOperatorConfig{}, ctrl_builder.WithPredicates(defaultConfigPredicate())).
 		Owns(&appsv1.DaemonSet{}).
-		Owns(&corev1.ConfigMap{})
+		Owns(&corev1.ConfigMap{}).
+		Watches(&sriovnetworkv1.SriovNetworkNodePolicy{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+			if obj.GetNamespace() != vars.Namespace {
+				return nil
+			}
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: vars.Namespace, Name: consts.DefaultConfigName}}}
+		}))
 
 	// Watch for APIServer changes on OpenShift to react to TLS profile changes.
 	// Only add the watch if the APIServer CRD is available in the cluster.

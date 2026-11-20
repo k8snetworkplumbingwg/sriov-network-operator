@@ -3,22 +3,32 @@ package v1_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/assert"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
 var update = flag.Bool("updategolden", false, "update .golden files")
@@ -1864,3 +1874,180 @@ func TestPoolHasHostConfigurations(t *testing.T) {
 		})
 	}
 }
+
+var _ = Describe("SriovOperatorConfig.EffectiveFeatureGates", func() {
+	DescribeTable("uses the accepted provider and returns an independent feature-gate map", func(provider v1.ResourceProvider) {
+		config := &v1.SriovOperatorConfig{
+			Spec: v1.SriovOperatorConfigSpec{FeatureGates: map[string]bool{
+				consts.DynamicResourceAllocationFeatureGate: provider != v1.DRAResourceProvider(),
+				consts.ParallelNicConfigFeatureGate:         true,
+			}},
+			Status: v1.SriovOperatorConfigStatus{ResourceProvider: provider},
+		}
+		original := config.DeepCopy()
+
+		gates, err := config.EffectiveFeatureGates()
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gates).To(Equal(map[string]bool{
+			consts.DynamicResourceAllocationFeatureGate: provider == v1.DRAResourceProvider(),
+			consts.ParallelNicConfigFeatureGate:         true,
+		}))
+		Expect(config).To(Equal(original))
+		gates[consts.ParallelNicConfigFeatureGate] = false
+		Expect(config).To(Equal(original), "mutating the returned map must not change the requested configuration")
+	},
+		Entry("device plugin", v1.DevicePluginResourceProvider()),
+		Entry("DRA", v1.DRAResourceProvider()),
+	)
+
+	DescribeTable("handles an unset feature-gate map", func(provider v1.ResourceProvider) {
+		config := &v1.SriovOperatorConfig{Status: v1.SriovOperatorConfigStatus{ResourceProvider: provider}}
+
+		gates, err := config.EffectiveFeatureGates()
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gates).To(Equal(map[string]bool{
+			consts.DynamicResourceAllocationFeatureGate: provider == v1.DRAResourceProvider(),
+		}))
+		Expect(config.Spec.FeatureGates).To(BeNil())
+	},
+		Entry("device plugin", v1.DevicePluginResourceProvider()),
+		Entry("DRA", v1.DRAResourceProvider()),
+	)
+
+	DescribeTable("rejects an uninitialized or unsupported provider", func(provider v1.ResourceProvider, message string) {
+		config := &v1.SriovOperatorConfig{Status: v1.SriovOperatorConfigStatus{ResourceProvider: provider}}
+
+		gates, err := config.EffectiveFeatureGates()
+
+		Expect(err).To(MatchError(message))
+		Expect(gates).To(BeNil())
+	},
+		Entry("uninitialized", v1.ResourceProvider{}, "resource provider has not been initialized by the operator"),
+		Entry("both providers", v1.ResourceProvider{DevicePlugin: true, DRA: true}, "simultaneous device-plugin and DRA providers are not supported"),
+	)
+})
+
+var _ = Describe("GetOperatorConfig", func() {
+	var scheme *runtime.Scheme
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		Expect(v1.AddToScheme(scheme)).To(Succeed())
+		savedNamespace := vars.Namespace
+		DeferCleanup(func() { vars.Namespace = savedNamespace })
+		vars.Namespace = "test-operator"
+	})
+
+	It("returns the default config in the operator namespace with found true", func() {
+		config := &v1.SriovOperatorConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: vars.Namespace},
+			Spec:       v1.SriovOperatorConfigSpec{LogLevel: 2},
+		}
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config).Build()
+		actual, found, err := v1.GetOperatorConfig(context.Background(), cl)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(actual).NotTo(BeNil())
+		Expect(client.ObjectKeyFromObject(actual)).To(Equal(client.ObjectKeyFromObject(config)))
+		Expect(actual.Spec).To(Equal(config.Spec))
+	})
+
+	It("reports absence without returning a config or an error", func() {
+		otherConfig := &v1.SriovOperatorConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: "other-operator"},
+		}
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(otherConfig).Build()
+		config, found, err := v1.GetOperatorConfig(context.Background(), cl)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeFalse())
+		Expect(config).To(BeNil())
+	})
+
+	DescribeTable("distinguishes missing objects from read failures", func(readErr error, wantError bool) {
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return readErr
+			},
+		}).Build()
+		config, found, err := v1.GetOperatorConfig(context.Background(), cl)
+		Expect(config).To(BeNil())
+		Expect(found).To(BeFalse())
+		if wantError {
+			Expect(err).To(MatchError(readErr))
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+		}
+	},
+		Entry("wrapped NotFound", fmt.Errorf("read failed: %w", apierrors.NewNotFound(v1.Resource("sriovoperatorconfigs"), consts.DefaultConfigName)), false),
+		Entry("API unavailable", apierrors.NewServiceUnavailable("API unavailable"), true),
+		Entry("access forbidden", apierrors.NewForbidden(v1.Resource("sriovoperatorconfigs"), consts.DefaultConfigName, fmt.Errorf("access denied")), true),
+		Entry("request canceled", context.Canceled, true),
+		Entry("request timed out", context.DeadlineExceeded, true),
+	)
+
+	DescribeTable("honors the parent context", func(expired bool) {
+		ctx, cancel := context.WithCancel(context.Background())
+		if expired {
+			cancel()
+			ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		}
+		defer cancel()
+		kClient := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(requestCtx context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+				cancel()
+				return requestCtx.Err()
+			},
+		}).Build()
+		_, _, err := v1.GetOperatorConfig(ctx, kClient)
+		if expired {
+			Expect(err).To(MatchError(context.DeadlineExceeded))
+		} else {
+			Expect(err).To(MatchError(context.Canceled))
+		}
+	},
+		Entry("cancellation during the request", false),
+		Entry("an earlier deadline", true),
+	)
+})
+
+var _ = Describe("SriovOperatorConfig.InitFeatureGates", func() {
+	DescribeTable("updates the existing instance using the accepted provider and feature defaults", func(provider v1.ResourceProvider) {
+		config := &v1.SriovOperatorConfig{
+			Spec: v1.SriovOperatorConfigSpec{FeatureGates: map[string]bool{
+				consts.DynamicResourceAllocationFeatureGate: provider != v1.DRAResourceProvider(),
+				consts.ParallelNicConfigFeatureGate:         true,
+			}},
+			Status: v1.SriovOperatorConfigStatus{ResourceProvider: provider},
+		}
+		original := config.DeepCopy()
+		gates := featuregate.New()
+		gates.Init(map[string]bool{consts.MetricsExporterFeatureGate: true})
+
+		Expect(config.InitFeatureGates(gates)).To(Succeed())
+
+		Expect(gates.IsEnabled(consts.DynamicResourceAllocationFeatureGate)).To(Equal(provider == v1.DRAResourceProvider()))
+		Expect(gates.IsEnabled(consts.ParallelNicConfigFeatureGate)).To(BeTrue())
+		Expect(gates.IsEnabled(consts.BlockDevicePluginUntilConfiguredFeatureGate)).To(BeTrue())
+		Expect(gates.IsEnabled(consts.MetricsExporterFeatureGate)).To(BeFalse(), "removed overrides must reset to their defaults")
+		Expect(config).To(Equal(original))
+	},
+		Entry("device plugin", v1.DevicePluginResourceProvider()),
+		Entry("DRA", v1.DRAResourceProvider()),
+	)
+
+	DescribeTable("leaves active gates unchanged when provider validation fails", func(provider v1.ResourceProvider, message string) {
+		config := &v1.SriovOperatorConfig{Status: v1.SriovOperatorConfigStatus{ResourceProvider: provider}}
+		gates := featuregate.New()
+		gates.Init(map[string]bool{consts.DynamicResourceAllocationFeatureGate: true})
+
+		Expect(config.InitFeatureGates(gates)).To(MatchError(message))
+
+		Expect(gates.IsEnabled(consts.DynamicResourceAllocationFeatureGate)).To(BeTrue())
+		Expect(gates.IsEnabled(consts.BlockDevicePluginUntilConfiguredFeatureGate)).To(BeTrue())
+	},
+		Entry("uninitialized", v1.ResourceProvider{}, "resource provider has not been initialized by the operator"),
+		Entry("both providers", v1.ResourceProvider{DevicePlugin: true, DRA: true}, "simultaneous device-plugin and DRA providers are not supported"),
+	)
+})

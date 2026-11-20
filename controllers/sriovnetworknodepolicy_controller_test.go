@@ -23,12 +23,44 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
+
+func TestPolicyReconcileProviderStatusErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider sriovnetworkv1.ResourceProvider
+		wantErr  string
+	}{
+		{name: "uninitialized"},
+		{name: "invalid", provider: sriovnetworkv1.ResourceProvider{DevicePlugin: true, DRA: true}, wantErr: "invalid accepted resource provider: simultaneous device-plugin and DRA providers are not supported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			scheme := runtime.NewScheme()
+			g.Expect(sriovnetworkv1.AddToScheme(scheme)).To(Succeed())
+			config := &sriovnetworkv1.SriovOperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: vars.Namespace},
+				Status:     sriovnetworkv1.SriovOperatorConfigStatus{ResourceProvider: tc.provider},
+			}
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(config).WithObjects(config).Build()
+			r := &SriovNetworkNodePolicyReconciler{Client: cl}
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodePolicySyncEventName}})
+			if tc.wantErr != "" {
+				g.Expect(err).To(MatchError(tc.wantErr))
+				g.Expect(result.RequeueAfter).To(BeZero())
+			} else {
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(result.RequeueAfter).To(Equal(consts.DrainControllerRequeueTime))
+			}
+		})
+	}
+}
 
 func mustMarshallSelector(t *testing.T, input *dptypes.NetDeviceSelectors) *json.RawMessage {
 	out, err := json.Marshal(input)
@@ -254,6 +286,8 @@ var _ = Describe("SriovnetworkNodePolicy controller", Ordered, func() {
 		By("Create SriovOperatorConfig controller k8s objs")
 		config := makeDefaultSriovOpConfig()
 		Expect(k8sClient.Create(context.Background(), config)).Should(Succeed())
+		config.Status.ResourceProvider = sriovnetworkv1.DevicePluginResourceProvider()
+		Expect(k8sClient.Status().Update(context.Background(), config)).Should(Succeed())
 		DeferCleanup(func() {
 			err := k8sClient.Delete(context.Background(), config)
 			Expect(err).ToNot(HaveOccurred())
@@ -410,8 +444,8 @@ var _ = Describe("SriovnetworkNodePolicy controller", Ordered, func() {
 
 			Eventually(func(g Gomega) {
 				err := k8sClient.Get(context.Background(), k8sclient.ObjectKey{Name: node.Name, Namespace: testNamespace}, nodeState)
-				Expect(err).To(HaveOccurred())
-				Expect(errors.IsNotFound(err)).To(BeTrue())
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(errors.IsNotFound(err)).To(BeTrue())
 			}, time.Minute, time.Second).Should(Succeed())
 		})
 

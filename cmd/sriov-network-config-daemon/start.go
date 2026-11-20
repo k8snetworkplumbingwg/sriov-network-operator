@@ -21,13 +21,13 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	ocpconfigapi "github.com/openshift/api/config/v1"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -172,19 +172,12 @@ func useKubeletKubeConfig() {
 	}
 }
 
-func getOperatorConfig(kClient runtimeclient.Client) (*sriovnetworkv1.SriovOperatorConfig, error) {
-	defaultConfig := &sriovnetworkv1.SriovOperatorConfig{}
-	err := kClient.Get(context.Background(), types.NamespacedName{Namespace: vars.Namespace, Name: consts.DefaultConfigName}, defaultConfig)
-	if err != nil {
-		return nil, err
-	}
-	return defaultConfig, nil
-}
-
 func initFeatureGates(defaultConfig *sriovnetworkv1.SriovOperatorConfig) (featuregate.FeatureGate, error) {
 	fnLogger := log.Log.WithName("initFeatureGates")
 	featureGates := featuregate.New()
-	featureGates.Init(defaultConfig.Spec.FeatureGates)
+	if err := defaultConfig.InitFeatureGates(featureGates); err != nil {
+		return nil, err
+	}
 	fnLogger.Info("Enabled featureGates", "featureGates", featureGates.String())
 	vars.FeatureGate = featureGates
 	return featureGates, nil
@@ -199,7 +192,7 @@ func initLogLevel(defaultConfig *sriovnetworkv1.SriovOperatorConfig) error {
 
 func runStartCmd(cmd *cobra.Command, args []string) error {
 	setupLog := log.Log.WithName("sriov-network-config-daemon")
-	stopSignalCh := ctrl.SetupSignalHandler()
+	ctx := ctrl.SetupSignalHandler()
 
 	// Load global variables
 	err := configGlobalVariables()
@@ -268,10 +261,15 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	operatorConfig, err := getOperatorConfig(kClient)
+	configCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	operatorConfig, found, err := sriovnetworkv1.GetOperatorConfig(configCtx, kClient)
+	cancel()
 	if err != nil {
 		setupLog.Error(err, "Failed to get operator config object")
 		return err
+	}
+	if !found {
+		return fmt.Errorf("SriovOperatorConfig %s/%s not found", vars.Namespace, consts.DefaultConfigName)
 	}
 
 	// init feature gates
@@ -354,5 +352,5 @@ func runStartCmd(cmd *cobra.Command, args []string) error {
 	}
 
 	setupLog.Info("Starting Manager")
-	return mgr.Start(stopSignalCh)
+	return mgr.Start(ctx)
 }

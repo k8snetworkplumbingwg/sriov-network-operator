@@ -21,8 +21,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	dracel "k8s.io/dynamic-resource-allocation/cel"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -62,9 +64,7 @@ func TestNodeHostname(t *testing.T) {
 func TestCollectDRAPolicyResources(t *testing.T) {
 	pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 		Items: []sriovnetworkv1.SriovNetworkNodePolicy{
-			{ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultPolicyName}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "default"}},
 			{ObjectMeta: metav1.ObjectMeta{Name: "p1"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "p2"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: ""}},
 			{ObjectMeta: metav1.ObjectMeta{Name: "p3"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "mlx5"}},
 		},
 	}
@@ -83,25 +83,15 @@ func TestCollectDRAPolicyResources(t *testing.T) {
 	}
 }
 
-func TestFilterDRAResourcesByDeviceClass(t *testing.T) {
-	resourceDrivers := map[string]string{
-		"intel_nic": "",
-		"INTEL_NIC": consts.DeviceTypeVfioPci,
-		"mlx5":      "",
-	}
-	got := filterDRAResourcesByDeviceClass(context.Background(), resourceDrivers)
-	if len(got) != 2 {
-		t.Fatalf("filterDRAResourcesByDeviceClass() returned %d names, want 2", len(got))
-	}
-	if got[0].resourceName != "INTEL_NIC" || got[0].deviceClassName != "intel-nic" {
-		t.Fatalf("filterDRAResourcesByDeviceClass()[0] = %+v, want INTEL_NIC/intel-nic (sorted, first collision wins)", got[0])
-	}
-	if got[0].driver != consts.DeviceTypeVfioPci {
-		t.Fatalf("retained resource lost its VFIO driver: %+v", got[0])
-	}
-	if got[1].resourceName != "mlx5" || got[1].deviceClassName != "mlx5" {
-		t.Fatalf("filterDRAResourcesByDeviceClass()[1] = %+v, want mlx5/mlx5", got[1])
-	}
+func TestValidatedDRAPolicyResources(t *testing.T) {
+	pl := &sriovnetworkv1.SriovNetworkNodePolicyList{Items: []sriovnetworkv1.SriovNetworkNodePolicy{
+		{ObjectMeta: metav1.ObjectMeta{Name: "a"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "b"}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "INTEL_NIC"}},
+	}}
+	resources, err := validatedDRAPolicyResources(pl)
+	g := NewWithT(t)
+	g.Expect(err).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
+	g.Expect(resources).To(BeNil())
 }
 
 func TestBuildExtendedResourceName(t *testing.T) {
@@ -155,6 +145,41 @@ func TestBuildDeviceClassCEL(t *testing.T) {
 	}
 }
 
+func TestDeviceClassCELMatchesDevices(t *testing.T) {
+	defer func(prev string) { vars.ResourcePrefix = prev }(vars.ResourcePrefix)
+	vars.ResourcePrefix = "openshift.io"
+	compiled := dracel.GetCompiler(dracel.Features{}).CompileCELExpression(buildDeviceClassCEL("intel_nic"), dracel.Options{})
+	if compiled.Error != nil {
+		t.Fatal(compiled.Error)
+	}
+	for _, tc := range []struct {
+		name, driver, attribute, value string
+		want                           bool
+	}{
+		{"matching resource", consts.DRADriverBaseDeviceClassName, drapkg.ResourceNameAttributeKey, "openshift.io/intel_nic", true},
+		{"different resource", consts.DRADriverBaseDeviceClassName, drapkg.ResourceNameAttributeKey, "openshift.io/other", false},
+		{"different driver", "other.example.com", drapkg.ResourceNameAttributeKey, "openshift.io/intel_nic", false},
+		{"missing attribute namespace", consts.DRADriverBaseDeviceClassName, "", "", false},
+		{"missing resourceName", consts.DRADriverBaseDeviceClassName, "k8s.cni.cncf.io/other", "value", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			device := dracel.Device{Driver: tc.driver}
+			if tc.attribute != "" {
+				device.Attributes = map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					resourceapi.QualifiedName(tc.attribute): {StringValue: &tc.value},
+				}
+			}
+			got, _, err := compiled.DeviceMatches(context.Background(), device)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("device matches = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildDeviceAttributesCR(t *testing.T) {
 	defer func(prev string) { vars.Namespace = prev }(vars.Namespace)
 	defer func(prev string) { vars.ResourcePrefix = prev }(vars.ResourcePrefix)
@@ -178,9 +203,12 @@ func TestBuildDeviceAttributesCR(t *testing.T) {
 }
 
 func TestBuildPolicyConfig(t *testing.T) {
+	oldNicIDMap := sriovnetworkv1.NicIDMap
+	sriovnetworkv1.NicIDMap = []string{"8086 1572 154c"}
+	t.Cleanup(func() { sriovnetworkv1.NicIDMap = oldNicIDMap })
 	poolLabel := "intel-nic"
 	deviceIDPassthrough := "154c"
-	deviceIDVf := "10de"
+	pfDeviceID := "1572"
 	pfNames := []string{"ens1f0"}
 	rootDevices := []string{"0000:08:00.0"}
 
@@ -289,22 +317,18 @@ func TestBuildPolicyConfig(t *testing.T) {
 			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
 				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
 					ResourceName: "nic",
-					NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{DeviceID: deviceIDVf},
+					NicSelector:  sriovnetworkv1.SriovNetworkNicSelector{DeviceID: pfDeviceID},
 					NumVfs:       4,
 				},
 			},
 			nodeState: nil,
 			check: func(t *testing.T, c *sriovdrav1alpha1.Config) {
-				// GetVfDeviceID returns "" for unknown deviceID; skip the empty filter.
-				if len(c.ResourceFilters) == 0 {
-					return
-				}
 				if len(c.ResourceFilters) != 1 {
-					t.Fatalf("expected one ResourceFilter or none, got %d", len(c.ResourceFilters))
+					t.Fatalf("expected one ResourceFilter, got %d", len(c.ResourceFilters))
 				}
 				f := c.ResourceFilters[0]
-				if len(f.Devices) > 0 && f.Devices[0] == deviceIDVf {
-					t.Errorf("with NumVfs>0 expect VF device ID or empty, got %v", f.Devices)
+				if !cmp.Equal(f.Devices, []string{"154c"}) {
+					t.Errorf("Devices want [154c], got %v", f.Devices)
 				}
 			},
 		},
@@ -336,37 +360,6 @@ func TestBuildPolicyConfig(t *testing.T) {
 				f := c.ResourceFilters[0]
 				if len(f.PfNames) != 1 || f.PfNames[0] != "ens1f0" {
 					t.Errorf("PfNames want [ens1f0], got %v", f.PfNames)
-				}
-			},
-		},
-		{
-			name: "alternative PF name resolved with unsupported VF range preserved",
-			policy: &sriovnetworkv1.SriovNetworkNodePolicy{
-				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
-					ResourceName: "nic",
-					NicSelector: sriovnetworkv1.SriovNetworkNicSelector{
-						PfNames: []string{"enp3s0np0#2-5"},
-					},
-					NumVfs: 8,
-				},
-			},
-			nodeState: &sriovnetworkv1.SriovNetworkNodeState{
-				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
-					Interfaces: []sriovnetworkv1.InterfaceExt{
-						{
-							Name:     "ens1f0",
-							AltNames: []string{"enp3s0np0"},
-						},
-					},
-				},
-			},
-			check: func(t *testing.T, c *sriovdrav1alpha1.Config) {
-				if len(c.ResourceFilters) != 1 {
-					t.Fatalf("expected one ResourceFilter, got %d", len(c.ResourceFilters))
-				}
-				f := c.ResourceFilters[0]
-				if len(f.PfNames) != 1 || f.PfNames[0] != "ens1f0#2-5" {
-					t.Errorf("PfNames want [ens1f0#2-5], got %v", f.PfNames)
 				}
 			},
 		},
@@ -445,7 +438,7 @@ func TestBuildPolicyConfig(t *testing.T) {
 				return
 			}
 			if tc.wantErr {
-				if err == nil || skip {
+				if err == nil || skip || cfg != nil {
 					t.Fatalf("buildPolicyConfig: expected error, got skip=%v err=%v", skip, err)
 				}
 				return
@@ -454,6 +447,30 @@ func TestBuildPolicyConfig(t *testing.T) {
 				t.Fatalf("buildPolicyConfig: skip=%v err=%v", skip, err)
 			}
 			tc.check(t, cfg)
+		})
+	}
+}
+
+func TestBuildPolicyConfigRejectsUnmappedDeviceID(t *testing.T) {
+	oldNicIDMap := sriovnetworkv1.NicIDMap
+	sriovnetworkv1.NicIDMap = []string{"8086 1572 154c"}
+	t.Cleanup(func() { sriovnetworkv1.NicIDMap = oldNicIDMap })
+	for _, vendor := range []string{"", "8086"} {
+		t.Run("vendor="+vendor, func(t *testing.T) {
+			policy := &sriovnetworkv1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "unknown-model"},
+				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+					ResourceName: "nic", NumVfs: 4,
+					NicSelector: sriovnetworkv1.SriovNetworkNicSelector{Vendor: vendor, DeviceID: "ffff"},
+				},
+			}
+			cfg, skip, err := buildPolicyConfig(policy, nil)
+			if err == nil || skip || cfg != nil {
+				t.Fatalf("expected configuration error without a broadened filter, got config=%+v skip=%t err=%v", cfg, skip, err)
+			}
+			if !strings.Contains(err.Error(), policy.Name) || !strings.Contains(err.Error(), "ffff") {
+				t.Errorf("error should identify the policy and unmapped device ID: %v", err)
+			}
 		})
 	}
 }
@@ -848,31 +865,52 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			}
 			nl := &corev1.NodeList{Items: []corev1.Node{*node}}
 
-			for range 3 {
-				Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
-			}
 			attrList := &sriovdrav1alpha1.DeviceAttributesList{}
-			Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
-				k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
-			Expect(attrList.Items).To(HaveLen(1))
-
-			for range 3 {
-				Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+			var attrVersion string
+			for i := range 3 {
+				Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
+				Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
+					k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
+				Expect(attrList.Items).To(HaveLen(1))
+				if i == 0 {
+					attrVersion = attrList.Items[0].ResourceVersion
+					Expect(attrVersion).NotTo(BeEmpty())
+				} else {
+					Expect(attrList.Items[0].ResourceVersion).To(Equal(attrVersion), "repeated sync must not update DeviceAttributes")
+				}
 			}
+
 			policyList := &sriovdrav1alpha1.SriovResourcePolicyList{}
-			Expect(r.List(ctx, policyList, k8sclient.InNamespace(testNamespace),
-				k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
-			Expect(policyList.Items).To(HaveLen(1))
-
-			for range 3 {
-				Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+			var policyVersion string
+			for i := range 3 {
+				Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+				Expect(r.List(ctx, policyList, k8sclient.InNamespace(testNamespace),
+					k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
+				Expect(policyList.Items).To(HaveLen(1))
+				if i == 0 {
+					policyVersion = policyList.Items[0].ResourceVersion
+					Expect(policyVersion).NotTo(BeEmpty())
+				} else {
+					Expect(policyList.Items[0].ResourceVersion).To(Equal(policyVersion), "repeated sync must not update SriovResourcePolicy")
+				}
 			}
+
 			dcList := &resourceapi.DeviceClassList{}
-			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
-			Expect(dcList.Items).To(HaveLen(1))
+			var classVersion string
+			for i := range 3 {
+				Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+				Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
+				Expect(dcList.Items).To(HaveLen(1))
+				if i == 0 {
+					classVersion = dcList.Items[0].ResourceVersion
+					Expect(classVersion).NotTo(BeEmpty())
+				} else {
+					Expect(dcList.Items[0].ResourceVersion).To(Equal(classVersion), "repeated sync must not update DeviceClass")
+				}
+			}
 
 			for range 3 {
-				Expect(r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx)).To(Succeed())
+				Expect(r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx, dc)).To(Succeed())
 				Expect(cleanupExtendedResourceDeviceClasses(ctx, r.Client)).To(Succeed())
 			}
 			Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
@@ -909,9 +947,17 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 		})
 
 		It("syncDeviceAttributes restores controller owner reference when labels and spec already match", func() {
+			beforeEachDRA()
 			attr := buildDeviceAttributesCR("intel-nic-attrs", "intel_nic")
 			attr.OwnerReferences = nil
-			beforeEachDRA(attr)
+			Expect(r.Create(ctx, attr)).To(Succeed())
+			desired := buildDeviceAttributesCR("intel-nic-attrs", "intel_nic")
+			Expect(controllerutil.SetControllerReference(dc, desired, scheme)).To(Succeed())
+			Expect(attr.Namespace).To(Equal(desired.Namespace))
+			Expect(attr.Spec).To(Equal(desired.Spec))
+			Expect(attr.Labels).To(Equal(desired.Labels))
+			Expect(attr.OwnerReferences).To(BeEmpty())
+			Expect(desired.OwnerReferences).NotTo(BeEmpty())
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
 					{
@@ -924,6 +970,8 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			got := &sriovdrav1alpha1.DeviceAttributes{}
 			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "intel-nic-attrs"}, got)).To(Succeed())
 			Expect(metav1.IsControlledBy(got, dc)).To(BeTrue())
+			Expect(got.Spec).To(Equal(attr.Spec))
+			Expect(got.Labels).To(Equal(attr.Labels))
 		})
 
 		It("syncSriovResourcePolicies adopts CR when operator managed label was removed", func() {
@@ -1043,7 +1091,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			Expect(*attr.Spec.Attributes[key].StringValue).To(Equal("openshift.io/intel_nic"))
 		})
 
-		It("syncDeviceAttributes skips colliding normalized names in the same pass", func() {
+		It("syncDeviceAttributes rejects colliding normalized names before writing", func() {
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
 					{
@@ -1057,15 +1105,14 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				},
 			}
 			beforeEachDRA()
-			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
+			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
 			attrList := &sriovdrav1alpha1.DeviceAttributesList{}
 			Expect(r.List(ctx, attrList, k8sclient.InNamespace(testNamespace),
 				k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
-			Expect(attrList.Items).To(HaveLen(1))
-			Expect(attrList.Items[0].Name).To(Equal("intel-nic-attrs"))
+			Expect(attrList.Items).To(BeEmpty())
 		})
 
-		It("syncSriovResourcePolicies skips colliding normalized names in the same pass", func() {
+		It("syncSriovResourcePolicies rejects colliding normalized names before writing", func() {
 			nodeName := "worker-0"
 			node := &corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1106,11 +1153,9 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				},
 			}
 			nl := &corev1.NodeList{Items: []corev1.Node{*node}}
-			Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(Succeed())
+			Expect(r.syncSriovResourcePolicies(ctx, dc, pl, nl)).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
 			policy := &sriovdrav1alpha1.SriovResourcePolicy{}
-			Expect(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: nodeName}, policy)).To(Succeed())
-			Expect(policy.Spec.Configs).To(HaveLen(1))
-			Expect(policy.Spec.Configs[0].DeviceAttributesSelector.MatchLabels[drapkg.ResourcePoolLabel]).To(Equal("intel-nic"))
+			Expect(errors.IsNotFound(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: nodeName}, policy))).To(BeTrue())
 		})
 
 		It("syncDeviceAttributes removes DeviceAttributes when resource name no longer in policies", func() {
@@ -1129,6 +1174,37 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			Expect(r.syncDeviceAttributes(ctx, dc, pl)).To(Succeed())
 			err := r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "old-attrs"}, attr)
 			Expect(errors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("syncDeviceAttributes prunes obsolete names despite pool label drift", func() {
+			beforeEachDRA()
+			retained := buildDeviceAttributesCR("intel-nic-attrs", "intel_nic")
+			retained.UID = "retained-attributes"
+			retained.Labels[drapkg.ResourcePoolLabel] = "wrong-pool"
+			obsolete := buildDeviceAttributesCR("zzz-attrs", "zzz")
+			obsolete.Labels[drapkg.ResourcePoolLabel] = "intel-nic"
+			foreign := buildDeviceAttributesCR("user-attrs", "user")
+			foreign.Labels = map[string]string{drapkg.ResourcePoolLabel: "intel-nic"}
+			for _, attr := range []*sriovdrav1alpha1.DeviceAttributes{retained, obsolete, foreign} {
+				Expect(r.Create(ctx, attr)).To(Succeed())
+			}
+			Expect(r.Get(ctx, k8sclient.ObjectKeyFromObject(foreign), foreign)).To(Succeed())
+			policies := &sriovnetworkv1.SriovNetworkNodePolicyList{Items: []sriovnetworkv1.SriovNetworkNodePolicy{{
+				ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: testNamespace},
+				Spec:       sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic"},
+			}}}
+			for range 2 {
+				Expect(r.syncDeviceAttributes(ctx, dc, policies)).To(Succeed())
+				got := &sriovdrav1alpha1.DeviceAttributes{}
+				Expect(errors.IsNotFound(r.Get(ctx, k8sclient.ObjectKeyFromObject(obsolete), got))).To(BeTrue())
+				Expect(r.Get(ctx, k8sclient.ObjectKeyFromObject(retained), got)).To(Succeed())
+				Expect(got.UID).To(Equal(retained.UID), "the desired object must be repaired in place")
+				Expect(got.Labels[drapkg.ResourcePoolLabel]).To(Equal("intel-nic"))
+				Expect(got.Spec).To(Equal(retained.Spec))
+				gotForeign := &sriovdrav1alpha1.DeviceAttributes{}
+				Expect(r.Get(ctx, k8sclient.ObjectKeyFromObject(foreign), gotForeign)).To(Succeed())
+				Expect(gotForeign).To(Equal(foreign))
+			}
 		})
 
 		It("syncSriovResourcePolicies skips nodes missing kubernetes.io/hostname", func() {
@@ -1220,7 +1296,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 			Expect(policy.Spec.Configs[0].ResourceFilters[0].Vendors).To(Equal([]string{"8086"}))
 		})
 
-		It("syncExtendedResourceDeviceClasses skips colliding normalized names in the same pass", func() {
+		It("syncExtendedResourceDeviceClasses rejects colliding normalized names before writing", func() {
 			beforeEachDRA()
 			pl := &sriovnetworkv1.SriovNetworkNodePolicyList{
 				Items: []sriovnetworkv1.SriovNetworkNodePolicy{
@@ -1234,11 +1310,10 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 					},
 				},
 			}
-			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(Succeed())
+			Expect(r.syncExtendedResourceDeviceClasses(ctx, dc, pl)).To(MatchError(ContainSubstring("normalizes to the same DRA device class name")))
 			dcList := &resourceapi.DeviceClassList{}
 			Expect(r.List(ctx, dcList, k8sclient.MatchingLabels(drapkg.OperatorGeneratedByLabels()))).To(Succeed())
-			Expect(dcList.Items).To(HaveLen(1))
-			Expect(dcList.Items[0].Name).To(Equal("intel-nic"))
+			Expect(dcList.Items).To(BeEmpty())
 		})
 
 		It("syncExtendedResourceDeviceClasses creates DeviceClass per resource name", func() {
@@ -1429,7 +1504,7 @@ var _ = Describe("SriovNetworkNodePolicyReconciler DRA", Ordered, func() {
 				},
 			}
 			beforeEachDRA(policy, attr)
-			Expect(r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx)).To(Succeed())
+			Expect(r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx, dc)).To(Succeed())
 			var gotPolicy sriovdrav1alpha1.SriovResourcePolicy
 			Expect(errors.IsNotFound(r.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "foo"}, &gotPolicy))).To(BeTrue())
 			var gotAttr sriovdrav1alpha1.DeviceAttributes
@@ -1490,9 +1565,8 @@ func TestPolicyReconcileCleansDeviceClassesWithoutActiveConfig(t *testing.T) {
 }
 
 // TestReconcileCleansDRAObjectsWhenFeatureGateDisabled verifies that Reconcile
-// refreshes FeatureGate from SriovOperatorConfig before choosing the DRA path,
-// so a config update that disables DRA cleans DeviceAttributes even when the
-// in-memory gate was still true (config-watch race).
+// uses SriovOperatorConfig before choosing the DRA path without changing the
+// shared gate, which may reflect a newer config-controller reconciliation.
 func TestReconcileCleansDRAObjectsWhenFeatureGateDisabled(t *testing.T) {
 	ctx := context.Background()
 	nsSaved := vars.Namespace
@@ -1512,6 +1586,7 @@ func TestReconcileCleansDRAObjectsWhenFeatureGateDisabled(t *testing.T) {
 
 	dc := &sriovnetworkv1.SriovOperatorConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: testNamespace},
+		Status:     sriovnetworkv1.SriovOperatorConfigStatus{ResourceProvider: sriovnetworkv1.DevicePluginResourceProvider()},
 		Spec: sriovnetworkv1.SriovOperatorConfigSpec{
 			FeatureGates: map[string]bool{consts.DynamicResourceAllocationFeatureGate: false},
 		},
@@ -1541,8 +1616,8 @@ func TestReconcileCleansDRAObjectsWhenFeatureGateDisabled(t *testing.T) {
 	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: nodePolicySyncEventName}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if r.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
-		t.Fatal("expected FeatureGate refreshed from SriovOperatorConfig to disable DRA")
+	if !fg.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		t.Fatal("policy reconcile must not overwrite the shared FeatureGate")
 	}
 	if err := cl.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: consts.ConfigMapName}, &corev1.ConfigMap{}); err != nil {
 		t.Fatalf("expected device plugin ConfigMap recreated when DRA is disabled: %v", err)
@@ -1554,6 +1629,95 @@ func TestReconcileCleansDRAObjectsWhenFeatureGateDisabled(t *testing.T) {
 	gotPolicy := &sriovdrav1alpha1.SriovResourcePolicy{}
 	if err := cl.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: "worker-0"}, gotPolicy); !errors.IsNotFound(err) {
 		t.Fatalf("expected SriovResourcePolicy deleted, get err=%v", err)
+	}
+}
+
+func TestPolicyReconcileUsesConfigSnapshot(t *testing.T) {
+	oldNamespace, oldPrefix := vars.Namespace, vars.ResourcePrefix
+	vars.Namespace, vars.ResourcePrefix = testNamespace, "openshift.io"
+	t.Cleanup(func() { vars.Namespace, vars.ResourcePrefix = oldNamespace, oldPrefix })
+
+	for _, acceptedDRA := range []bool{false, true} {
+		t.Run(fmt.Sprintf("acceptedDRA=%t", acceptedDRA), func(t *testing.T) {
+			ctx := context.Background()
+			scheme := runtime.NewScheme()
+			for _, add := range []func(*runtime.Scheme) error{sriovnetworkv1.AddToScheme, sriovdrav1alpha1.AddToScheme, corev1.AddToScheme, resourceapi.AddToScheme} {
+				utilruntime.Must(add(scheme))
+			}
+			config := &sriovnetworkv1.SriovOperatorConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: vars.Namespace, UID: "operator-owner"},
+				Spec: sriovnetworkv1.SriovOperatorConfigSpec{
+					FeatureGates: map[string]bool{
+						consts.DynamicResourceAllocationFeatureGate: acceptedDRA,
+						consts.ManageSoftwareBridgesFeatureGate:     acceptedDRA,
+					},
+				},
+				Status: sriovnetworkv1.SriovOperatorConfigStatus{ResourceProvider: sriovnetworkv1.DevicePluginResourceProvider()},
+			}
+			if acceptedDRA {
+				config.Status.ResourceProvider = sriovnetworkv1.DRAResourceProvider()
+			}
+			policy := &sriovnetworkv1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: vars.Namespace},
+				Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{
+					ResourceName: "intel_nic", DeviceType: "netdevice", NumVfs: 2,
+					NicSelector: sriovnetworkv1.SriovNetworkNicSelector{PfNames: []string{"ens1"}},
+					EswitchMode: sriovnetworkv1.ESwithModeSwitchDev,
+					Bridge:      sriovnetworkv1.Bridge{OVS: &sriovnetworkv1.OVSConfig{}},
+				},
+			}
+			node := testManagedNode("worker")
+			node.Labels[corev1.LabelHostname] = node.Name
+			state := &sriovnetworkv1.SriovNetworkNodeState{
+				ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: vars.Namespace},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{Interfaces: sriovnetworkv1.InterfaceExts{{
+					Name: "ens1", PciAddress: "0000:01:00.0", TotalVfs: 8,
+				}}},
+			}
+			fg := featuregate.New()
+			gateChanged := false
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, policy, node, state).WithInterceptorFuncs(interceptor.Funcs{
+				List: func(ctx context.Context, c k8sclient.WithWatch, list k8sclient.ObjectList, opts ...k8sclient.ListOption) error {
+					if err := c.List(ctx, list, opts...); err != nil {
+						return err
+					}
+					if _, ok := list.(*sriovnetworkv1.SriovNetworkNodePolicyList); ok {
+						// Simulate another controller updating the shared gate after
+						// this reconcile has accepted its provider and read policies.
+						fg.Init(map[string]bool{
+							consts.DynamicResourceAllocationFeatureGate: !acceptedDRA,
+							consts.ManageSoftwareBridgesFeatureGate:     !acceptedDRA,
+						})
+						gateChanged = true
+					}
+					return nil
+				},
+			}).Build()
+			r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme, FeatureGate: fg}
+			if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: nodePolicySyncEventName}}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if !gateChanged {
+				t.Fatal("shared gate was not changed during reconcile")
+			}
+			if err := cl.Get(ctx, k8sclient.ObjectKeyFromObject(state), state); err != nil {
+				t.Fatal(err)
+			}
+			if gotBridges := len(state.Spec.Bridges.OVS) > 0; gotBridges != acceptedDRA {
+				t.Errorf("bridges rendered = %t, want %t from config snapshot", gotBridges, acceptedDRA)
+			}
+			attrs := &sriovdrav1alpha1.DeviceAttributesList{}
+			if err := cl.List(ctx, attrs); err != nil {
+				t.Fatal(err)
+			}
+			if gotDRA := len(attrs.Items) > 0; gotDRA != acceptedDRA {
+				t.Errorf("DRA resources present = %t, want %t", gotDRA, acceptedDRA)
+			}
+			err := cl.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: consts.ConfigMapName}, &corev1.ConfigMap{})
+			if acceptedDRA && !errors.IsNotFound(err) || !acceptedDRA && err != nil {
+				t.Errorf("device-plugin ConfigMap lookup = %v, acceptedDRA = %t", err, acceptedDRA)
+			}
+		})
 	}
 }
 
@@ -1618,7 +1782,16 @@ func TestSyncNamespacedDRAOwnership(t *testing.T) {
 				case *sriovdrav1alpha1.DeviceAttributes:
 					err = r.syncDeviceAttributes(ctx, owner, policies)
 				case *sriovdrav1alpha1.SriovResourcePolicy:
+					obsolete := &sriovdrav1alpha1.SriovResourcePolicy{ObjectMeta: metav1.ObjectMeta{
+						Name: "old-worker", Namespace: vars.Namespace, Labels: drapkg.OperatorGeneratedByLabels(),
+					}}
+					if createErr := cl.Create(ctx, obsolete); createErr != nil {
+						t.Fatal(createErr)
+					}
 					err = r.syncSriovResourcePolicies(ctx, owner, policies, &corev1.NodeList{Items: []corev1.Node{*node}})
+					if getErr := cl.Get(ctx, k8sclient.ObjectKeyFromObject(obsolete), obsolete); !errors.IsNotFound(getErr) {
+						t.Errorf("obsolete managed policy must be pruned even on ownership conflict, get error: %v", getErr)
+					}
 				}
 				got := existing.DeepCopyObject().(k8sclient.Object)
 				if getErr := cl.Get(ctx, k8sclient.ObjectKeyFromObject(existing), got); getErr != nil {
@@ -1641,5 +1814,292 @@ func TestSyncNamespacedDRAOwnership(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPolicyReconcileRejectsUnsafeConfigurationBeforeWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name, resource, deviceType, wantError string
+		netFilter                             string
+		pfNames                               []string
+		blockedSwitch                         bool
+	}{
+		{name: "normalized collision", resource: "INTEL_NIC", wantError: "same DRA device class"},
+		{name: "mixed device types", resource: "intel_nic", deviceType: "vfio-pci", wantError: "incompatible deviceType"},
+		{name: "empty resource", resource: "", wantError: "must not be empty"},
+		{name: "VF range", resource: "other", pfNames: []string{"ens1f0#2-5"}, wantError: "VF range"},
+		{name: "netFilter", resource: "other", netFilter: "aws/NetworkID:net-1", wantError: "netFilter"},
+		{name: "unaccepted provider", resource: "other", blockedSwitch: true, wantError: "has not been accepted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			for _, add := range []func(*runtime.Scheme) error{sriovnetworkv1.AddToScheme, corev1.AddToScheme, resourceapi.AddToScheme, sriovdrav1alpha1.AddToScheme} {
+				if err := add(scheme); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: vars.Namespace}, Spec: sriovnetworkv1.SriovOperatorConfigSpec{FeatureGates: map[string]bool{consts.DynamicResourceAllocationFeatureGate: true}}, Status: sriovnetworkv1.SriovOperatorConfigStatus{ResourceProvider: sriovnetworkv1.DRAResourceProvider()}}
+			if tc.blockedSwitch {
+				config.Status.ResourceProvider = sriovnetworkv1.DevicePluginResourceProvider()
+			}
+			first := &sriovnetworkv1.SriovNetworkNodePolicy{ObjectMeta: metav1.ObjectMeta{Name: "first", Namespace: vars.Namespace}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: "intel_nic", DeviceType: "netdevice"}}
+			second := &sriovnetworkv1.SriovNetworkNodePolicy{ObjectMeta: metav1.ObjectMeta{Name: "second", Namespace: vars.Namespace}, Spec: sriovnetworkv1.SriovNetworkNodePolicySpec{ResourceName: tc.resource, DeviceType: tc.deviceType}}
+			second.Spec.NicSelector.PfNames = tc.pfNames
+			second.Spec.NicSelector.NetFilter = tc.netFilter
+			writes := 0
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, first, second).WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(context.Context, k8sclient.WithWatch, k8sclient.Object, ...k8sclient.CreateOption) error {
+					writes++
+					return fmt.Errorf("unexpected create")
+				},
+				Update: func(context.Context, k8sclient.WithWatch, k8sclient.Object, ...k8sclient.UpdateOption) error {
+					writes++
+					return fmt.Errorf("unexpected update")
+				},
+				Patch: func(context.Context, k8sclient.WithWatch, k8sclient.Object, k8sclient.Patch, ...k8sclient.PatchOption) error {
+					writes++
+					return fmt.Errorf("unexpected patch")
+				},
+				Delete: func(context.Context, k8sclient.WithWatch, k8sclient.Object, ...k8sclient.DeleteOption) error {
+					writes++
+					return fmt.Errorf("unexpected delete")
+				},
+				DeleteAllOf: func(context.Context, k8sclient.WithWatch, k8sclient.Object, ...k8sclient.DeleteAllOfOption) error {
+					writes++
+					return fmt.Errorf("unexpected delete all")
+				},
+			}).Build()
+			r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme, FeatureGate: featuregate.New()}
+			_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodePolicySyncEventName}})
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("Reconcile error = %v, want %q", err, tc.wantError)
+			}
+			if writes != 0 {
+				t.Fatalf("rejected configuration attempted %d writes", writes)
+			}
+		})
+	}
+}
+
+func TestDRADeletionPreconditions(t *testing.T) {
+	oldNamespace := vars.Namespace
+	vars.Namespace = testNamespace
+	t.Cleanup(func() { vars.Namespace = oldNamespace })
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{sriovnetworkv1.AddToScheme, sriovdrav1alpha1.AddToScheme, resourceapi.AddToScheme} {
+		utilruntime.Must(add(scheme))
+	}
+	owner := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{
+		Name: consts.DefaultConfigName, Namespace: vars.Namespace, UID: "operator-owner",
+	}}
+	for _, mode := range []string{"prune", "disable"} {
+		for _, template := range []k8sclient.Object{&sriovdrav1alpha1.DeviceAttributes{}, &sriovdrav1alpha1.SriovResourcePolicy{}, &resourceapi.DeviceClass{}} {
+			for _, change := range []string{"unchanged", "replacement", "ownership removed", "managed update", "already deleted"} {
+				t.Run(fmt.Sprintf("%s/%T/%s", mode, template, change), func(t *testing.T) {
+					g := NewWithT(t)
+					ctx := context.Background()
+					original := template.DeepCopyObject().(k8sclient.Object)
+					original.SetName("obsolete")
+					original.SetUID("original")
+					original.SetLabels(drapkg.OperatorGeneratedByLabels())
+					if _, clusterScoped := original.(*resourceapi.DeviceClass); !clusterScoped {
+						original.SetNamespace(vars.Namespace)
+					}
+					deleteCalls := 0
+					cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(owner, original).WithInterceptorFuncs(interceptor.Funcs{
+						Delete: func(ctx context.Context, c k8sclient.WithWatch, obj k8sclient.Object, opts ...k8sclient.DeleteOption) error {
+							deleteCalls++
+							options := (&k8sclient.DeleteOptions{}).ApplyOptions(opts)
+							g.Expect(options.Preconditions).NotTo(BeNil())
+							g.Expect(options.Preconditions.UID).To(HaveValue(Equal(obj.GetUID())))
+							g.Expect(options.Preconditions.ResourceVersion).To(HaveValue(Equal(obj.GetResourceVersion())))
+							if deleteCalls == 1 {
+								live := original.DeepCopyObject().(k8sclient.Object)
+								g.Expect(c.Get(ctx, k8sclient.ObjectKeyFromObject(original), live)).To(Succeed())
+								switch change {
+								case "replacement", "already deleted":
+									g.Expect(c.Delete(ctx, live)).To(Succeed())
+									if change == "replacement" {
+										live.SetUID("replacement")
+										live.SetResourceVersion("")
+										live.SetLabels(nil)
+										g.Expect(c.Create(ctx, live)).To(Succeed())
+									}
+								case "ownership removed":
+									live.SetLabels(nil)
+									g.Expect(c.Update(ctx, live)).To(Succeed())
+								case "managed update":
+									live.SetAnnotations(map[string]string{"updated": "true"})
+									g.Expect(c.Update(ctx, live)).To(Succeed())
+								}
+							}
+							return c.Delete(ctx, obj, opts...)
+						},
+					}).Build()
+					r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme}
+					sync := func() error {
+						policies := &sriovnetworkv1.SriovNetworkNodePolicyList{}
+						if mode == "prune" {
+							switch original.(type) {
+							case *sriovdrav1alpha1.DeviceAttributes:
+								return r.syncDeviceAttributes(ctx, owner, policies)
+							case *sriovdrav1alpha1.SriovResourcePolicy:
+								return r.syncSriovResourcePolicies(ctx, owner, policies, &corev1.NodeList{})
+							default:
+								return r.syncExtendedResourceDeviceClasses(ctx, owner, policies)
+							}
+						}
+						if _, clusterScoped := original.(*resourceapi.DeviceClass); clusterScoped {
+							return cleanupExtendedResourceDeviceClasses(ctx, cl)
+						}
+						return r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx, owner)
+					}
+					err := sync()
+					if change == "unchanged" || change == "already deleted" {
+						g.Expect(err).NotTo(HaveOccurred())
+					} else {
+						g.Expect(errors.IsConflict(err)).To(BeTrue(), "a changed object must reject the stale delete: %v", err)
+					}
+					preserve := change == "replacement" || change == "ownership removed"
+					before := original.DeepCopyObject().(k8sclient.Object)
+					if preserve || change == "managed update" {
+						g.Expect(cl.Get(ctx, k8sclient.ObjectKeyFromObject(original), before)).To(Succeed())
+					}
+					// The next reconciliation must re-list and check ownership again.
+					g.Expect(sync()).To(Succeed())
+					after := original.DeepCopyObject().(k8sclient.Object)
+					getErr := cl.Get(ctx, k8sclient.ObjectKeyFromObject(original), after)
+					if preserve {
+						g.Expect(getErr).NotTo(HaveOccurred())
+						g.Expect(after).To(Equal(before))
+					} else {
+						g.Expect(errors.IsNotFound(getErr)).To(BeTrue())
+					}
+					expectedDeletes := 1
+					if change == "managed update" {
+						expectedDeletes = 2
+					}
+					g.Expect(deleteCalls).To(Equal(expectedDeletes))
+				})
+			}
+		}
+	}
+}
+
+func TestDRAObjectCleanupUsesRepairOwnershipMarkers(t *testing.T) {
+	oldNamespace := vars.Namespace
+	vars.Namespace = testNamespace
+	t.Cleanup(func() { vars.Namespace = oldNamespace })
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{sriovnetworkv1.AddToScheme, sriovdrav1alpha1.AddToScheme, resourceapi.AddToScheme} {
+		utilruntime.Must(add(scheme))
+	}
+	owner := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{
+		Name: consts.DefaultConfigName, Namespace: vars.Namespace, UID: "operator-owner",
+	}}
+
+	for _, mode := range []string{"prune", "disable"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			var objects []k8sclient.Object
+			var removed, preserved []k8sclient.Object
+			for _, template := range []k8sclient.Object{&sriovdrav1alpha1.DeviceAttributes{}, &sriovdrav1alpha1.SriovResourcePolicy{}} {
+				for _, marker := range []string{"controller", "label", "unmarked", "foreign-controller", "foreign-controller-label", "other-namespace"} {
+					obj := template.DeepCopyObject().(k8sclient.Object)
+					obj.SetName(marker)
+					obj.SetNamespace(vars.Namespace)
+					switch marker {
+					case "controller", "other-namespace":
+						if err := controllerutil.SetControllerReference(owner, obj, scheme); err != nil {
+							t.Fatal(err)
+						}
+						if marker == "other-namespace" {
+							obj.SetNamespace("other-namespace")
+						}
+					case "label":
+						obj.SetLabels(drapkg.OperatorGeneratedByLabels())
+					case "foreign-controller", "foreign-controller-label":
+						foreign := owner.DeepCopy()
+						foreign.UID = "foreign-owner"
+						if err := controllerutil.SetControllerReference(foreign, obj, scheme); err != nil {
+							t.Fatal(err)
+						}
+						if marker == "foreign-controller-label" {
+							obj.SetLabels(drapkg.OperatorGeneratedByLabels())
+						}
+					}
+					objects = append(objects, obj)
+					if marker == "controller" || marker == "label" {
+						removed = append(removed, obj)
+					} else {
+						preserved = append(preserved, obj)
+					}
+				}
+			}
+			for _, tc := range []struct {
+				name   string
+				labels map[string]string
+				remove bool
+			}{
+				{name: "intel-nic", labels: map[string]string{drapkg.DeviceClassResourceNameLabel: "intel_nic"}, remove: true},
+				{name: "generated", labels: drapkg.OperatorGeneratedByLabels(), remove: true},
+				{name: "user-class"},
+				{name: "mismatched-name", labels: map[string]string{drapkg.DeviceClassResourceNameLabel: "intel_nic"}},
+				{name: "empty-marker", labels: map[string]string{drapkg.DeviceClassResourceNameLabel: ""}},
+				{name: consts.DRADriverBaseDeviceClassName, labels: drapkg.OperatorGeneratedByLabels()},
+			} {
+				obj := &resourceapi.DeviceClass{ObjectMeta: metav1.ObjectMeta{Name: tc.name, Labels: tc.labels}}
+				objects = append(objects, obj)
+				if tc.remove {
+					removed = append(removed, obj)
+				} else {
+					preserved = append(preserved, obj)
+				}
+			}
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+			r := &SriovNetworkNodePolicyReconciler{Client: cl, Scheme: scheme}
+			// Capture complete stored objects so preservation includes specs and metadata.
+			for _, obj := range preserved {
+				if err := cl.Get(ctx, k8sclient.ObjectKeyFromObject(obj), obj); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				if mode == "prune" {
+					policies := &sriovnetworkv1.SriovNetworkNodePolicyList{}
+					if err := r.syncDeviceAttributes(ctx, owner, policies); err != nil {
+						t.Fatal(err)
+					}
+					if err := r.syncSriovResourcePolicies(ctx, owner, policies, &corev1.NodeList{}); err != nil {
+						t.Fatal(err)
+					}
+					if err := r.syncExtendedResourceDeviceClasses(ctx, owner, policies); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx, owner); err != nil {
+						t.Fatal(err)
+					}
+					if err := cleanupExtendedResourceDeviceClasses(ctx, cl); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			for _, obj := range removed {
+				if err := cl.Get(ctx, k8sclient.ObjectKeyFromObject(obj), obj); !errors.IsNotFound(err) {
+					t.Errorf("obsolete %T %s survived cleanup: %v", obj, obj.GetName(), err)
+				}
+			}
+			for _, before := range preserved {
+				got := before.DeepCopyObject().(k8sclient.Object)
+				if err := cl.Get(ctx, k8sclient.ObjectKeyFromObject(before), got); err != nil {
+					t.Errorf("preserved %T %s: %v", before, before.GetName(), err)
+					continue
+				}
+				if diff := cmp.Diff(before, got); diff != "" {
+					t.Errorf("preserved object changed (-before +after):\n%s", diff)
+				}
+			}
+		})
 	}
 }

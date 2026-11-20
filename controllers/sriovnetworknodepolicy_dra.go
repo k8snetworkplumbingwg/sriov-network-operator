@@ -52,45 +52,23 @@ type draPolicyResource struct {
 	driver          string
 }
 
-// filterDRAResourcesByDeviceClass retains resources and their allocation drivers with unique normalized device class names.
-// Distinct policy resourceNames that normalize to the same device class name cannot coexist in DRA mode.
-// validateDRAResourceNameCollision in the admission webhook rejects such policies at apply time; collisions
-// skipped here are logged as a reconciliation fallback (e.g. webhook disabled or objects changed out of band).
-func filterDRAResourcesByDeviceClass(ctx context.Context, resourceDrivers map[string]string) []draPolicyResource {
-	logger := log.FromContext(ctx).WithName("filterDRAResourcesByDeviceClass")
-	resourceNames := make([]string, 0, len(resourceDrivers))
-	for resourceName := range resourceDrivers {
-		resourceNames = append(resourceNames, resourceName)
-	}
-	sort.Strings(resourceNames)
-
-	seen := make(map[string]struct{})
-	filtered := make([]draPolicyResource, 0, len(resourceNames))
-	for _, resourceName := range resourceNames {
-		deviceClassName := dra.ResourceNameToDeviceClassName(resourceName)
-		if _, dup := seen[deviceClassName]; dup {
-			logger.Error(nil, "Skipping policy resource name with colliding normalized device class",
-				"deviceClassName", deviceClassName, "resourceName", resourceName)
-			continue
-		}
-		seen[deviceClassName] = struct{}{}
-		filtered = append(filtered, draPolicyResource{
-			resourceName:    resourceName,
-			deviceClassName: deviceClassName,
-			driver:          resourceDrivers[resourceName],
-		})
-	}
-	return filtered
-}
-
-// retainedDRAPolicyResources returns resources and allocation drivers kept after normalized device-class deduplication.
-// Use the same result for DeviceAttributes, DeviceClass, and SriovResourcePolicy configs.
-func retainedDRAPolicyResources(ctx context.Context, pl *sriovnetworkv1.SriovNetworkNodePolicyList) ([]draPolicyResource, error) {
+// validatedDRAPolicyResources returns a deterministic resource list only when
+// the entire policy set is compatible. All DRA sync paths use this validation.
+func validatedDRAPolicyResources(pl *sriovnetworkv1.SriovNetworkNodePolicyList) ([]draPolicyResource, error) {
 	resourceDrivers, err := dra.PolicyResourceDrivers(pl.Items)
 	if err != nil {
 		return nil, err
 	}
-	return filterDRAResourcesByDeviceClass(ctx, resourceDrivers), nil
+	names := make([]string, 0, len(resourceDrivers))
+	for name := range resourceDrivers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	resources := make([]draPolicyResource, 0, len(names))
+	for _, name := range names {
+		resources = append(resources, draPolicyResource{resourceName: name, deviceClassName: dra.ResourceNameToDeviceClassName(name), driver: resourceDrivers[name]})
+	}
+	return resources, nil
 }
 
 // draResourceNameSet returns a set of resource names from a list of draPolicyResource.
@@ -114,11 +92,22 @@ func draDeviceClassPoolSet(resources []draPolicyResource) map[string]struct{} {
 // requireDRAOwnership permits recovery of either a missing label or a missing
 // controller reference, but never adopts an unmarked, user-created object.
 func requireDRAOwnership(owner, existing metav1.Object, resource string) error {
-	if objectHasOperatorManagedLabel(existing) || metav1.IsControlledBy(existing, owner) {
+	if draObjectHasOwnershipMarker(owner, existing) {
 		return nil
 	}
 	return apierrors.NewConflict(sriovdrav1alpha1.Resource(resource),
 		existing.GetName(), fmt.Errorf("object exists but is not operator-managed"))
+}
+
+// draObjectHasOwnershipMarker checks whether an existing DRA object can be treated as
+// managed by this operator (SR-IOV Network Operator).
+func draObjectHasOwnershipMarker(owner, existing metav1.Object) bool {
+	// Preserve objects controlled by another owner, even if they carry
+	// this operator's generated-by label.
+	if metav1.GetControllerOf(existing) != nil && !metav1.IsControlledBy(existing, owner) {
+		return false
+	}
+	return objectHasOperatorManagedLabel(existing) || metav1.IsControlledBy(existing, owner)
 }
 
 // reconcileDeviceAttributes brings an existing DeviceAttributes CR in line with desired state:
@@ -190,6 +179,18 @@ func extendedDeviceClassHasOwnershipMarker(dc *resourceapi.DeviceClass, resource
 	return dc.Labels[dra.DeviceClassResourceNameLabel] == resourceName
 }
 
+// Identify generated DeviceClasses by the operator label or by a resource-name
+// label that matches the generated class name. Exclude the base DeviceClass,
+// which is managed by the driver deployment code.
+func managedExtendedDeviceClass(dc *resourceapi.DeviceClass) bool {
+	if dc.Name == constants.DRADriverBaseDeviceClassName {
+		return false
+	}
+	resourceName := dc.Labels[dra.DeviceClassResourceNameLabel]
+	return objectHasOperatorManagedLabel(dc) ||
+		(resourceName != "" && dc.Name == dra.ResourceNameToDeviceClassName(resourceName))
+}
+
 // reconcileExtendedDeviceClass brings an existing extended-resource DeviceClass in line with desired
 // operator labels (including after managed-label drift) and spec.
 func (r *SriovNetworkNodePolicyReconciler) reconcileExtendedDeviceClass(ctx context.Context,
@@ -213,14 +214,13 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 	logger := log.FromContext(ctx).WithName("syncDeviceAttributes")
 	logger.V(1).Info("Start to sync DeviceAttributes CRs")
 
-	retainedPolicyResources, err := retainedDRAPolicyResources(ctx, pl)
+	retainedPolicyResources, err := validatedDRAPolicyResources(pl)
 	if err != nil {
 		return err
 	}
 
 	attrList := &sriovdrav1alpha1.DeviceAttributesList{}
-	if err := r.List(ctx, attrList, client.InNamespace(vars.Namespace),
-		client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
+	if err := r.List(ctx, attrList, client.InNamespace(vars.Namespace)); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			logger.V(1).Info("DeviceAttributes CRD not available, skipping sync")
 			return nil
@@ -234,8 +234,10 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		existingAttrsByName[attrList.Items[i].Name] = &attrList.Items[i]
 	}
 
+	desiredNames := make(map[string]struct{}, len(retainedPolicyResources))
 	for _, res := range retainedPolicyResources {
 		name := res.deviceClassName + "-attrs"
+		desiredNames[name] = struct{}{}
 		desired := buildDeviceAttributesCR(name, res.resourceName)
 		if err := controllerutil.SetControllerReference(dc, desired, r.Scheme); err != nil {
 			logger.Error(err, "Failed to set controller reference on DeviceAttributes", "name", name)
@@ -268,14 +270,14 @@ func (r *SriovNetworkNodePolicyReconciler) syncDeviceAttributes(ctx context.Cont
 		}
 	}
 
-	desiredPools := draDeviceClassPoolSet(retainedPolicyResources)
-
 	for i := range attrList.Items {
 		item := &attrList.Items[i]
-		pool := item.Labels[dra.ResourcePoolLabel]
-		if _, found := desiredPools[pool]; !found {
+		if !draObjectHasOwnershipMarker(dc, item) {
+			continue
+		}
+		if _, found := desiredNames[item.Name]; !found {
 			logger.V(1).Info("Deleting obsolete DeviceAttributes", "name", item.Name)
-			if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
+			if err := deleteObservedObject(ctx, r.Client, item); err != nil {
 				logger.Error(err, "Failed to delete DeviceAttributes", "name", item.Name)
 				return err
 			}
@@ -312,7 +314,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 	logger := log.FromContext(ctx).WithName("syncSriovResourcePolicies")
 	logger.V(1).Info("Start to sync SriovResourcePolicy CRs")
 
-	retainedPolicyResources, err := retainedDRAPolicyResources(ctx, pl)
+	retainedPolicyResources, err := validatedDRAPolicyResources(pl)
 	if err != nil {
 		return err
 	}
@@ -331,8 +333,7 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 	}
 
 	policyList := &sriovdrav1alpha1.SriovResourcePolicyList{}
-	if err := r.List(ctx, policyList, client.InNamespace(vars.Namespace),
-		client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
+	if err := r.List(ctx, policyList, client.InNamespace(vars.Namespace)); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			logger.V(1).Info("SriovResourcePolicy CRD not available, skipping sync")
 			return nil
@@ -344,6 +345,23 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 	existingPoliciesByName := make(map[string]*sriovdrav1alpha1.SriovResourcePolicy, len(policyList.Items))
 	for i := range policyList.Items {
 		existingPoliciesByName[policyList.Items[i].Name] = &policyList.Items[i]
+	}
+
+	// All desired policies have been calculated successfully.
+	// Delete obsolete managed policies before creating or updating desired ones,
+	// so an ownership conflict on one node does not block cleanup on another.
+	for i := range policyList.Items {
+		existing := &policyList.Items[i]
+		if !draObjectHasOwnershipMarker(dc, existing) {
+			continue
+		}
+		if _, exists := desiredPolicies[existing.Name]; !exists {
+			logger.V(1).Info("Deleting obsolete SriovResourcePolicy", "name", existing.Name)
+			if err := deleteObservedObject(ctx, r.Client, existing); err != nil {
+				logger.Error(err, "Failed to delete SriovResourcePolicy", "name", existing.Name)
+				return err
+			}
+		}
 	}
 
 	for name, desired := range desiredPolicies {
@@ -378,16 +396,6 @@ func (r *SriovNetworkNodePolicyReconciler) syncSriovResourcePolicies(ctx context
 		}
 	}
 
-	for i := range policyList.Items {
-		existing := &policyList.Items[i]
-		if _, exists := desiredPolicies[existing.Name]; !exists {
-			logger.V(1).Info("Deleting obsolete SriovResourcePolicy", "name", existing.Name)
-			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-				logger.Error(err, "Failed to delete SriovResourcePolicy", "name", existing.Name)
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -543,14 +551,14 @@ func buildPolicyConfig(p *sriovnetworkv1.SriovNetworkNodePolicy,
 			deviceID = p.Spec.NicSelector.DeviceID
 		} else {
 			deviceID = sriovnetworkv1.GetVfDeviceID(p.Spec.NicSelector.DeviceID)
+			if deviceID == "" {
+				return nil, false, fmt.Errorf("policy %q: no VF device ID mapping for PF device ID %q", p.Name, p.Spec.NicSelector.DeviceID)
+			}
 		}
-		if deviceID != "" {
-			resourceFilter.Devices = []string{deviceID}
-		}
+		resourceFilter.Devices = []string{deviceID}
 	}
 
 	// Map PF names (resolve alternative interface names via node state)
-	// Preserve VF range suffixes for the driver; DRA does not support them yet.
 	if len(p.Spec.NicSelector.PfNames) > 0 {
 		resourceFilter.PfNames = resolvePfNames(p.Spec.NicSelector.PfNames, nodeState)
 	}
@@ -602,8 +610,8 @@ func buildDeviceClassCEL(resourceName string) string {
 	escaped := strings.ReplaceAll(extendedName, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	attrNS, attrName, _ := strings.Cut(dra.ResourceNameAttributeKey, "/")
-	return fmt.Sprintf(`device.driver == "%s" && device.attributes["%s"].%s == "%s"`,
-		constants.DRADriverBaseDeviceClassName, attrNS, attrName, escaped)
+	return fmt.Sprintf(`device.driver == "%s" && has(device.attributes["%s"].%s) && device.attributes["%s"].%s == "%s"`,
+		constants.DRADriverBaseDeviceClassName, attrNS, attrName, attrNS, attrName, escaped)
 }
 
 // syncExtendedResourceDeviceClasses creates/updates/deletes DeviceClass resources with extendedResourceName.
@@ -612,13 +620,13 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	pl *sriovnetworkv1.SriovNetworkNodePolicyList) error {
 	logger := log.FromContext(ctx).WithName("syncExtendedResourceDeviceClasses")
 	logger.V(1).Info("Start to sync extended resource DeviceClasses")
-	retainedPolicyResources, err := retainedDRAPolicyResources(ctx, pl)
+	retainedPolicyResources, err := validatedDRAPolicyResources(pl)
 	if err != nil {
 		return err
 	}
 	retainedDeviceClassNames := draDeviceClassPoolSet(retainedPolicyResources)
 	list := &resourceapi.DeviceClassList{}
-	if err := r.List(ctx, list, client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
+	if err := r.List(ctx, list); err != nil {
 		if deviceClassAPIUnavailable(err) {
 			logger.V(1).Info("DeviceClass API not available, skipping extended resource DeviceClass sync")
 			return nil
@@ -628,7 +636,9 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 
 	existingDCByName := make(map[string]*resourceapi.DeviceClass, len(list.Items))
 	for i := range list.Items {
-		existingDCByName[list.Items[i].Name] = &list.Items[i]
+		if objectHasOperatorManagedLabel(&list.Items[i]) {
+			existingDCByName[list.Items[i].Name] = &list.Items[i]
+		}
 	}
 
 	for _, res := range retainedPolicyResources {
@@ -669,13 +679,11 @@ func (r *SriovNetworkNodePolicyReconciler) syncExtendedResourceDeviceClasses(ctx
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
-		// Skip the base DeviceClass from bindata. That object is owned by
-		// syncDRADriverObjs / cleanupDRADriverObjs.
-		if item.Name == constants.DRADriverBaseDeviceClassName {
+		if !managedExtendedDeviceClass(item) {
 			continue
 		}
 		if _, desired := retainedDeviceClassNames[item.Name]; !desired {
-			if err := r.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
+			if err := deleteObservedObject(ctx, r.Client, item); err != nil {
 				return err
 			}
 		}
@@ -690,7 +698,7 @@ func buildExtendedResourceDeviceClass(deviceClassName, resourceName, extendedRes
 		vfConfig.Driver = driver
 		parameters, err := json.Marshal(vfConfig)
 		if err != nil {
-			return nil, fmt.Errorf("encode VF configuration for DeviceClass %q: %w", deviceClassName, err)
+			return nil, fmt.Errorf("failed to encode VF configuration for DeviceClass %q: %w", deviceClassName, err)
 		}
 		config = []resourceapi.DeviceClassConfiguration{{DeviceConfiguration: resourceapi.DeviceConfiguration{
 			Opaque: &resourceapi.OpaqueDeviceConfiguration{
@@ -722,33 +730,33 @@ func cleanupExtendedResourceDeviceClasses(ctx context.Context, c client.Client) 
 	logger := log.FromContext(ctx).WithName("cleanupExtendedResourceDeviceClasses")
 	logger.V(1).Info("Cleaning up extended resource DeviceClasses")
 	list := &resourceapi.DeviceClassList{}
-	if err := c.List(ctx, list, client.MatchingLabels(dra.OperatorGeneratedByLabels())); err != nil {
+	if err := c.List(ctx, list); err != nil {
 		if deviceClassAPIUnavailable(err) {
-			logger.V(1).Info("DeviceClass API not available, nothing to clean up")
+			logger.V(1).Info("DeviceClass API not available, nothing to clean up", "error", err)
 			return nil
 		}
+		logger.Error(err, "Failed to list extended resource DeviceClasses for cleanup")
 		return err
 	}
 	for i := range list.Items {
 		item := &list.Items[i]
-		// Leave the base DeviceClass to cleanupDRADriverObjs.
-		if item.Name == constants.DRADriverBaseDeviceClassName {
+		if !managedExtendedDeviceClass(item) {
 			continue
 		}
-		if err := c.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
+		if err := deleteObservedObject(ctx, c, item); err != nil {
 			return err
 		}
 	}
+	logger.V(1).Info("Finished cleaning up extended resource DeviceClasses")
 	return nil
 }
 
 // cleanupSriovResourcePoliciesAndDeviceAttributes deletes all operator-generated SriovResourcePolicy and DeviceAttributes CRs when DRA is disabled.
-func (r *SriovNetworkNodePolicyReconciler) cleanupSriovResourcePoliciesAndDeviceAttributes(ctx context.Context) error {
+func (r *SriovNetworkNodePolicyReconciler) cleanupSriovResourcePoliciesAndDeviceAttributes(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig) error {
 	logger := log.FromContext(ctx).WithName("cleanupSriovResourcePoliciesAndDeviceAttributes")
 	logger.V(1).Info("Cleaning up SriovResourcePolicy and DeviceAttributes CRs")
 	listOpts := []client.ListOption{
 		client.InNamespace(vars.Namespace),
-		client.MatchingLabels(dra.OperatorGeneratedByLabels()),
 	}
 	policyList := &sriovdrav1alpha1.SriovResourcePolicyList{}
 	if err := r.List(ctx, policyList, listOpts...); err != nil {
@@ -759,7 +767,10 @@ func (r *SriovNetworkNodePolicyReconciler) cleanupSriovResourcePoliciesAndDevice
 		}
 	} else {
 		for i := range policyList.Items {
-			if err := r.Delete(ctx, &policyList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			if !draObjectHasOwnershipMarker(dc, &policyList.Items[i]) {
+				continue
+			}
+			if err := deleteObservedObject(ctx, r.Client, &policyList.Items[i]); err != nil {
 				return err
 			}
 		}
@@ -773,7 +784,10 @@ func (r *SriovNetworkNodePolicyReconciler) cleanupSriovResourcePoliciesAndDevice
 		}
 	} else {
 		for i := range attrList.Items {
-			if err := r.Delete(ctx, &attrList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			if !draObjectHasOwnershipMarker(dc, &attrList.Items[i]) {
+				continue
+			}
+			if err := deleteObservedObject(ctx, r.Client, &attrList.Items[i]); err != nil {
 				return err
 			}
 		}

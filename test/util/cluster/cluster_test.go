@@ -39,6 +39,12 @@ func TestSriovStableWaitsForPoliciesAndDaemons(t *testing.T) {
 	kube := k8sfake.NewSimpleClientset(plugin, configDaemon)
 	config := &sriovv1.SriovOperatorConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: "operator"},
+		Status: sriovv1.SriovOperatorConfigStatus{
+			ResourceProvider: sriovv1.DevicePluginResourceProvider(),
+			ConditionStatus: sriovv1.ConditionStatus{Conditions: []metav1.Condition{
+				{Type: sriovv1.ConditionReady, Status: metav1.ConditionTrue},
+			}},
+		},
 	}
 	clients := &testclient.ClientSet{
 		Client:          fake.NewClientBuilder().WithScheme(scheme).WithObjects(state, config).Build(),
@@ -101,6 +107,7 @@ func TestSriovStableProviderReadiness(t *testing.T) {
 		configured      bool
 		missingProvider bool
 		mutateProvider  func(*appsv1.DaemonSet)
+		mutateConfig    func(*sriovv1.SriovOperatorConfig)
 		stable          bool
 	}{
 		{name: "DRA with configured VFs and no device plugin", dra: true, configured: true, stable: true},
@@ -124,15 +131,51 @@ func TestSriovStableProviderReadiness(t *testing.T) {
 		{name: "device plugin only covers configured nodes", configured: true, stable: true},
 		{name: "device plugin missing with configured VFs", configured: true, missingProvider: true},
 		{name: "device plugin unnecessary before any policy", missingProvider: true, stable: true},
+		{name: "disable DRA not yet accepted with no policies", missingProvider: true, mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.ResourceProvider = sriovv1.DRAResourceProvider()
+		}},
+		{name: "enable DRA not yet accepted", dra: true, mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.ResourceProvider = sriovv1.DevicePluginResourceProvider()
+		}},
+		{name: "provider not initialized", mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.ResourceProvider = sriovv1.ResourceProvider{}
+		}},
+		{name: "invalid simultaneous providers", dra: true, mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.ResourceProvider.DevicePlugin = true
+		}},
+		{name: "accepted disable still rolling out with no policies", missingProvider: true, mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.Conditions[0].Status = metav1.ConditionFalse
+		}},
+		{name: "operator config readiness unknown", mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.Conditions[0].Status = metav1.ConditionUnknown
+		}},
+		{name: "operator config readiness missing", mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.Conditions = nil
+		}},
+		{name: "operator config readiness stale", missingProvider: true, mutateConfig: func(c *sriovv1.SriovOperatorConfig) {
+			c.Status.Conditions[0].ObservedGeneration--
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme := runtime.NewScheme()
 			require.NoError(t, sriovv1.AddToScheme(scheme))
 			config := &sriovv1.SriovOperatorConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: "operator"},
+				ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: "operator", Generation: 2},
 				Spec: sriovv1.SriovOperatorConfigSpec{
 					FeatureGates: map[string]bool{consts.DynamicResourceAllocationFeatureGate: tc.dra},
 				},
+				Status: sriovv1.SriovOperatorConfigStatus{
+					ResourceProvider: sriovv1.DevicePluginResourceProvider(),
+					ConditionStatus: sriovv1.ConditionStatus{Conditions: []metav1.Condition{
+						{Type: sriovv1.ConditionReady, Status: metav1.ConditionTrue, ObservedGeneration: 2},
+					}},
+				},
+			}
+			if tc.dra {
+				config.Status.ResourceProvider = sriovv1.DRAResourceProvider()
+			}
+			if tc.mutateConfig != nil {
+				tc.mutateConfig(config)
 			}
 			state := &sriovv1.SriovNetworkNodeState{
 				ObjectMeta: metav1.ObjectMeta{Name: "worker-0", Namespace: "operator", Generation: 1},

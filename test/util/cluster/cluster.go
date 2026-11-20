@@ -363,7 +363,8 @@ func (n *EnabledNodes) FindOneMellanoxSriovDevice(node string) (*sriovv1.Interfa
 	return nil, fmt.Errorf("no Mellanox devices found in node %s. Available devices [%+v]", node, devices)
 }
 
-// SriovStable checks current-generation policy readiness, node configuration, and daemon readiness.
+// SriovStable checks provider acceptance, current-generation config and policy
+// readiness, node configuration, and daemon readiness.
 func SriovStable(operatorNamespace string, clients *testclient.ClientSet) (bool, error) {
 	policies := &sriovv1.SriovNetworkNodePolicyList{}
 	if err := clients.List(context.Background(), policies, runtimeclient.InNamespace(operatorNamespace)); err != nil {
@@ -412,8 +413,16 @@ func SriovStable(operatorNamespace string, clients *testclient.ClientSet) (bool,
 	}, config); err != nil {
 		return false, fmt.Errorf("failed to fetch operator config: %w", err)
 	}
+	requestedProvider := config.RequestedResourceProvider()
+	if config.Status.ResourceProvider != requestedProvider {
+		return false, nil
+	}
+	ready := meta.FindStatusCondition(config.Status.Conditions, sriovv1.ConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.ObservedGeneration != config.Generation {
+		return false, nil
+	}
 	providerName, providerNodes := "sriov-device-plugin", configuredNodes
-	if config.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate] {
+	if requestedProvider.DRA {
 		// DRA runs on all managed nodes, including nodes with no configured VFs.
 		providerName, providerNodes = consts.DRADriverDaemonSetName, len(nodeStates.Items)
 	}

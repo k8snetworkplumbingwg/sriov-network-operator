@@ -275,6 +275,9 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 	)
 
 	BeforeAll(func() {
+		if discovery.Enabled() {
+			Skip("DRA conformance suite changes the resource provider, which is unsuitable for discovery mode")
+		}
 		if platformType != consts.Baremetal {
 			Skip("DRA operator tests require a baremetal (or emulated-PF) platform")
 		}
@@ -289,6 +292,7 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 
 		err = namespaces.Clean(operatorNamespace, namespaces.Test, clients, discovery.Enabled())
 		Expect(err).ToNot(HaveOccurred())
+		WaitForSRIOVStable()
 
 		featureFlagInitialValue := isFeatureFlagEnabled(consts.DynamicResourceAllocationFeatureGate)
 		DeferCleanup(func() {

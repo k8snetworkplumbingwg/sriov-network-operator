@@ -261,7 +261,7 @@ func isDaemonSetRolledOut(ds *appsv1.DaemonSet) bool {
 		ds.Status.UpdatedNumberScheduled == ds.Status.DesiredNumberScheduled
 }
 
-func daemonSetExists(ctx context.Context, c k8sclient.Client, name string) (bool, error) {
+func daemonSetExists(ctx context.Context, c k8sclient.Reader, name string) (bool, error) {
 	err := c.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: name}, &appsv1.DaemonSet{})
 	if errors.IsNotFound(err) {
 		return false, nil
@@ -272,22 +272,16 @@ func daemonSetExists(ctx context.Context, c k8sclient.Client, name string) (bool
 	return true, nil
 }
 
-// ensureDaemonSetRolledOut gets the named DaemonSet once and requires that it
-// exists and has finished rolling out.
-func ensureDaemonSetRolledOut(ctx context.Context, c k8sclient.Client, name string) error {
+// daemonSetRolledOut distinguishes normal rollout progress from API failures.
+func daemonSetRolledOut(ctx context.Context, c k8sclient.Reader, name string) (bool, error) {
 	ds := &appsv1.DaemonSet{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: name}, ds); err != nil {
 		if errors.IsNotFound(err) {
-			return fmt.Errorf("DaemonSet %s does not exist: %w", name, err)
+			return false, nil
 		}
-		return fmt.Errorf("get DaemonSet %s: %w", name, err)
+		return false, fmt.Errorf("failed to get DaemonSet %s: %w", name, err)
 	}
-	if !isDaemonSetRolledOut(ds) {
-		return fmt.Errorf("DaemonSet %s is not rolled out: ready %d/%d updated %d, observedGeneration %d generation %d",
-			name, ds.Status.NumberReady, ds.Status.DesiredNumberScheduled, ds.Status.UpdatedNumberScheduled,
-			ds.Status.ObservedGeneration, ds.Generation)
-	}
-	return nil
+	return isDaemonSetRolledOut(ds), nil
 }
 
 // renderDRADriverObjs is shared by deployment and cleanup so both use the same inventory.
@@ -345,6 +339,18 @@ func deleteIgnoringNotFound(ctx context.Context, c k8sclient.Client, obj k8sclie
 	return nil
 }
 
+// deleteObservedObject deletes only the object version that passed ownership checks.
+// Return conflicts so the next reconciliation reads fresh objects and checks
+// ownership again before retrying. An already deleted object needs no further work.
+func deleteObservedObject(ctx context.Context, c k8sclient.Client, obj k8sclient.Object) error {
+	uid, resourceVersion := obj.GetUID(), obj.GetResourceVersion()
+	preconditions := k8sclient.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}
+	if err := c.Delete(ctx, obj, preconditions); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete %T %s: %w", obj, k8sclient.ObjectKeyFromObject(obj), err)
+	}
+	return nil
+}
+
 func objectHasOperatorManagedLabel(obj metav1.Object) bool {
 	if obj == nil {
 		return false
@@ -378,14 +384,7 @@ func deleteOperatorManagedIgnoringNotFound(ctx context.Context, c k8sclient.Clie
 			"Kind", existing.GetObjectKind().GroupVersionKind().Kind, "Name", existing.GetName())
 		return nil
 	}
-	preconditions := metav1.NewUIDPreconditions(string(existing.GetUID()))
-	if err := c.Delete(ctx, existing, &k8sclient.DeleteOptions{Preconditions: preconditions}); err != nil {
-		if errors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("delete %T %s: %w", obj, key, err)
-	}
-	return nil
+	return deleteObservedObject(ctx, c, existing)
 }
 
 // cleanupDRADriverObjs removes the DRA resources defined by the deployment manifests.
@@ -471,6 +470,21 @@ func syncDsObject(ctx context.Context, client k8sclient.Client, scheme *runtime.
 			return err
 		}
 	case clusterRoleResourceName, clusterRoleBindingResourceName, deviceClassResourceName:
+		if kind == deviceClassResourceName {
+			// Unstructured reads bypass the manager cache; check ownership before adding our marker.
+			existing := &uns.Unstructured{}
+			existing.SetGroupVersionKind(obj.GroupVersionKind())
+			err := client.Get(ctx, k8sclient.ObjectKeyFromObject(obj), existing)
+			if err != nil && !errors.IsNotFound(err) {
+				if apimeta.IsNoMatchError(err) {
+					return fmt.Errorf("DeviceClass API is unavailable: %w", err)
+				}
+				return fmt.Errorf("get DeviceClass %q: %w", obj.GetName(), err)
+			}
+			if err == nil && !objectHasOperatorManagedLabel(existing) {
+				return fmt.Errorf("DeviceClass %q exists but is not managed by the SR-IOV Network Operator", obj.GetName())
+			}
+		}
 		// Cluster-scoped objects cannot have a controller reference to namespaced dc.
 		mergeOperatorManagedLabels(obj)
 		if err := applyFn(ctx, client, obj); err != nil {
@@ -663,10 +677,9 @@ func findNodePoolConfig(ctx context.Context, node *corev1.Node, c k8sclient.Clie
 }
 
 // managedNodes lists managed nodes in name order using the configured daemon selector.
-func managedNodes(ctx context.Context, c k8sclient.Client) ([]corev1.Node, error) {
-	config := &sriovnetworkv1.SriovOperatorConfig{}
-	if err := c.Get(ctx, types.NamespacedName{Name: constants.DefaultConfigName, Namespace: vars.Namespace}, config); err != nil {
-		return nil, err
+func managedNodes(ctx context.Context, c k8sclient.Client, config *sriovnetworkv1.SriovOperatorConfig) ([]corev1.Node, error) {
+	if config == nil {
+		return nil, errors.NewNotFound(sriovnetworkv1.Resource("sriovoperatorconfigs"), constants.DefaultConfigName)
 	}
 	selector := GetDefaultNodeSelector()
 	if len(config.Spec.ConfigDaemonNodeSelector) > 0 {

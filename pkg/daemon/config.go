@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -28,15 +27,14 @@ func NewOperatorConfigNodeReconcile(client client.Client) *OperatorConfigNodeRec
 // Reconcile reconciles the OperatorConfig resource. It updates log level and feature gates as necessary.
 func (oc *OperatorConfigNodeReconcile) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	reqLogger := log.FromContext(ctx).WithName("Reconcile")
-	operatorConfig := &sriovnetworkv1.SriovOperatorConfig{}
-	err := oc.client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, operatorConfig)
+	operatorConfig, found, err := sriovnetworkv1.GetOperatorConfig(ctx, oc.client)
 	if err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("OperatorConfig doesn't exist", "name", req.Name, "namespace", req.Namespace)
-			return ctrl.Result{}, nil
-		}
 		reqLogger.Error(err, "Failed to get OperatorConfig", "name", req.Name, "namespace", req.Namespace)
 		return ctrl.Result{}, err
+	}
+	if !found {
+		reqLogger.Info("OperatorConfig doesn't exist", "name", req.Name, "namespace", req.Namespace)
+		return ctrl.Result{}, nil
 	}
 
 	// update log level
@@ -48,9 +46,13 @@ func (oc *OperatorConfigNodeReconcile) Reconcile(ctx context.Context, req ctrl.R
 		log.Log.Info("Set Disable Drain", "value", vars.DisableDrain)
 	}
 
-	if !equality.Semantic.DeepEqual(oc.latestFeatureGates, operatorConfig.Spec.FeatureGates) {
-		vars.FeatureGate.Init(operatorConfig.Spec.FeatureGates)
-		oc.latestFeatureGates = operatorConfig.Spec.FeatureGates
+	gates, err := operatorConfig.EffectiveFeatureGates()
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !equality.Semantic.DeepEqual(oc.latestFeatureGates, gates) {
+		vars.FeatureGate.Init(gates)
+		oc.latestFeatureGates = gates
 		log.Log.Info("Updated featureGates", "featureGates", vars.FeatureGate.String())
 	}
 

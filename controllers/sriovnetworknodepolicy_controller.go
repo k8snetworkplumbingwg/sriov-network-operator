@@ -47,6 +47,7 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
@@ -86,17 +87,17 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 	reqLogger.Info("Reconciling")
 
 	// Fetch the default SriovOperatorConfig
-	defaultOpConf := &sriovnetworkv1.SriovOperatorConfig{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: vars.Namespace, Name: constants.DefaultConfigName}, defaultOpConf); err != nil {
-		if errors.IsNotFound(err) {
-			reqLogger.Info("default SriovOperatorConfig object not found, cannot reconcile SriovNetworkNodePolicies. Requeue.")
-			// An in-flight reconciliation may have recreated classes during finalization.
-			if err := cleanupExtendedResourceDeviceClasses(ctx, r.Client); err != nil {
-				return reconcile.Result{}, err
-			}
-			return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
-		}
+	defaultOpConf, found, err := sriovnetworkv1.GetOperatorConfig(ctx, r.Client)
+	if err != nil {
 		return reconcile.Result{}, err
+	}
+	if !found {
+		reqLogger.Info("default SriovOperatorConfig object not found, cannot reconcile SriovNetworkNodePolicies. Requeue.")
+		// An in-flight reconciliation may have recreated classes during finalization.
+		if err := cleanupExtendedResourceDeviceClasses(ctx, r.Client); err != nil {
+			return reconcile.Result{}, err
+		}
+		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
 	}
 
 	if !defaultOpConf.DeletionTimestamp.IsZero() {
@@ -107,15 +108,30 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 		return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
 	}
 
-	// Keep feature-gate state aligned with the config we just fetched. The config
-	// controller also calls Init; refreshing here avoids racing a stale in-memory
-	// gate when this reconciler is woken by a SriovOperatorConfig watch.
-	r.FeatureGate.Init(defaultOpConf.Spec.FeatureGates)
-	reqLogger.Info("enabled featureGates", "featureGates", r.FeatureGate.String())
+	// Use the config snapshot for this reconcile without overwriting the shared
+	// feature gate, which the config controller may already have updated.
+	gates, err := defaultOpConf.EffectiveFeatureGates()
+	if err != nil {
+		if defaultOpConf.Status.ResourceProvider == (sriovnetworkv1.ResourceProvider{}) {
+			return reconcile.Result{RequeueAfter: constants.DrainControllerRequeueTime}, nil
+		}
+		return reconcile.Result{}, fmt.Errorf("invalid accepted resource provider: %w", err)
+	}
+	gate := featuregate.New()
+	gate.Init(gates)
+
+	acceptedDRA := gates[constants.DynamicResourceAllocationFeatureGate]
+	// A provider change may still be awaiting acceptance, or be blocked by existing
+	// policies. Do not change NodeStates or provider resources until the accepted
+	// provider matches the request.
+	if defaultOpConf.Status.ResourceProvider != defaultOpConf.RequestedResourceProvider() {
+		return reconcile.Result{}, fmt.Errorf("requested resource provider has not been accepted; remove all policies before switching providers")
+	}
+	reqLogger.V(2).Info("enabled featureGates", "featureGates", gate.String())
 
 	// Fetch the SriovNetworkNodePolicyList
 	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
-	err := r.List(ctx, policyList, &client.ListOptions{})
+	err = r.List(ctx, policyList, client.InNamespace(vars.Namespace))
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -126,6 +142,14 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
 	}
+
+	// Reject the complete policy set before changing NodeState or DRA resources.
+	if acceptedDRA {
+		if _, err := dra.PolicyResourceDrivers(policyList.Items); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
 	// Fetch the Nodes
 	nodeList := &corev1.NodeList{}
 	lo := &client.MatchingLabels{
@@ -149,12 +173,16 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 	// it will remain in the same order and not trigger a pod recreation
 	sort.Sort(sriovnetworkv1.ByPriority(policyList.Items))
 	// Sync SriovNetworkNodeState objects
-	if err = r.syncAllSriovNetworkNodeStates(ctx, defaultOpConf, policyList, nodeList); err != nil {
+	// Give the NodeState helpers a reconcile-local gate so concurrent config
+	// reconciliation cannot change bridge rendering midway through the node list.
+	nodeStateReconciler := *r
+	nodeStateReconciler.FeatureGate = gate
+	if err = nodeStateReconciler.syncAllSriovNetworkNodeStates(ctx, defaultOpConf, policyList, nodeList); err != nil {
 		return reconcile.Result{}, err
 	}
 
 	// Sync either device plugin ConfigMap or DRA resources (DeviceAttributes + SriovResourcePolicy) based on feature gate
-	if r.FeatureGate.IsEnabled(constants.DynamicResourceAllocationFeatureGate) {
+	if acceptedDRA {
 		reqLogger.Info("DRA feature gate enabled, syncing DeviceAttributes and SriovResourcePolicy CRs")
 		if err = r.syncDeviceAttributes(ctx, defaultOpConf, policyList); err != nil {
 			return reconcile.Result{}, err
@@ -169,7 +197,7 @@ func (r *SriovNetworkNodePolicyReconciler) Reconcile(ctx context.Context, req ct
 		if err = cleanupExtendedResourceDeviceClasses(ctx, r.Client); err != nil {
 			return reconcile.Result{}, err
 		}
-		if err = r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx); err != nil {
+		if err = r.cleanupSriovResourcePoliciesAndDeviceAttributes(ctx, defaultOpConf); err != nil {
 			return reconcile.Result{}, err
 		}
 		// Sync Sriov device plugin ConfigMap object
@@ -199,7 +227,7 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 			qHandler(w)
 		},
 		UpdateFunc: func(c context.Context, e event.TypedUpdateEvent[client.Object], w workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
+			if !operatorConfigProviderChanged(e.ObjectOld, e.ObjectNew) && e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
 				equality.Semantic.DeepEqual(e.ObjectOld.GetDeletionTimestamp(), e.ObjectNew.GetDeletionTimestamp()) {
 				return
 			}
@@ -267,6 +295,13 @@ func (r *SriovNetworkNodePolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 			ctrl_builder.WithPredicates(defaultConfigPredicate())).
 		WatchesRawSource(source.Channel(eventChan, &handler.EnqueueRequestForObject{})).
 		Complete(r)
+}
+
+// operatorConfigProviderChanged detects accepted provider changes on operator config updates.
+func operatorConfigProviderChanged(oldObj, newObj client.Object) bool {
+	oldConfig, oldOK := oldObj.(*sriovnetworkv1.SriovOperatorConfig)
+	newConfig, newOK := newObj.(*sriovnetworkv1.SriovOperatorConfig)
+	return oldOK && newOK && oldConfig.Status.ResourceProvider != newConfig.Status.ResourceProvider
 }
 
 func (r *SriovNetworkNodePolicyReconciler) syncDevicePluginConfigMap(ctx context.Context, dc *sriovnetworkv1.SriovOperatorConfig,

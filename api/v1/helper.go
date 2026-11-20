@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +27,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
@@ -905,6 +907,65 @@ func (cr *OVSNetwork) NetworkNamespace() string {
 // GetConditions returns the conditions from the status
 func (cr *OVSNetwork) GetConditions() []metav1.Condition {
 	return cr.Status.Conditions
+}
+
+// GetOperatorConfig reads the default config in the operator namespace. A missing
+// config returns (nil, false, nil); other read failures return (nil, false, err).
+func GetOperatorConfig(ctx context.Context, reader client.Reader) (*SriovOperatorConfig, bool, error) {
+	config := &SriovOperatorConfig{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: vars.Namespace, Name: consts.DefaultConfigName}, config); err != nil {
+		return nil, false, client.IgnoreNotFound(err)
+	}
+	return config, true, nil
+}
+
+// DRAResourceProvider returns a configuration with only DRA enabled.
+func DRAResourceProvider() ResourceProvider {
+	return ResourceProvider{DRA: true}
+}
+
+// DevicePluginResourceProvider returns a configuration with only the device plugin enabled.
+func DevicePluginResourceProvider() ResourceProvider {
+	return ResourceProvider{DevicePlugin: true}
+}
+
+// RequestedResourceProvider returns the provider selected by spec.featureGates.
+// An omitted DRA gate selects the device plugin.
+func (cr *SriovOperatorConfig) RequestedResourceProvider() ResourceProvider {
+	if cr.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate] {
+		return DRAResourceProvider()
+	}
+	return DevicePluginResourceProvider()
+}
+
+// EffectiveFeatureGates uses the provider mode accepted by the operator rather
+// than a requested switch that may have been blocked. Missing status must be
+// initialized by the operator before any consumer acts on the DRA gate.
+func (cr *SriovOperatorConfig) EffectiveFeatureGates() (map[string]bool, error) {
+	switch cr.Status.ResourceProvider {
+	case DevicePluginResourceProvider(), DRAResourceProvider():
+	case ResourceProvider{DevicePlugin: true, DRA: true}:
+		return nil, fmt.Errorf("simultaneous device-plugin and DRA providers are not supported")
+	default:
+		return nil, fmt.Errorf("resource provider has not been initialized by the operator")
+	}
+	gates := maps.Clone(cr.Spec.FeatureGates)
+	if gates == nil {
+		gates = make(map[string]bool)
+	}
+	gates[consts.DynamicResourceAllocationFeatureGate] = cr.Status.ResourceProvider.DRA
+	return gates, nil
+}
+
+// InitFeatureGates initializes an existing gate instance using the accepted
+// resource provider. Invalid provider status leaves the instance unchanged.
+func (cr *SriovOperatorConfig) InitFeatureGates(gates featuregate.FeatureGate) error {
+	effective, err := cr.EffectiveFeatureGates()
+	if err != nil {
+		return err
+	}
+	gates.Init(effective)
+	return nil
 }
 
 // GetConditions returns the conditions from the status.

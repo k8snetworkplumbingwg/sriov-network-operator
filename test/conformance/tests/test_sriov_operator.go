@@ -319,13 +319,16 @@ var _ = Describe("[sriov] operator", Ordered, func() {
 				By("Waiting for the resource injector to load its hugepage configuration")
 				// A Ready injector can still be waiting for its first ConfigMap poll after
 				// a restart. Probe admission without creating pods until injection is active.
-				Eventually(func(g Gomega) {
-					admittedPod, err := clients.Pods(namespaces.Test).Create(context.Background(), podDefinition.DeepCopy(), metav1.CreateOptions{
+				probeCtx, cancelProbe := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancelProbe()
+				Eventually(probeCtx, func(g Gomega) {
+					admittedPod, err := clients.Pods(namespaces.Test).Create(probeCtx, podDefinition.DeepCopy(), metav1.CreateOptions{
 						DryRun: []string{metav1.DryRunAll},
 					})
 					g.Expect(err).ToNot(HaveOccurred())
 					assertHugepageInjection(g, admittedPod)
 				}, 2*time.Minute, time.Second).Should(Succeed())
+				cancelProbe()
 
 				created, err := clients.Pods(namespaces.Test).Create(context.Background(), podDefinition, metav1.CreateOptions{})
 				Expect(err).ToNot(HaveOccurred())
