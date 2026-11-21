@@ -22,6 +22,7 @@ import (
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	constants "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/dra"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/status"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
@@ -68,12 +69,24 @@ func (r *AggregateStatusReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.List(ctx, pools); err != nil {
 		return ctrl.Result{}, err
 	}
-	nodes, nodesErr := managedNodes(ctx, r.Client)
+	config, found, nodesErr := sriovnetworkv1.GetOperatorConfig(ctx, r.Client)
+	var nodes []corev1.Node
+	if nodesErr == nil {
+		nodes, nodesErr = managedNodes(ctx, r.Client, config)
+	}
 	states, statesErr := nodeStatesByName(ctx, r.Client)
+	var resourceIssues map[string]error
+	if found && config.DeletionTimestamp.IsZero() && config.Status.ResourceProvider == sriovnetworkv1.DRAResourceProvider() &&
+		config.Spec.FeatureGates[constants.DynamicResourceAllocationFeatureGate] {
+		resourceIssues = draPolicyResourceIssues(policies.Items)
+	}
 
 	for i := range policies.Items {
 		policy := &policies.Items[i]
 		result := policyStatusFrom(policy, nodes, nodesErr, states, statesErr)
+		if issue := resourceIssues[policy.Name]; policy.Namespace == vars.Namespace && issue != nil {
+			result = aggregateBlocked(policy.Generation, sriovnetworkv1.ReasonUnsupportedConfiguration, issue.Error())
+		}
 		if err := applyAggregateStatus(ctx, r.StatusPatcher, policy, policy.Status.MatchedNodeCount, policy.Status.ReadyNodeCount, policy.Status.Conditions, result); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -97,6 +110,34 @@ func (r *AggregateStatusReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: constants.ResyncPeriod}, nil
 }
 
+// draPolicyResourceIssues reports unsupported selectors on their policy and
+// resource conflicts on policies sharing the affected device class.
+func draPolicyResourceIssues(policies []sriovnetworkv1.SriovNetworkNodePolicy) map[string]error {
+	classes := map[string][]sriovnetworkv1.SriovNetworkNodePolicy{}
+	issues := map[string]error{}
+	for _, policy := range policies {
+		if policy.Namespace != vars.Namespace || policy.Name == constants.DefaultPolicyName {
+			continue
+		}
+		// Check the policy alone before attributing shared-resource conflicts.
+		validator := dra.NewPolicyResourceValidator(true)
+		if err := validator.Add(&policy); err != nil {
+			issues[policy.Name] = err
+			continue
+		}
+		class := dra.ResourceNameToDeviceClassName(policy.Spec.ResourceName)
+		classes[class] = append(classes[class], policy)
+	}
+	for _, policies := range classes {
+		if _, err := dra.PolicyResourceDrivers(policies); err != nil {
+			for _, policy := range policies {
+				issues[policy.Name] = err
+			}
+		}
+	}
+	return issues
+}
+
 // SetupWithManager registers a single coalesced watch for policy and pool status.
 func (r *AggregateStatusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	syncRequests := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []ctrl.Request {
@@ -109,9 +150,21 @@ func (r *AggregateStatusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&sriovnetworkv1.SriovNetworkPoolConfig{}, syncRequests, generationChanged).
 		Watches(&corev1.Node{}, syncRequests, builder.WithPredicates(predicate.Funcs{UpdateFunc: aggregateNodeChanged})).
 		Watches(&sriovnetworkv1.SriovNetworkNodeState{}, syncRequests, builder.WithPredicates(predicate.Funcs{UpdateFunc: aggregateNodeStateChanged})).
-		Watches(&sriovnetworkv1.SriovOperatorConfig{}, syncRequests, generationChanged)
+		Watches(&sriovnetworkv1.SriovOperatorConfig{}, syncRequests, builder.WithPredicates(predicate.Funcs{UpdateFunc: aggregateOperatorConfigChanged}))
 
 	return controller.Complete(r)
+}
+
+// aggregateOperatorConfigChanged decides whether an OperatorConfig update should trigger recalculating policy and pool status.
+// It returns true when:
+// - Generation changes, usually because the config’s spec changed.
+// - Accepted resource provider changes, Status.ResourceProvider switches between device-plugin and DRA, or becomes initialized.
+// - Deletion starts, so DRA validation blockers can be cleared while finalizers are pending.
+// Other status-only updates, such as changes to Ready conditions, return false to avoid unnecessary reconciliations.
+func aggregateOperatorConfigChanged(e event.UpdateEvent) bool {
+	deletionStarted := e.ObjectOld != nil && e.ObjectNew != nil &&
+		e.ObjectOld.GetDeletionTimestamp().IsZero() && !e.ObjectNew.GetDeletionTimestamp().IsZero()
+	return predicate.GenerationChangedPredicate{}.Update(e) || operatorConfigProviderChanged(e.ObjectOld, e.ObjectNew) || deletionStarted
 }
 
 // aggregateKnown builds a Ready result with known node counts.

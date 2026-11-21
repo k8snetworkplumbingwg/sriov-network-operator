@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -1025,6 +1026,73 @@ var _ = Describe("Daemon Controller", Ordered, func() {
 	})
 })
 
+var _ = Describe("IsManagedDRADriverPod", func() {
+	It("matches operator-managed DRA driver pods", func() {
+		controller := true
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: constants.DRADriverServiceAccountName},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind:       "DaemonSet",
+					Name:       constants.DRADriverDaemonSetName,
+					Controller: &controller,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeTrue(),
+			"pod with %s DaemonSet controller owner should be managed",
+			constants.DRADriverDaemonSetName)
+	})
+
+	It("matches pods controlled by the expected DaemonSet regardless of service account", func() {
+		controller := true
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: "other"},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind:       "DaemonSet",
+					Name:       constants.DRADriverDaemonSetName,
+					Controller: &controller,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeTrue(),
+			"a different service account should not exclude a pod controlled by the expected DaemonSet")
+	})
+
+	It("rejects pods owned by a different DaemonSet", func() {
+		controller := true
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: constants.DRADriverServiceAccountName},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind:       "DaemonSet",
+					Name:       "other-daemonset",
+					Controller: &controller,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse(),
+			"pod owned by DaemonSet %q should not match when owner is %s",
+			"other-daemonset", constants.DRADriverDaemonSetName)
+	})
+
+	It("rejects pods without a controller owner reference", func() {
+		pod := &corev1.Pod{
+			Spec: corev1.PodSpec{ServiceAccountName: constants.DRADriverServiceAccountName},
+			ObjectMeta: metav1.ObjectMeta{
+				OwnerReferences: []metav1.OwnerReference{{
+					Kind: "DaemonSet",
+					Name: constants.DRADriverDaemonSetName,
+				}},
+			},
+		}
+		Expect(daemon.IsManagedDRADriverPod(pod)).To(BeFalse(),
+			"pod with DaemonSet owner %s but controller=false should not match",
+			constants.DRADriverDaemonSetName)
+	})
+})
+
 var _ = Describe("Daemon CheckSystemdStatus", func() {
 	var (
 		myMockCtrl   *gomock.Controller
@@ -1237,6 +1305,196 @@ var _ = Describe("Daemon status generation", func() {
 
 		state = ensureEmptyNodeState(nodeName)
 		DeferCleanup(func(ctx context.Context) { Expect(k8sClient.Delete(ctx, state)).To(Succeed()) })
+	})
+
+	DescribeTable("provider unblocking through Reconcile", func(ctx context.Context, draEnabled, hasInterfaces, patchFails, afterConfiguration bool) {
+		hostHelper.EXPECT().ClearPCIAddressFolder().Return(nil).AnyTimes()
+		mainPlugin.EXPECT().CheckStatusChanges(gomock.Any()).Return(false, nil).AnyTimes()
+		if hasInterfaces {
+			state.Spec.Interfaces = []sriovnetworkv1.Interface{{Name: "eno1", PciAddress: "0000:16:00.0", NumVfs: 1}}
+			Expect(k8sClient.Update(ctx, state)).To(Succeed())
+		}
+		node := createNode(nodeName)
+		DeferCleanup(func(ctx context.Context) { Expect(k8sClient.Delete(ctx, node)).To(Succeed()) })
+
+		app := "sriov-device-plugin"
+		if draEnabled {
+			app = "sriov-dra-driver"
+		}
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "unblock-provider", Namespace: testNamespace,
+				Labels: map[string]string{"app": app},
+				Annotations: map[string]string{
+					constants.DevicePluginWaitConfigAnnotation: "true",
+					"example.com/preserve":                     "value",
+				},
+			},
+			Spec: corev1.PodSpec{
+				NodeName:   nodeName,
+				Containers: []corev1.Container{{Name: "provider", Image: "test-image"}},
+			},
+		}
+		if draEnabled {
+			pod.Spec.ServiceAccountName = constants.DRADriverServiceAccountName
+			serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+				Name: constants.DRADriverServiceAccountName, Namespace: testNamespace,
+			}}
+			Expect(k8sClient.Create(ctx, serviceAccount)).To(Succeed())
+			DeferCleanup(func(ctx context.Context) { Expect(k8sClient.Delete(ctx, serviceAccount)).To(Succeed()) })
+			pod.OwnerReferences = []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "DaemonSet", Name: constants.DRADriverDaemonSetName,
+				UID: "dra-daemonset", Controller: new(true),
+			}}
+		}
+		DeferCleanup(func(ctx context.Context) {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)))).To(Succeed())
+		})
+		// A blocking provider must be stopped before host configuration, then its
+		// replacement must be unblocked within the same reconciliation.
+		mainPlugin.EXPECT().Apply().DoAndReturn(func() error {
+			if afterConfiguration {
+				Expect(apiErrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}))).To(BeTrue(),
+					"the old provider must stop before applying host configuration")
+				return k8sClient.Create(ctx, pod.DeepCopy())
+			}
+			return nil
+		})
+		patchErr := fmt.Errorf("provider annotation patch denied")
+		watchClient, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
+		Expect(err).NotTo(HaveOccurred())
+		var deletedPods []string
+		interceptedClient := interceptor.NewClient(watchClient, interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, isPod := obj.(*corev1.Pod); isPod {
+					deletedPods = append(deletedPods, obj.GetName())
+					// Envtest has no kubelet to finish graceful pod termination.
+					opts = append(opts, client.GracePeriodSeconds(0))
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, isPod := obj.(*corev1.Pod); isPod && patchFails {
+					return patchErr
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		})
+		recorder := daemon.NewEventRecorder(interceptedClient, events.NewFakeRecorder(20))
+		r := daemon.New(interceptedClient, hostHelper, platformMock, recorder, featureGates,
+			status.NewPatcher(interceptedClient, nil, scheme.Scheme, "test-unblocking"))
+		Expect(r.Init([]string{})).To(Succeed())
+		req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(state)}
+		if !afterConfiguration {
+			_, err := r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.GetLastAppliedGeneration()).To(Equal(state.Generation))
+		}
+		Expect(k8sClient.Create(ctx, pod.DeepCopy())).To(Succeed())
+		// Neither restarting nor unblocking may touch the other provider, pods
+		// on other nodes, or DRA pods outside the expected DaemonSet.
+		otherProvider := pod.DeepCopy()
+		otherProvider.Name = "other-provider"
+		otherProvider.Labels["app"] = "sriov-dra-driver"
+		if draEnabled {
+			otherProvider.Labels["app"] = "sriov-device-plugin"
+		}
+		otherNode := pod.DeepCopy()
+		otherNode.Name = "other-node-provider"
+		otherNode.Spec.NodeName = "other-node"
+		ignoredPods := []*corev1.Pod{otherProvider, otherNode}
+		if draEnabled {
+			foreignOwner := pod.DeepCopy()
+			foreignOwner.Name = "foreign-dra-provider"
+			foreignOwner.OwnerReferences[0].Name = "other-daemonset"
+			ignoredPods = append(ignoredPods, foreignOwner)
+		}
+		for _, ignoredPod := range ignoredPods {
+			Expect(k8sClient.Create(ctx, ignoredPod)).To(Succeed())
+			DeferCleanup(func(ctx context.Context) {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ignoredPod, client.GracePeriodSeconds(0)))).To(Succeed())
+			})
+		}
+		featureGates.Init(map[string]bool{
+			constants.DynamicResourceAllocationFeatureGate:        draEnabled,
+			constants.BlockDevicePluginUntilConfiguredFeatureGate: !draEnabled,
+		})
+		_, err = r.Reconcile(ctx, req)
+		if patchFails {
+			Expect(err).To(MatchError(ContainSubstring(patchErr.Error())))
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		found := &corev1.Pod{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), found)).To(Succeed())
+		_, blocked := found.Annotations[constants.DevicePluginWaitConfigAnnotation]
+		Expect(blocked).To(Equal(patchFails || (!draEnabled && !hasInterfaces)))
+		Expect(found.Annotations).To(HaveKeyWithValue("example.com/preserve", "value"))
+		if afterConfiguration {
+			Expect(deletedPods).To(Equal([]string{pod.Name}))
+		} else {
+			Expect(deletedPods).To(BeEmpty())
+		}
+		for _, ignoredPod := range ignoredPods {
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ignoredPod), found)).To(Succeed())
+			Expect(found.UID).To(Equal(ignoredPod.UID))
+			Expect(found.Annotations).To(HaveKey(constants.DevicePluginWaitConfigAnnotation))
+		}
+	},
+		Entry("device plugin stays blocked without interfaces", false, false, false, false),
+		Entry("device plugin unblocks with interfaces", false, true, false, false),
+		Entry("DRA unblocks without interfaces", true, false, false, false),
+		Entry("DRA unblocks with interfaces", true, true, false, false),
+		Entry("device plugin reports patch failures", false, true, true, false),
+		Entry("DRA reports patch failures", true, false, true, false),
+		Entry("DRA unblocks after configuration without interfaces", true, false, false, true),
+		Entry("DRA unblocks after configuration with interfaces", true, true, false, true),
+		Entry("device plugin unblocks after configuration with interfaces", false, true, false, true),
+		Entry("device plugin stays blocked after configuration without interfaces", false, false, false, true),
+		Entry("DRA reports patch failures after configuration", true, false, true, true),
+		Entry("device plugin reports patch failures after configuration", false, true, true, true),
+	)
+
+	It("restarts the device plugin after configuration when blocking is disabled", func(ctx context.Context) {
+		node := createNode(nodeName)
+		DeferCleanup(func(ctx context.Context) { Expect(k8sClient.Delete(ctx, node)).To(Succeed()) })
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "legacy-device-plugin", Namespace: testNamespace,
+				Labels: map[string]string{"app": "sriov-device-plugin"},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: nodeName, Containers: []corev1.Container{{Name: "provider", Image: "test-image"}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func(ctx context.Context) {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)))).To(Succeed())
+		})
+		mainPlugin.EXPECT().Apply().DoAndReturn(func() error {
+			found := &corev1.Pod{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), found)).To(Succeed())
+			Expect(found.DeletionTimestamp).To(BeNil(), "the device plugin must remain running during configuration")
+			return nil
+		})
+		watchClient, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
+		Expect(err).NotTo(HaveOccurred())
+		interceptedClient := interceptor.NewClient(watchClient, interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, isPod := obj.(*corev1.Pod); isPod {
+					// Envtest has no kubelet to finish graceful pod termination.
+					opts = append(opts, client.GracePeriodSeconds(0))
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		})
+		recorder := daemon.NewEventRecorder(interceptedClient, events.NewFakeRecorder(20))
+		r := daemon.New(interceptedClient, hostHelper, platformMock, recorder, featureGates,
+			status.NewPatcher(interceptedClient, nil, scheme.Scheme, "test-restart"))
+		Expect(r.Init([]string{})).To(Succeed())
+		_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(state)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(apiErrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}))).To(BeTrue())
 	})
 
 	It("should mark completed node configuration ready without a device plugin pod", func(ctx context.Context) {

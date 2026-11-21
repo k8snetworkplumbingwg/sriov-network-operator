@@ -59,6 +59,7 @@ import (
 )
 
 var errSystemdModeOnHypershift = errors.New("systemd mode is not supported on hypershift")
+var errProviderRolloutPending = errors.New("waiting for replacement resource provider rollout")
 
 // SriovOperatorConfigReconciler reconciles a SriovOperatorConfig object
 type SriovOperatorConfigReconciler struct {
@@ -73,6 +74,8 @@ type SriovOperatorConfigReconciler struct {
 	renderManifestFn renderManifestFunc
 	applyManifestFn  applyManifestFunc
 	deleteManifestFn applyManifestFunc
+	// ensureProviderRolloutFn overrides provider DaemonSet rollout checks (envtest has no DS controller).
+	ensureProviderRolloutFn func(ctx context.Context, daemonSetName string) (bool, error)
 }
 
 // renderManifests renders operator manifests using a reconciler-scoped renderer
@@ -103,6 +106,18 @@ func (r *SriovOperatorConfigReconciler) deleteManifest(ctx context.Context, c cl
 	}
 
 	return apply.DeleteObject(ctx, c, obj)
+}
+
+// providerDaemonSetRolledOut checks that the replacement provider has
+// completed its DaemonSet rollout before the previous provider is removed.
+// Tests can override the check with a reconciler-scoped function.
+// The informer cache may still report the generation from before installation,
+// so callers should pass an uncached reader.
+func (r *SriovOperatorConfigReconciler) providerDaemonSetRolledOut(ctx context.Context, reader client.Reader, name string) (bool, error) {
+	if r.ensureProviderRolloutFn != nil {
+		return r.ensureProviderRolloutFn(ctx, name)
+	}
+	return daemonSetRolledOut(ctx, reader, name)
 }
 
 // getTLSTemplateData retrieves TLS configuration data for manifest rendering.
@@ -197,8 +212,13 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	snolog.SetLogLevel(defaultConfig.Spec.LogLevel)
 
+	providerReady := true
 	defer func() {
-		conditionErr := r.applyReadyCondition(ctx, defaultConfig, err)
+		conditionCause := err
+		if conditionCause == nil && !providerReady {
+			conditionCause = errProviderRolloutPending
+		}
+		conditionErr := r.applyReadyCondition(ctx, defaultConfig, conditionCause)
 		if conditionErr == nil {
 			return
 		}
@@ -217,7 +237,13 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	r.FeatureGate.Init(defaultConfig.Spec.FeatureGates)
+	providerErr := r.acceptResourceProvider(ctx, defaultConfig)
+	if providerErr != nil && !errors.Is(providerErr, errResourceProviderSwitchBlocked) {
+		return reconcile.Result{}, providerErr
+	}
+	if err := defaultConfig.InitFeatureGates(r.FeatureGate); err != nil {
+		return reconcile.Result{}, err
+	}
 	logger.Info("enabled featureGates", "featureGates", r.FeatureGate.String())
 
 	if !defaultConfig.Spec.EnableInjector {
@@ -230,7 +256,7 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	// Fetch the SriovNetworkNodePolicyList
 	policyList := &sriovnetworkv1.SriovNetworkNodePolicyList{}
-	err = r.List(ctx, policyList, &client.ListOptions{})
+	err = r.List(ctx, policyList, client.InNamespace(vars.Namespace))
 	if err != nil {
 		// Error reading the object - requeue the request.
 		return reconcile.Result{}, err
@@ -251,8 +277,18 @@ func (r *SriovOperatorConfigReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.Result{}, err
 	}
 
-	if err = syncPluginDaemonObjs(ctx, r.Client, r.Scheme, defaultConfig, r.FeatureGate, r.renderManifests, r.applyManifest); err != nil {
+	// Apply independent settings using the accepted provider before reporting a
+	// blocked switch. Do not install the requested provider until it is accepted.
+	if providerErr != nil {
+		return reconcile.Result{}, providerErr
+	}
+
+	providerReady, err = r.syncResourceProvider(ctx, defaultConfig)
+	if err != nil {
 		return reconcile.Result{}, err
+	}
+	if !providerReady {
+		return reconcile.Result{RequeueAfter: consts.DrainControllerRequeueTime}, nil
 	}
 
 	if err = r.syncMetricsExporter(ctx, defaultConfig); err != nil {
@@ -286,7 +322,11 @@ func (r *SriovOperatorConfigReconciler) applyReadyCondition(ctx context.Context,
 	if reconcileErr != nil {
 		conditionStatus = metav1.ConditionFalse
 		message = reconcileErr.Error()
-		if errors.Is(reconcileErr, errSystemdModeOnHypershift) {
+		if errors.Is(reconcileErr, errResourceProviderSwitchBlocked) {
+			reason = "ResourceProviderSwitchBlocked"
+		} else if errors.Is(reconcileErr, errProviderRolloutPending) {
+			reason = "ResourceProviderRolloutPending"
+		} else if errors.Is(reconcileErr, errSystemdModeOnHypershift) {
 			reason = sriovnetworkv1.ReasonUnsupportedConfiguration
 		} else {
 			reason = sriovnetworkv1.ReasonOperatorConfigSyncFailed
@@ -318,7 +358,13 @@ func (r *SriovOperatorConfigReconciler) SetupWithManager(mgr ctrl.Manager) error
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&sriovnetworkv1.SriovOperatorConfig{}, ctrl_builder.WithPredicates(defaultConfigPredicate())).
 		Owns(&appsv1.DaemonSet{}).
-		Owns(&corev1.ConfigMap{})
+		Owns(&corev1.ConfigMap{}).
+		Watches(&sriovnetworkv1.SriovNetworkNodePolicy{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+			if obj.GetNamespace() != vars.Namespace {
+				return nil
+			}
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: vars.Namespace, Name: consts.DefaultConfigName}}}
+		}))
 
 	// Watch for APIServer changes on OpenShift to react to TLS profile changes.
 	// Only add the watch if the APIServer CRD is available in the cluster.
@@ -376,13 +422,7 @@ func (r *SriovOperatorConfigReconciler) syncConfigDaemonSet(ctx context.Context,
 	data.Data["ParallelNicConfig"] = r.FeatureGate.IsEnabled(consts.ParallelNicConfigFeatureGate)
 	data.Data["ManageSoftwareBridges"] = r.FeatureGate.IsEnabled(consts.ManageSoftwareBridgesFeatureGate)
 
-	envCniBinPath := os.Getenv("SRIOV_CNI_BIN_PATH")
-	if envCniBinPath == "" {
-		data.Data["CNIBinPath"] = "/var/lib/cni/bin"
-	} else {
-		logger.V(1).Info("New cni bin found", "CNIBinPath", envCniBinPath)
-		data.Data["CNIBinPath"] = envCniBinPath
-	}
+	data.Data["CNIBinPath"] = GetCNIBinPath()
 
 	if len(dc.Spec.DisablePlugins) > 0 {
 		logger.V(1).Info("DisablePlugins provided", "DisablePlugins", dc.Spec.DisablePlugins)
@@ -681,6 +721,16 @@ func (r *SriovOperatorConfigReconciler) handleSriovOperatorConfigDeletion(ctx co
 		// make sure webhooks objects are deleted prior of removing finalizer
 		err = r.deleteAllWebhooks(ctx)
 		if err != nil {
+			return reconcile.Result{}, err
+		}
+		// Clean up cluster-scoped DRA objects (DeviceClass, ClusterRole/Binding) that
+		// are not garbage-collected when this namespaced config is removed.
+		if err = cleanupExtendedResourceDeviceClasses(ctx, r.Client); err != nil {
+			logger.Error(err, "Failed to cleanup extended resource DeviceClasses")
+			return reconcile.Result{}, err
+		}
+		if err = cleanupDRADriverObjs(ctx, r.Client, defaultConfig, r.renderManifests); err != nil {
+			logger.Error(err, "Failed to cleanup DRA driver objects")
 			return reconcile.Result{}, err
 		}
 		// remove our finalizer from the list and update it.

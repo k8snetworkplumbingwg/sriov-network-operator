@@ -7,11 +7,17 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"testing"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/featuregate"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
@@ -137,6 +143,8 @@ var _ = Describe("Daemon OperatorConfig Controller", Ordered, func() {
 
 			err := k8sClient.Create(ctx, soc)
 			Expect(err).ToNot(HaveOccurred())
+			soc.Status.ResourceProvider = sriovnetworkv1.DevicePluginResourceProvider()
+			Expect(k8sClient.Status().Update(ctx, soc)).To(Succeed())
 			EventuallyWithOffset(1, func(g Gomega) {
 				g.Expect(vars.FeatureGate.IsEnabled("test")).To(BeTrue())
 			}, "15s", "3s").Should(Succeed())
@@ -167,4 +175,49 @@ func validateExpectedDrain(disableDrain bool) {
 	EventuallyWithOffset(1, func(g Gomega) {
 		g.Expect(vars.DisableDrain).To(Equal(disableDrain))
 	}, "15s", "3s").Should(Succeed())
+}
+
+func TestConfigWatcherUsesAcceptedProvider(t *testing.T) {
+	saved := vars.FeatureGate
+	t.Cleanup(func() { vars.FeatureGate = saved })
+	vars.FeatureGate = featuregate.New()
+	ctx := context.Background()
+	soc := &sriovnetworkv1.SriovOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: consts.DefaultConfigName, Namespace: vars.Namespace}, Spec: sriovnetworkv1.SriovOperatorConfigSpec{FeatureGates: map[string]bool{consts.DynamicResourceAllocationFeatureGate: true}}, Status: sriovnetworkv1.SriovOperatorConfigStatus{ResourceProvider: sriovnetworkv1.DevicePluginResourceProvider()}}
+	testScheme := runtime.NewScheme()
+	if err := sriovnetworkv1.AddToScheme(testScheme); err != nil {
+		t.Fatal(err)
+	}
+	cl := fake.NewClientBuilder().WithScheme(testScheme).WithStatusSubresource(soc).WithObjects(soc).Build()
+	watcher := daemon.NewOperatorConfigNodeReconcile(cl)
+	if _, err := watcher.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if vars.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		t.Fatal("blocked request enabled DRA")
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(soc), soc); err != nil {
+		t.Fatal(err)
+	}
+	soc.Status.ResourceProvider = sriovnetworkv1.DRAResourceProvider()
+	if err := cl.Status().Update(ctx, soc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watcher.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if !vars.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		t.Fatal("status-only acceptance did not enable DRA")
+	}
+	soc.Spec.FeatureGates = nil
+	if err := cl.Update(ctx, soc); err != nil {
+		t.Fatal(err)
+	}
+	// A new watcher models a daemon restart while a disabling request is blocked.
+	watcher = daemon.NewOperatorConfigNodeReconcile(cl)
+	if _, err := watcher.Reconcile(ctx, ctrl.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if !vars.FeatureGate.IsEnabled(consts.DynamicResourceAllocationFeatureGate) {
+		t.Fatal("blocked request disabled DRA after restart")
+	}
 }

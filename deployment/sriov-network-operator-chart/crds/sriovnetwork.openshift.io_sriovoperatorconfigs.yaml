@@ -181,6 +181,21 @@ spec:
                 description: Show the runtime status of the operator admission controller
                   webhook
                 type: string
+              resourceProvider:
+                description: |-
+                  ResourceProvider is the provider mode accepted by the operator. A requested
+                  change is accepted only while no node policies exist. Consumers use this
+                  field so a rejected change cannot take effect after a process restart.
+                properties:
+                  devicePlugin:
+                    default: false
+                    description: DevicePlugin enables the SR-IOV device plugin.
+                    type: boolean
+                  dra:
+                    default: false
+                    description: DRA enables the SR-IOV DRA driver.
+                    type: boolean
+                type: object
             type: object
         type: object
     served: true
