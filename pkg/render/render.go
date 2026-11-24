@@ -2,11 +2,9 @@ package render
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"text/template"
 
@@ -28,15 +26,6 @@ type RenderConfig struct {
 	*mcfgv1.ControllerConfigSpec
 	PullSecret string
 }
-
-type DeviceInfo struct {
-	PciAddress string
-	NumVfs     int
-}
-
-const (
-	ovsUnitsDir = "ovs-units"
-)
 
 func MakeRenderData() RenderData {
 	return RenderData{
@@ -145,108 +134,4 @@ func renderFileTemplate(path string, d *RenderData) (*bytes.Buffer, error) {
 	}
 
 	return renderTemplate(string(source[:]), d)
-}
-
-func formateDeviceList(devs []DeviceInfo) string {
-	out := ""
-	for _, dev := range devs {
-		out = out + fmt.Sprintln(dev.PciAddress, dev.NumVfs)
-	}
-	return out
-}
-
-func GenerateMachineConfig(path, name, mcRole string, ovsOffload bool, d *RenderData) (*mcfgv1.MachineConfig, error) {
-	d.Funcs["formateDeviceList"] = formateDeviceList
-
-	exists, err := existsDir(path)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.Errorf("%s is not a directory", path)
-	}
-	units := map[string]string{}
-
-	if ovsOffload {
-		p := filepath.Join(path, ovsUnitsDir)
-		exists, err = existsDir(p)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			if err := filterTemplates(units, p, d); err != nil {
-				return nil, err
-			}
-		}
-	}
-	// keySortVals returns a list of values, sorted by key
-	// we need the lists of files and units to have a stable ordering for the checksum
-	keySortVals := func(m map[string]string) []string {
-		ks := []string{}
-		for k := range m {
-			ks = append(ks, k)
-		}
-		sort.Strings(ks)
-
-		vs := []string{}
-		for _, k := range ks {
-			vs = append(vs, m[k])
-		}
-
-		return vs
-	}
-
-	ignCfg, err := TranspileCoreOSConfigToIgn(nil, keySortVals(units))
-	if err != nil {
-		return nil, errors.Wrap(err, "error transpiling CoreOS config to Ignition config")
-	}
-	mcfg, err := MachineConfigFromIgnConfig(mcRole, name, ignCfg)
-	if err != nil {
-		return nil, errors.Wrap(err, "error creating MachineConfig from Ignition config")
-	}
-
-	return mcfg, nil
-}
-
-// existsDir returns true if path exists and is a directory, false if the path
-// does not exist, and error if there is a runtime error or the path is not a directory
-func existsDir(path string) (bool, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, errors.Wrapf(err, "failed to open dir %q", path)
-	}
-	if !info.IsDir() {
-		return false, errors.Wrapf(err, "expected template directory, %q is not a directory", path)
-	}
-	return true, nil
-}
-
-func filterTemplates(toFilter map[string]string, path string, d *RenderData) error {
-	walkFn := func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-
-		// empty templates signify don't create
-		if info.Size() == 0 {
-			delete(toFilter, info.Name())
-			return nil
-		}
-
-		// Render the template file
-		renderedData, err := renderFileTemplate(path, d)
-		if err != nil {
-			return err
-		}
-		toFilter[info.Name()] = renderedData.String()
-		return nil
-	}
-
-	return filepath.Walk(path, walkFn)
 }
