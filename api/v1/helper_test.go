@@ -374,6 +374,32 @@ func TestSriovNetworkNodePolicyApply(t *testing.T) {
 			},
 		},
 		{
+			tname:        "policy with excludeTopology",
+			currentState: newNodeState(),
+			policy: func() *v1.SriovNetworkNodePolicy {
+				p := newNodePolicy()
+				p.Spec.ExcludeTopology = true
+				return p
+			}(),
+			equalP: false,
+			expectedInterfaces: []v1.Interface{
+				{
+					Name:       "ens803f1",
+					NumVfs:     2,
+					PciAddress: "0000:86:00.1",
+					VfGroups: []v1.VfGroup{
+						{
+							DeviceType:      consts.DeviceTypeNetDevice,
+							ResourceName:    "p1res",
+							VfRange:         "0-1",
+							PolicyName:      "p1",
+							ExcludeTopology: true,
+						},
+					},
+				},
+			},
+		},
+		{
 			tname: "one policy present different pf",
 			currentState: func() *v1.SriovNetworkNodeState {
 				st := newNodeState()

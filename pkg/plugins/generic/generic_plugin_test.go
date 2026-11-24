@@ -1,6 +1,7 @@
 package generic
 
 import (
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -54,6 +55,7 @@ var _ = Describe("Generic plugin", func() {
 
 	Context("OnNodeStateChange", func() {
 		It("should not drain", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -250,6 +252,7 @@ var _ = Describe("Generic plugin", func() {
 		})
 
 		It("should not drain if PF link is not down", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -457,6 +460,7 @@ var _ = Describe("Generic plugin", func() {
 		})
 
 		It("should not drain if GUID address value is not set on VF of type netdevice, rdma enabled and link type ETH", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -508,6 +512,7 @@ var _ = Describe("Generic plugin", func() {
 		})
 
 		It("should not drain if GUID address value is the default one on VF of type netdevice, rdma disabled and link type ETH", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -609,6 +614,7 @@ var _ = Describe("Generic plugin", func() {
 		})
 
 		It("should not drain if GUID address value is not set on VF of type netdevice and link type IB", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -710,6 +716,7 @@ var _ = Describe("Generic plugin", func() {
 		})
 
 		It("should not drain if GUID address value is not set on VF of type netdevice, rdma enabled and link type ETH", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -1162,7 +1169,113 @@ var _ = Describe("Generic plugin", func() {
 			Expect(driverState.DriverLoaded).To(BeTrue())
 		})
 	})
+
+	Context("OnNodeStateChange excludeTopology", func() {
+		desiredIfaces := func(excludeTopology bool) sriovnetworkv1.Interfaces {
+			return sriovnetworkv1.Interfaces{{
+				PciAddress: "0000:00:00.0",
+				NumVfs:     1,
+				VfGroups: []sriovnetworkv1.VfGroup{{
+					DeviceType:      "netdevice",
+					PolicyName:      "policy-1",
+					ResourceName:    "resource-1",
+					VfRange:         "0-0",
+					ExcludeTopology: excludeTopology,
+				}},
+			}}
+		}
+		nodeState := func(excludeTopology bool) *sriovnetworkv1.SriovNetworkNodeState {
+			return &sriovnetworkv1.SriovNetworkNodeState{
+				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
+					Interfaces: desiredIfaces(excludeTopology),
+				},
+				Status: sriovnetworkv1.SriovNetworkNodeStateStatus{
+					Interfaces: sriovnetworkv1.InterfaceExts{{
+						PciAddress:     "0000:00:00.0",
+						NumVfs:         1,
+						TotalVfs:       1,
+						DeviceID:       "1015",
+						Vendor:         "15b3",
+						Name:           "sriovif1",
+						Mtu:            1500,
+						Mac:            "0c:42:a1:55:ee:46",
+						Driver:         "mlx5_core",
+						EswitchMode:    "legacy",
+						LinkSpeed:      "25000 Mb/s",
+						LinkType:       "ETH",
+						LinkAdminState: "up",
+						VFs: []sriovnetworkv1.VirtualFunction{{
+							PciAddress: "0000:00:00.1",
+							DeviceID:   "1016",
+							Vendor:     "15b3",
+							VfID:       0,
+							Name:       "sriovif1v0",
+							Mtu:        1500,
+							Mac:        "8e:d6:2c:62:87:1b",
+							Driver:     "mlx5_core",
+						}},
+					}},
+				},
+			}
+		}
+		appliedIfaces := func(excludeTopology bool) *sriovnetworkv1.Interface {
+			return &sriovnetworkv1.Interface{
+				PciAddress: "0000:00:00.0",
+				VfGroups: []sriovnetworkv1.VfGroup{{
+					ResourceName:    "resource-1",
+					ExcludeTopology: excludeTopology,
+				}},
+			}
+		}
+
+		It("should not drain when no applied PF status exists", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, nil).AnyTimes()
+			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(nodeState(true))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(needReboot).To(BeFalse())
+			Expect(needDrain).To(BeFalse())
+		})
+
+		It("should not drain when excludeTopology is unchanged", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(appliedIfaces(true), true, nil).AnyTimes()
+			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(nodeState(true))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(needReboot).To(BeFalse())
+			Expect(needDrain).To(BeFalse())
+		})
+
+		It("should drain when excludeTopology changed", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(appliedIfaces(false), true, nil).AnyTimes()
+			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(nodeState(true))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(needReboot).To(BeFalse())
+			Expect(needDrain).To(BeTrue())
+		})
+
+		It("should not drain when the resource is absent from the applied status", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(&sriovnetworkv1.Interface{
+				PciAddress: "0000:00:00.0",
+				VfGroups: []sriovnetworkv1.VfGroup{{
+					ResourceName:    "other-resource",
+					ExcludeTopology: false,
+				}},
+			}, true, nil).AnyTimes()
+			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(nodeState(true))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(needReboot).To(BeFalse())
+			Expect(needDrain).To(BeFalse())
+		})
+
+		It("should not drain when LoadPfsStatus fails", func() {
+			hostHelper.EXPECT().LoadPfsStatus("0000:00:00.0").Return(nil, false, fmt.Errorf("read error")).AnyTimes()
+			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(nodeState(true))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(needReboot).To(BeFalse())
+			Expect(needDrain).To(BeFalse())
+		})
+	})
 	It("should not drain - bridge config", func() {
+		hostHelper.EXPECT().LoadPfsStatus("0000:d8:00.0").Return(nil, false, nil).AnyTimes()
 		networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 				Interfaces: sriovnetworkv1.Interfaces{{
@@ -1227,6 +1340,7 @@ var _ = Describe("Generic plugin", func() {
 		Expect(needDrain).To(BeFalse())
 	})
 	It("should drain - bridge config mismatch", func() {
+		hostHelper.EXPECT().LoadPfsStatus("0000:d8:00.0").Return(nil, false, nil).AnyTimes()
 		networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 				Interfaces: sriovnetworkv1.Interfaces{{
