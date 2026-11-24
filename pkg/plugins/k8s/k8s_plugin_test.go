@@ -79,16 +79,7 @@ var _ = Describe("K8s plugin", func() {
 				os.Chdir("../../..")
 			}).DoAndReturn(realHostMgr.ReadServiceManifestFile).Do(func(_ any) {
 				os.Chdir(curDir)
-			})
-		}
-		for _, s := range []string{
-			"bindata/manifests/switchdev-config/ovs-units/ovs-vswitchd.service.yaml",
-		} {
-			hostHelper.EXPECT().ReadOvsServiceInjectionManifestFile(s, gomock.Any()).Do(func(_, _ any) {
-				os.Chdir("../../..")
-			}).DoAndReturn(realHostMgr.ReadOvsServiceInjectionManifestFile).Do(func(_, _ any) {
-				os.Chdir(curDir)
-			})
+			}).MaxTimes(1)
 		}
 		k8sPlugin = NewK8sPlugin(hostHelper)
 	})
@@ -167,66 +158,6 @@ var _ = Describe("K8s plugin", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(needReboot).To(BeTrue())
 		Expect(needDrain).To(BeTrue())
-		Expect(k8sPlugin.Apply()).NotTo(HaveOccurred())
-	})
-	It("ovs service not found", func() {
-		setIsSystemdMode(false)
-		hostHelper.EXPECT().IsServiceExist("/usr/lib/systemd/system/ovs-vswitchd.service").Return(false, nil)
-		needDrain, needReboot, err := k8sPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{
-			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: []sriovnetworkv1.Interface{{EswitchMode: "switchdev"}}}})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(needReboot).To(BeFalse())
-		Expect(needDrain).To(BeFalse())
-		Expect(k8sPlugin.Apply()).NotTo(HaveOccurred())
-	})
-	It("ovs service updated", func() {
-		setIsSystemdMode(false)
-		hostHelper.EXPECT().IsServiceExist("/usr/lib/systemd/system/ovs-vswitchd.service").Return(true, nil)
-		hostHelper.EXPECT().ReadService("/usr/lib/systemd/system/ovs-vswitchd.service.d/10-hw-offload.conf").Return(
-			&hostTypes.Service{Name: "ovs-vswitchd.service"}, nil)
-		hostHelper.EXPECT().CompareServices(
-			&hostTypes.Service{Name: "ovs-vswitchd.service"},
-			newServiceNameMatcher("ovs-vswitchd.service"),
-		).Return(true, nil)
-		hostHelper.EXPECT().WriteServiceDropin(newServiceNameMatcher("ovs-vswitchd.service")).Return(nil)
-		needDrain, needReboot, err := k8sPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{
-			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: []sriovnetworkv1.Interface{{EswitchMode: "switchdev"}}}})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(needReboot).To(BeTrue())
-		Expect(needDrain).To(BeTrue())
-		Expect(k8sPlugin.Apply()).NotTo(HaveOccurred())
-	})
-	It("ovs drop-in already up to date", func() {
-		setIsSystemdMode(false)
-		hostHelper.EXPECT().IsServiceExist("/usr/lib/systemd/system/ovs-vswitchd.service").Return(true, nil)
-		hostHelper.EXPECT().ReadService("/usr/lib/systemd/system/ovs-vswitchd.service.d/10-hw-offload.conf").Return(
-			&hostTypes.Service{Name: "ovs-vswitchd.service"}, nil)
-		hostHelper.EXPECT().CompareServices(
-			&hostTypes.Service{Name: "ovs-vswitchd.service"},
-			newServiceNameMatcher("ovs-vswitchd.service"),
-		).Return(false, nil)
-		needDrain, needReboot, err := k8sPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{
-			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: []sriovnetworkv1.Interface{{EswitchMode: "switchdev"}}}})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(needReboot).To(BeFalse())
-		Expect(needDrain).To(BeFalse())
-		Expect(k8sPlugin.Apply()).NotTo(HaveOccurred())
-	})
-	It("ovs drop-in needs update enforces reboot", func() {
-		setIsSystemdMode(false)
-		hostHelper.EXPECT().IsServiceExist("/usr/lib/systemd/system/ovs-vswitchd.service").Return(true, nil)
-		hostHelper.EXPECT().ReadService("/usr/lib/systemd/system/ovs-vswitchd.service.d/10-hw-offload.conf").Return(
-			&hostTypes.Service{Name: "ovs-vswitchd.service"}, nil)
-		hostHelper.EXPECT().CompareServices(
-			&hostTypes.Service{Name: "ovs-vswitchd.service"},
-			newServiceNameMatcher("ovs-vswitchd.service"),
-		).Return(true, nil)
-		needDrain, needReboot, err := k8sPlugin.OnNodeStateChange(&sriovnetworkv1.SriovNetworkNodeState{
-			Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{Interfaces: []sriovnetworkv1.Interface{{EswitchMode: "switchdev"}}}})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(needReboot).To(BeTrue())
-		Expect(needDrain).To(BeTrue())
-		hostHelper.EXPECT().WriteServiceDropin(newServiceNameMatcher("ovs-vswitchd.service")).Return(nil)
 		Expect(k8sPlugin.Apply()).NotTo(HaveOccurred())
 	})
 })

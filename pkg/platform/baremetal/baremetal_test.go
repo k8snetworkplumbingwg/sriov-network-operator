@@ -3,6 +3,8 @@ package baremetal
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -13,10 +15,19 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper"
 	mock_helper "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/helper/mock"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host"
 	hosttypes "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	plugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
+
+func getDropInPath(clusterType consts.ClusterType) string {
+	systemdDir := "/usr/lib/systemd/system"
+	if clusterType == consts.ClusterTypeOpenshift {
+		systemdDir = "/etc/systemd/system"
+	}
+	return path.Join("/host", systemdDir, "ovs-vswitchd.service.d")
+}
 
 var _ = Describe("Baremetal", func() {
 	var (
@@ -116,14 +127,11 @@ var _ = Describe("Baremetal", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(mainPlugin.Name()).To(Equal("generic"))
 
-				// Expect 3 additional plugins: intel, mellanox, k8s
-				Expect(addPlugins).To(HaveLen(3))
-
 				pluginNames := []string{}
 				for _, p := range addPlugins {
 					pluginNames = append(pluginNames, p.Name())
 				}
-				Expect(pluginNames).To(ContainElements("intel", "mellanox", "k8s"))
+				Expect(pluginNames).To(ConsistOf("intel", "mellanox", "k8s", "ovs"))
 			})
 
 			It("should not duplicate plugins for vendors with multiple interfaces", func() {
@@ -134,13 +142,11 @@ var _ = Describe("Baremetal", func() {
 				_, addPlugins, err := bm.GetVendorPlugins(ns)
 				Expect(err).NotTo(HaveOccurred())
 
-				// Still expect only 3 additional plugins
-				Expect(addPlugins).To(HaveLen(3))
 				pluginNames := []string{}
 				for _, p := range addPlugins {
 					pluginNames = append(pluginNames, p.Name())
 				}
-				Expect(pluginNames).To(ContainElements("intel", "mellanox", "k8s"))
+				Expect(pluginNames).To(ConsistOf("intel", "mellanox", "k8s", "ovs"))
 			})
 
 			It("should return an error if a vendor plugin fails to load", func() {
@@ -177,23 +183,71 @@ var _ = Describe("Baremetal", func() {
 				}
 			})
 
-			It("should load generic and vendor plugins, but not the k8s plugin", func() {
+			It("should load generic, vendor and OVS plugins", func() {
 				mainPlugin, addPlugins, err := bm.GetVendorPlugins(ns)
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(mainPlugin.Name()).To(Equal("generic"))
 
-				// Expect 2 additional plugins: intel, mellanox. k8s_plugin should NOT be loaded.
-				Expect(addPlugins).To(HaveLen(2))
-
 				pluginNames := []string{}
 				for _, p := range addPlugins {
 					pluginNames = append(pluginNames, p.Name())
 				}
-				Expect(pluginNames).To(ContainElements("intel", "mellanox"))
-				Expect(pluginNames).NotTo(ContainElement("k8s"))
+				Expect(pluginNames).To(ConsistOf("intel", "mellanox", "ovs"))
 			})
 		})
+
+		DescribeTable("writes the OVS drop-in", func(clusterType consts.ClusterType) {
+			previousClusterType := vars.ClusterType
+			DeferCleanup(func() { vars.ClusterType = previousClusterType })
+			vars.ClusterType = clusterType
+
+			state := &sriovnetworkv1.SriovNetworkNodeState{
+				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
+					Interfaces: []sriovnetworkv1.Interface{{EswitchMode: sriovnetworkv1.ESwithModeSwitchDev}},
+					System: sriovnetworkv1.System{
+						OvsConfig: map[string]string{"hw-offload": "true", "tc-policy": "none"},
+					},
+				},
+			}
+
+			// Render the real manifest and capture the write without touching the host.
+			realHost, err := host.NewHostManager(hostHelper)
+			Expect(err).NotTo(HaveOccurred())
+			hostHelper.EXPECT().ReadOvsServiceInjectionManifestFile(gomock.Any(), gomock.Any()).
+				DoAndReturn(realHost.ReadOvsServiceInjectionManifestFile).AnyTimes()
+			hostHelper.EXPECT().ReadServiceManifestFile(gomock.Any()).DoAndReturn(realHost.ReadServiceManifestFile).AnyTimes()
+			hostHelper.EXPECT().IsServiceExist("/usr/lib/systemd/system/ovs-vswitchd.service").Return(true, nil).AnyTimes()
+			hostHelper.EXPECT().ReadService(gomock.Any()).Return(nil, os.ErrNotExist).AnyTimes()
+			var dropin *hosttypes.Service
+			hostHelper.EXPECT().WriteServiceDropin(gomock.Any()).DoAndReturn(func(service *hosttypes.Service) error {
+				dropin = service
+				return nil
+			}).AnyTimes()
+
+			_, plugins, err := bm.GetVendorPlugins(state)
+			Expect(err).NotTo(HaveOccurred())
+			var needDrain, needReboot bool
+			for _, p := range plugins {
+				drain, reboot, err := p.OnNodeStateChange(state)
+				Expect(err).NotTo(HaveOccurred())
+				needDrain = needDrain || drain
+				needReboot = needReboot || reboot
+			}
+			Expect(dropin).To(BeNil(), "the daemon should wait until Apply to write the OVS drop-in")
+			for _, p := range plugins {
+				Expect(p.Apply()).To(Succeed())
+			}
+
+			Expect(dropin).NotTo(BeNil(), "the %s daemon should write an OVS drop-in", clusterType)
+			Expect(path.Dir(path.Join(consts.Chroot, dropin.Path))).To(Equal(getDropInPath(clusterType)))
+			Expect(dropin.Content).To(Equal(expectedOVSDropInContent))
+			Expect(needDrain).To(BeTrue(), "a missing OVS drop-in should require a drain")
+			Expect(needReboot).To(BeTrue(), "a missing OVS drop-in should require a reboot")
+		},
+			Entry("on Kubernetes", consts.ClusterTypeKubernetes),
+			Entry("on OpenShift", consts.ClusterTypeOpenshift),
+		)
 	})
 
 	Context("Systemd Plugin Retrieval", func() {
@@ -222,3 +276,11 @@ var _ = Describe("Baremetal", func() {
 		})
 	})
 })
+
+// Keep this expectation hardcoded so the test fails if a YAML template change alters the rendered drop-in.
+const expectedOVSDropInContent = `[Service]
+ExecStartPre=:/bin/bash -c '\
+  old=$(/bin/ovs-vsctl -t 5 get Open_vSwitch . external_ids:sriov-operator-owned-keys 2>/dev/null | tr -d "\\\"") ; \
+  [ -n "$old" ] && echo "$old" | xargs -n 1 /bin/ovs-vsctl --no-wait remove Open_vSwitch . other_config || true'
+ExecStartPre=:/bin/ovs-vsctl --no-wait -t 5 set Open_vSwitch . "external_ids:sriov-operator-owned-keys=hw-offload tc-policy"
+ExecStartPre=:/bin/ovs-vsctl --no-wait set Open_vSwitch . "other_config:hw-offload=true" "other_config:tc-policy=none"` + " \n"

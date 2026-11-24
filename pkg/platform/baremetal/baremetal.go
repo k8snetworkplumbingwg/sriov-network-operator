@@ -14,6 +14,7 @@ import (
 	intelplugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/intel"
 	k8splugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/k8s"
 	mellanoxplugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/mellanox"
+	ovsplugin "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/plugins/ovs"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
@@ -64,7 +65,7 @@ func (bm *Baremetal) DiscoverBridges() (sriovnetworkv1.Bridges, error) {
 
 // GetVendorPlugins loads and returns the appropriate plugins for the baremetal platform.
 // Returns the generic plugin as the main plugin, and vendor-specific plugins (Intel, Mellanox)
-// plus the k8s plugin (for Kubernetes clusters) as additional plugins.
+// plus the OVS plugin on both clusters and the SR-IOV boot-unit plugin on Kubernetes.
 func (bm *Baremetal) GetVendorPlugins(ns *sriovnetworkv1.SriovNetworkNodeState) (plugin.VendorPlugin, []plugin.VendorPlugin, error) {
 	additionalPlugins, err := bm.loadVendorPlugins(ns)
 	if err != nil {
@@ -80,6 +81,8 @@ func (bm *Baremetal) GetVendorPlugins(ns *sriovnetworkv1.SriovNetworkNodeState) 
 		k8sPlugin := k8splugin.NewK8sPlugin(bm.hostHelpers)
 		additionalPlugins = append(additionalPlugins, k8sPlugin)
 	}
+
+	additionalPlugins = append(additionalPlugins, ovsplugin.New(bm.hostHelpers))
 
 	genericPlugin, err := genericplugin.NewGenericPlugin(bm.hostHelpers)
 	if err != nil {
