@@ -181,7 +181,9 @@ const (
 	DevlinkParamApplyOnSf = "SF"
 
 	DevlinkParamFlowSteeringMode = "flow_steering_mode"
-	FlowSteeringModeSmfs         = "smfs"
+
+	FlowSteeringModeSmfs = "smfs"
+	FlowSteeringModeHmfs = "hmfs"
 
 	OvsGroupingPolicyPerPF = "perPF"
 	OvsGroupingPolicyPerVF = "perVF"
