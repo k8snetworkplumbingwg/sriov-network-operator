@@ -118,11 +118,9 @@ spec:
                 properties:
                   name:
                     description: |-
-                      Name is mandatory and must be unique.
-                      On Kubernetes:
-                      Name is the name of OvsHardwareOffloadConfig
-                      On OpenShift:
-                      Name is the name of MachineConfigPool to be enabled with OVS hardware offload
+                      On OpenShift, the operator migrates a legacy pool by copying the named
+                      MachineConfigPool's node selector into spec.nodeSelector and clearing this name.
+                      Use spec.nodeSelector for new pools.
                     type: string
                   otherConfig:
                     additionalProperties:

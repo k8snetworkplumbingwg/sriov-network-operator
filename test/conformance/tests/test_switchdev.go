@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -63,6 +62,11 @@ var _ = Describe("[sriov] Switchdev", Ordered, func() {
 
 		By(fmt.Sprintf("Testing on node %s, %d devices found", testNode, len(interfaces)))
 
+		By("Verifying that OVS hardware offload starts disabled")
+		output, stderr, err := runCommandOnConfigDaemon(testNode, "chroot", "/host", "ovs-vsctl", "-t", "5", "--if-exists", "get", "Open_vSwitch", ".", "other_config:hw-offload")
+		Expect(err).ToNot(HaveOccurred(), stderr)
+		Expect(strings.Trim(strings.TrimSpace(output), `"`)).To(BeElementOf("", "false"), "OVS hardware offload must start disabled")
+
 		previous := isFeatureFlagEnabled(consts.ManageSoftwareBridgesFeatureGate)
 		setFeatureFlag(consts.ManageSoftwareBridgesFeatureGate, true)
 		DeferCleanup(setFeatureFlag, consts.ManageSoftwareBridgesFeatureGate, previous)
@@ -70,29 +74,13 @@ var _ = Describe("[sriov] Switchdev", Ordered, func() {
 			Expect(namespaces.Clean(operatorNamespace, namespaces.Test, clients, discovery.Enabled())).To(Succeed())
 			WaitForSRIOVStable()
 		})
+		By("Creating a pool to enable OVS hardware offload")
 		pool := &sriovv1.SriovNetworkPoolConfig{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-switchdev-pool", Namespace: operatorNamespace},
 			Spec: sriovv1.SriovNetworkPoolConfigSpec{
 				NodeSelector:             &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/hostname": testNode}},
 				OvsHardwareOffloadConfig: &sriovv1.OvsHardwareOffloadConfig{OvsConfig: map[string]string{"hw-offload": "true", "tc-policy": "none"}},
 			},
-		}
-		if os.Getenv("CLUSTER_TYPE") == string(consts.ClusterTypeOpenshift) {
-			pool.Spec.NodeSelector = nil
-			node, err := clients.CoreV1Interface.Nodes().Get(context.Background(), testNode, metav1.GetOptions{})
-			Expect(err).ToNot(HaveOccurred())
-			desiredConfig := node.Annotations[consts.DesiredMachineConfigAnnotation]
-			Expect(desiredConfig).ToNot(BeEmpty(), "The selected node must have a desired MachineConfig")
-			machineConfig, err := clients.MachineConfigs().Get(context.Background(), desiredConfig, metav1.GetOptions{})
-			Expect(err).ToNot(HaveOccurred())
-			for _, owner := range machineConfig.OwnerReferences {
-				if owner.Kind == "MachineConfigPool" {
-					pool.Spec.OvsHardwareOffloadConfig.Name = owner.Name
-					break
-				}
-			}
-			Expect(pool.Spec.OvsHardwareOffloadConfig.Name).ToNot(BeEmpty(), "The selected node's MachineConfig must belong to a MachineConfigPool")
-			By("Enabling OVS hardware offload for MachineConfigPool " + pool.Spec.OvsHardwareOffloadConfig.Name)
 		}
 		Expect(clients.Create(context.Background(), pool)).To(Succeed())
 		for _, intf := range interfaces {
@@ -105,11 +93,12 @@ var _ = Describe("[sriov] Switchdev", Ordered, func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			WaitForSRIOVStable()
+			By("Waiting for OVSDB to report the pool's hardware offload settings")
 			Eventually(func(g Gomega) {
 				for key, value := range pool.Spec.OvsHardwareOffloadConfig.OvsConfig {
-					output, stderr, err := runCommandOnConfigDaemon(testNode, "chroot", "/host", "ovs-vsctl", "get", "Open_vSwitch", ".", "other_config:"+key)
+					output, stderr, err := runCommandOnConfigDaemon(testNode, "chroot", "/host", "ovs-vsctl", "-t", "5", "get", "Open_vSwitch", ".", "other_config:"+key)
 					g.Expect(err).ToNot(HaveOccurred(), stderr)
-					g.Expect(strings.Trim(strings.TrimSpace(output), `"`)).To(Equal(value))
+					g.Expect(strings.Trim(strings.TrimSpace(output), `"`)).To(Equal(value), "OVS other_config key %s", key)
 				}
 			}, waitingTime, time.Second).Should(Succeed(), "OVS must apply the pool's hardware offload configuration")
 

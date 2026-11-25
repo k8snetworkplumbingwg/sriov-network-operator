@@ -2,144 +2,116 @@ package controllers
 
 import (
 	"context"
-	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
 	"go.uber.org/mock/gomock"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/consts"
-	orchestratorMock "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator/mock"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/test/util"
+	orchestratormock "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/orchestrator/mock"
 )
 
-var _ = Describe("SriovNetworkPoolConfig controller", Ordered, func() {
-	var cancel context.CancelFunc
-	var ctx context.Context
-
-	BeforeAll(func() {
-		By("Create default SriovNetworkPoolConfig k8s objs")
-		poolConfig := &sriovnetworkv1.SriovNetworkPoolConfig{}
-		poolConfig.SetNamespace(testNamespace)
-		poolConfig.SetName(consts.DefaultConfigName)
-		poolConfig.Spec = sriovnetworkv1.SriovNetworkPoolConfigSpec{}
-		Expect(k8sClient.Create(context.Background(), poolConfig)).Should(Succeed())
-		DeferCleanup(func() {
-			err := k8sClient.Delete(context.Background(), poolConfig)
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		By("Setup controller manager")
-		k8sManager, err := setupK8sManagerForTest()
-		Expect(err).ToNot(HaveOccurred())
-
-		t := GinkgoT()
-		mockCtrl := gomock.NewController(t)
-		orchestrator := orchestratorMock.NewMockInterface(mockCtrl)
-
-		orchestrator.EXPECT().ClusterType().DoAndReturn(func() consts.ClusterType {
-			if vars.ClusterType == consts.ClusterTypeOpenshift {
-				return consts.ClusterTypeOpenshift
+var _ = Describe("Migrating a SriovNetworkPoolConfig from spec.ovsHardwareOffloadConfig.name to spec.nodeSelector", func() {
+	It("removes only the legacy finalizer on Kubernetes", func(ctx context.Context) {
+		const otherFinalizer = "example.com/other-finalizer"
+		beforeCR := &sriovnetworkv1.SriovNetworkPoolConfig{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "nic-offload-", Namespace: testNamespace,
+				Finalizers: []string{sriovnetworkv1.POOLCONFIGFINALIZERNAME, otherFinalizer},
+			},
+			Spec: sriovnetworkv1.SriovNetworkPoolConfigSpec{
+				OvsHardwareOffloadConfig: &sriovnetworkv1.OvsHardwareOffloadConfig{
+					Name: "worker", OvsConfig: map[string]string{"hw-offload": "true"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, beforeCR)).To(Succeed())
+		DeferCleanup(func(ctx context.Context) error {
+			pool := beforeCR.DeepCopy()
+			pool.Finalizers = nil
+			if err := k8sClient.Patch(ctx, pool, client.MergeFrom(beforeCR)); err != nil {
+				return client.IgnoreNotFound(err)
 			}
-			return consts.ClusterTypeKubernetes
-		}).AnyTimes()
-
-		// TODO: Change this to add tests for hypershift
-		orchestrator.EXPECT().Flavor().Return(consts.ClusterFlavorDefault).AnyTimes()
-
-		err = (&SriovNetworkPoolConfigReconciler{
-			Client:       k8sManager.GetClient(),
-			Scheme:       k8sManager.GetScheme(),
-			Orchestrator: orchestrator,
-		}).SetupWithManager(k8sManager)
-		Expect(err).ToNot(HaveOccurred())
-
-		ctx, cancel = context.WithCancel(context.Background())
-
-		wg := sync.WaitGroup{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer GinkgoRecover()
-			By("Start controller manager")
-			err := k8sManager.Start(ctx)
-			Expect(err).ToNot(HaveOccurred())
-		}()
-
-		DeferCleanup(func() {
-			By("Shutdown controller manager")
-			cancel()
-			wg.Wait()
+			return client.IgnoreNotFound(k8sClient.Delete(ctx, pool))
 		})
+
+		orch := orchestratormock.NewMockInterface(gomock.NewController(GinkgoT()))
+		orch.EXPECT().ClusterType().Return(consts.ClusterTypeKubernetes)
+		r := &SriovNetworkPoolConfigReconciler{Client: k8sClient, Orchestrator: orch}
+		key := client.ObjectKeyFromObject(beforeCR)
+		result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.IsZero()).To(BeTrue())
+
+		afterCR := &sriovnetworkv1.SriovNetworkPoolConfig{}
+		Expect(k8sClient.Get(ctx, key, afterCR)).To(Succeed())
+		Expect(afterCR.Spec).To(Equal(beforeCR.Spec))
+		Expect(afterCR.Finalizers).To(Equal([]string{otherFinalizer}))
 	})
 
-	Context("When is up", func() {
-		It("should be able to create machine config for MachineConfigPool specified in sriov pool config", func() {
-			if vars.ClusterType != consts.ClusterTypeOpenshift {
-				Skip("test should only be executed with openshift cluster type")
-			}
+	It("copies the MCP selector on OpenShift and removes the MCP name, finalizer and MachineConfig", func(ctx context.Context) {
 
-			config := &sriovnetworkv1.SriovNetworkPoolConfig{}
-			config.SetNamespace(testNamespace)
-			config.SetName("ovs-hw-offload-config")
-			mcpName := "worker-hwoffload"
-			mc := &mcfgv1.MachineConfig{}
-			mcName := "00-" + mcpName + "-" + consts.OVSHWOLMachineConfigNameSuffix
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: mcName, Namespace: testNamespace}, mc)
-			Expect(errors.IsNotFound(err)).Should(BeTrue())
-
-			mcp := &mcfgv1.MachineConfigPool{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: mcpName, Namespace: testNamespace}, mcp)
-			Expect(errors.IsNotFound(err)).Should(BeTrue())
-
-			mcp = &mcfgv1.MachineConfigPool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: mcpName,
+		beforeCR := &sriovnetworkv1.SriovNetworkPoolConfig{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "nic-offload-", Namespace: testNamespace,
+				Finalizers: []string{sriovnetworkv1.POOLCONFIGFINALIZERNAME},
+			},
+			Spec: sriovnetworkv1.SriovNetworkPoolConfigSpec{
+				OvsHardwareOffloadConfig: &sriovnetworkv1.OvsHardwareOffloadConfig{
+					Name: "worker", OvsConfig: map[string]string{"hw-offload": "true", "tc-policy": "none"},
 				},
-				Spec: mcfgv1.MachineConfigPoolSpec{
-					NodeSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"node-role.kubernetes.io/worker": "",
-						},
-					},
+			},
+		}
+
+		mcpMaxUnavailable := intstr.FromInt32(2)
+		mcp := &mcfgv1.MachineConfigPool{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker"},
+			Spec: mcfgv1.MachineConfigPoolSpec{
+				MaxUnavailable: &mcpMaxUnavailable,
+				NodeSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"node-role.kubernetes.io/worker": ""},
 				},
-			}
-			err = k8sClient.Create(ctx, mcp)
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(func() {
-				err = k8sClient.Delete(ctx, mcp)
-				Expect(err).ToNot(HaveOccurred())
-			})
+			},
+		}
 
-			config.Spec.OvsHardwareOffloadConfig = &sriovnetworkv1.OvsHardwareOffloadConfig{
-				Name: mcpName,
-			}
-			err = k8sClient.Create(ctx, config)
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(func() {
-				err = k8sClient.Delete(ctx, config)
-				Expect(err).ToNot(HaveOccurred())
-				// Finish finalization before deleting the MachineConfigPool or stopping its controller.
-				Eventually(func() bool {
-					return errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: config.Name, Namespace: config.Namespace}, config))
-				}, util.APITimeout, util.RetryInterval).Should(BeTrue())
+		mc := &mcfgv1.MachineConfig{ObjectMeta: metav1.ObjectMeta{
+			Name: "00-worker-ovs-hw-offload", Labels: map[string]string{mcfgv1.MachineConfigRoleLabelKey: "worker"},
+		}}
+		for _, obj := range []client.Object{mcp, mc, beforeCR} {
+			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(func(ctx context.Context) error {
+				return client.IgnoreNotFound(k8sClient.Delete(ctx, obj))
 			})
+		}
 
-			Eventually(func() error {
-				mc := &mcfgv1.MachineConfig{}
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: mcName, Namespace: testNamespace}, mc)
-				if err != nil {
-					return err
-				}
-				return nil
-			}, util.APITimeout, util.RetryInterval).Should(Succeed())
-		})
+		Expect(beforeCR.SetRevisionOnObject(mc)).To(Succeed())
+		Expect(k8sClient.Update(ctx, mc)).To(Succeed())
+
+		orch := orchestratormock.NewMockInterface(gomock.NewController(GinkgoT()))
+		orch.EXPECT().ClusterType().Return(consts.ClusterTypeOpenshift)
+		r := &SriovNetworkPoolConfigReconciler{Client: k8sClient, Orchestrator: orch}
+		key := client.ObjectKeyFromObject(beforeCR)
+		result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.IsZero()).To(BeTrue())
+
+		afterCR := &sriovnetworkv1.SriovNetworkPoolConfig{}
+		Expect(k8sClient.Get(ctx, key, afterCR)).To(Succeed())
+		Expect(afterCR.Spec).To(Equal(sriovnetworkv1.SriovNetworkPoolConfigSpec{
+			MaxUnavailable: &oneNode,
+			NodeSelector:   mcp.Spec.NodeSelector,
+			OvsHardwareOffloadConfig: &sriovnetworkv1.OvsHardwareOffloadConfig{
+				OvsConfig: beforeCR.Spec.OvsHardwareOffloadConfig.OvsConfig,
+			},
+		}))
+		Expect(afterCR.Finalizers).To(BeEmpty())
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(mc), mc))).To(BeTrue())
 	})
 })

@@ -16,10 +16,8 @@ import (
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/host/types"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/utils"
+	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
-
-// TODO: handle this to support unit-tests
-const systemdDir = "/usr/lib/systemd/system/"
 
 type service struct {
 	utilsHelper utils.CmdInterface
@@ -161,7 +159,12 @@ func (s *service) ReadOvsServiceInjectionManifestFile(filePath string, ovsConfig
 		return nil, err
 	}
 
-	dropinPath := systemdDir + serviceContent.Name + ".d/" + serviceContent.Dropins[0].Name
+	systemdDir := "/usr/lib/systemd/system"
+	if vars.ClusterType == consts.ClusterTypeOpenshift {
+		// RHCOS mounts /usr read-only.
+		systemdDir = "/etc/systemd/system"
+	}
+	dropinPath := path.Join(systemdDir, serviceContent.Name+".d", serviceContent.Dropins[0].Name)
 	return &types.Service{
 		Name:    serviceContent.Name,
 		Path:    dropinPath,

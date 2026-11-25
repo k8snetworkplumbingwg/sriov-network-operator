@@ -33,7 +33,7 @@ import (
 const (
 	LASTNETWORKNAMESPACE        = "operator.sriovnetwork.openshift.io/last-network-namespace"
 	NETATTDEFFINALIZERNAME      = "netattdef.finalizers.sriovnetwork.openshift.io"
-	POOLCONFIGFINALIZERNAME     = "poolconfig.finalizers.sriovnetwork.openshift.io"
+	POOLCONFIGFINALIZERNAME     = "poolconfig.finalizers.sriovnetwork.openshift.io" // TODO: Remove this constant when the legacy OVS MachineConfig migration is retired.
 	OPERATORCONFIGFINALIZERNAME = "operatorconfig.finalizers.sriovnetwork.openshift.io"
 	ESwithModeLegacy            = "legacy"
 	ESwithModeSwitchDev         = "switchdev"

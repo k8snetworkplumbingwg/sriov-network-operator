@@ -1,8 +1,6 @@
 package k8s
 
 import (
-	"errors"
-	"os"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -21,7 +19,6 @@ type K8sPlugin struct {
 	SpecVersion string
 	hostHelper  helper.HostHelpersInterface
 
-	openVSwitchService      *hostTypes.Service
 	sriovService            *hostTypes.Service
 	sriovPostNetworkService *hostTypes.Service
 
@@ -56,7 +53,6 @@ func (u *updateTargetReq) NeedReboot() bool {
 type k8sUpdateTarget struct {
 	sriovScript            updateTargetReq
 	sriovPostNetworkScript updateTargetReq
-	openVSwitch            updateTargetReq
 }
 
 func (u *k8sUpdateTarget) String() string {
@@ -67,34 +63,23 @@ func (u *k8sUpdateTarget) String() string {
 	if u.sriovPostNetworkScript.NeedReboot() {
 		updateList = append(updateList, "sriov-config-post-network.service")
 	}
-	if u.openVSwitch.NeedReboot() {
-		updateList = append(updateList, "ovs-vswitchd.service")
-	}
 	return strings.Join(updateList, ",")
 }
 
 func (u *k8sUpdateTarget) needReboot() bool {
-	return u.sriovScript.NeedReboot() || u.sriovPostNetworkScript.NeedReboot() || u.openVSwitch.NeedReboot()
+	return u.sriovScript.NeedReboot() || u.sriovPostNetworkScript.NeedReboot()
 }
 
 func (u *k8sUpdateTarget) reset() {
 	u.sriovScript = updateTargetReq{}
 	u.sriovPostNetworkScript = updateTargetReq{}
-	u.openVSwitch = updateTargetReq{}
 }
 
 const (
 	bindataManifestPath      = "bindata/manifests/"
-	switchdevManifestPath    = bindataManifestPath + "switchdev-config/"
-	switchdevUnits           = switchdevManifestPath + "switchdev-units/"
 	sriovUnits               = bindataManifestPath + "sriov-config-service/kubernetes/"
 	sriovUnitFile            = sriovUnits + "sriov-config-service.yaml"
 	sriovPostNetworkUnitFile = sriovUnits + "sriov-config-post-network-service.yaml"
-	ovsUnitFile              = switchdevManifestPath + "ovs-units/ovs-vswitchd.service.yaml"
-	// ovsMainServicePath is the on-disk path of the OVS service unit used to check
-	// whether OVS is installed; it is separate from the drop-in path stored in
-	// openVSwitchService.Path after ReadOvsServiceInjectionManifestFile.
-	ovsMainServicePath = "/usr/lib/systemd/system/ovs-vswitchd.service"
 )
 
 // Initialize our plugin and set up initial values
@@ -113,50 +98,26 @@ func (p *K8sPlugin) Name() string {
 	return p.PluginName
 }
 
-// OnNodeStateChange Invoked when SriovNetworkNodeState CR is created or updated, return if need dain and/or reboot node
-func (p *K8sPlugin) OnNodeStateChange(new *sriovnetworkv1.SriovNetworkNodeState) (needDrain bool, needReboot bool, err error) {
-	log.Log.Info("k8s plugin OnNodeStateChange()")
-	err = p.readManifestFiles(new.Spec.System.OvsConfig)
-	if err != nil {
-		log.Log.Error(err, "k8s plugin OnNodeStateChange(): failed to read manifests")
-		return
-	}
-
-	needDrain = false
-	needReboot = false
-
+// OnNodeStateChange Invoked when SriovNetworkNodeState CR is created or updated, return if need drain and/or reboot node
+func (p *K8sPlugin) OnNodeStateChange(*sriovnetworkv1.SriovNetworkNodeState) (bool, bool, error) {
 	p.updateTarget.reset()
-	// TODO add check for enableOvsOffload in OperatorConfig later
-	// Update services if switchdev required
-	if !vars.UsingSystemdMode && !sriovnetworkv1.IsSwitchdevModeSpec(new.Spec) {
-		return
+	if !vars.UsingSystemdMode {
+		return false, false, nil
 	}
-
-	if sriovnetworkv1.IsSwitchdevModeSpec(new.Spec) {
-		// Check services
-		err = p.ovsServiceStateUpdate()
-		if err != nil {
-			log.Log.Error(err, "k8s plugin OnNodeStateChange(): failed")
-			return
-		}
+	if err := p.readSriovServiceManifest(); err != nil {
+		return false, false, err
 	}
-
-	if vars.UsingSystemdMode {
-		// Check sriov service
-		err = p.sriovServicesStateUpdate()
-		if err != nil {
-			log.Log.Error(err, "k8s plugin OnNodeStateChange(): failed")
-			return
-		}
+	if err := p.readSriovPostNetworkServiceManifest(); err != nil {
+		return false, false, err
 	}
-
-	if p.updateTarget.needReboot() {
-		needDrain = true
-		needReboot = true
+	if err := p.sriovServicesStateUpdate(); err != nil {
+		return false, false, err
+	}
+	needReboot := p.updateTarget.needReboot()
+	if needReboot {
 		log.Log.Info("k8s plugin OnNodeStateChange(): needReboot to update", "target", p.updateTarget)
 	}
-
-	return
+	return needReboot, needReboot, nil
 }
 
 // TODO: implement - https://github.com/k8snetworkplumbingwg/sriov-network-operator/issues/630
@@ -168,21 +129,7 @@ func (p *K8sPlugin) CheckStatusChanges(*sriovnetworkv1.SriovNetworkNodeState) (b
 // Apply config change
 func (p *K8sPlugin) Apply() error {
 	log.Log.Info("k8s plugin Apply()")
-	if vars.UsingSystemdMode {
-		if err := p.updateSriovServices(); err != nil {
-			return err
-		}
-	}
-	return p.updateOVSService()
-}
-
-func (p *K8sPlugin) readOpenVSwitchdManifest(ovsConfig map[string]string) error {
-	openVSwitchService, err := p.hostHelper.ReadOvsServiceInjectionManifestFile(ovsUnitFile, ovsConfig)
-	if err != nil {
-		return err
-	}
-	p.openVSwitchService = openVSwitchService
-	return nil
+	return p.updateSriovServices()
 }
 
 func (p *K8sPlugin) readSriovServiceManifest() error {
@@ -200,19 +147,6 @@ func (p *K8sPlugin) readSriovPostNetworkServiceManifest() error {
 		return err
 	}
 	p.sriovPostNetworkService = sriovService
-	return nil
-}
-
-func (p *K8sPlugin) readManifestFiles(ovsConfig map[string]string) error {
-	if err := p.readOpenVSwitchdManifest(ovsConfig); err != nil {
-		return err
-	}
-	if err := p.readSriovServiceManifest(); err != nil {
-		return err
-	}
-	if err := p.readSriovPostNetworkServiceManifest(); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -253,57 +187,6 @@ func (p *K8sPlugin) updateSriovServices() error {
 			if err != nil {
 				return err
 			}
-		}
-	}
-	return nil
-}
-
-func (p *K8sPlugin) ovsServiceStateUpdate() error {
-	// Check that the OVS service itself is installed (not the drop-in).
-	exist, err := p.hostHelper.IsServiceExist(ovsMainServicePath)
-	if err != nil {
-		return err
-	}
-	if !exist {
-		log.Log.Info("k8s plugin systemServicesStateUpdate(): WARNING! openvswitch system service not found, skip update",
-			"service", p.openVSwitchService.Name)
-		return nil
-	}
-	if !p.isDropinNeedUpdate(p.openVSwitchService) {
-		// drop-in is up-to-date
-		return nil
-	}
-	p.updateTarget.openVSwitch.SetNeedReboot()
-	return nil
-}
-
-// isDropinNeedUpdate returns true when the on-disk drop-in file at
-// service.Path differs from the desired content, or does not exist yet.
-func (p *K8sPlugin) isDropinNeedUpdate(service *hostTypes.Service) bool {
-	existing, err := p.hostHelper.ReadService(service.Path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return true
-		}
-		log.Log.Error(err, "k8s plugin isDropinNeedUpdate(): failed to read drop-in, assuming update needed",
-			"path", service.Path)
-		return true
-	}
-	needChange, err := p.hostHelper.CompareServices(existing, service)
-	if err != nil {
-		log.Log.Error(err, "k8s plugin isDropinNeedUpdate(): failed to compare drop-in, assuming update needed")
-		return true
-	}
-	return needChange
-}
-
-func (p *K8sPlugin) updateOVSService() error {
-	if p.updateTarget.openVSwitch.NeedUpdate() {
-		// Always write the drop-in so the file is in place before any reboot.
-		err := p.hostHelper.WriteServiceDropin(p.openVSwitchService)
-		if err != nil {
-			log.Log.Error(err, "k8s plugin updateOVSService(): failed to write OVS drop-in")
-			return err
 		}
 	}
 	return nil

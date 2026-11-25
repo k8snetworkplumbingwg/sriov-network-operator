@@ -29,12 +29,9 @@ type SriovNetworkPoolConfigSpec struct {
 }
 
 type OvsHardwareOffloadConfig struct {
-	// Name is mandatory and must be unique.
-	// On Kubernetes:
-	// Name is the name of OvsHardwareOffloadConfig
-	// On OpenShift:
-	// Name is the name of MachineConfigPool to be enabled with OVS hardware offload
-	// TODO: Remove MachineConfig-related configuration from SriovNetworkPoolConfig in the future.
+	// On OpenShift, the operator migrates a legacy pool by copying the named
+	// MachineConfigPool's node selector into spec.nodeSelector and clearing this name.
+	// Use spec.nodeSelector for new pools.
 	Name string `json:"name,omitempty"`
 	// OVS config. It will be provided for ovs-vswitchd service as other_config option
 	// +kubebuilder:default:={hw-offload: "true"}

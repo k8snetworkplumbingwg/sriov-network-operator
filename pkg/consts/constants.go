@@ -61,7 +61,7 @@ const (
 	RoleBinding                        = "RoleBinding"
 	ServiceAccount                     = "ServiceAccount"
 	DPConfigFileName                   = "config.json"
-	OVSHWOLMachineConfigNameSuffix     = "ovs-hw-offload"
+	OVSHWOLMachineConfigNameSuffix     = "ovs-hw-offload" // TODO: Remove this constant when the legacy OVS MachineConfig migration is retired.
 
 	LinkTypeEthernet   = "ether"
 	LinkTypeInfiniband = "infiniband"
