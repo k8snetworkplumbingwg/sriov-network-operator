@@ -183,6 +183,7 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().DiscoverVDPAType(vfAddr).Return("")
 			hostMock.EXPECT().TryGetInterfaceName(vfAddr).Return("")
 			hostMock.EXPECT().GetNetDevNodeGUID(vfAddr).Return("")
+			hostMock.EXPECT().GetDevlinkDeviceParams(vfAddr).Return(nil, testError)
 		}
 
 		parseMAC := func(mac string) net.HardwareAddr {
@@ -215,6 +216,7 @@ var _ = Describe("SRIOV", func() {
 				HardwareAddr: parseMAC("4e:fd:3d:08:59:b1"),
 			}).MinTimes(1)
 			hostMock.EXPECT().GetNetDevNodeGUID(vfAddr).Return("guid1")
+			hostMock.EXPECT().GetDevlinkDeviceParams(vfAddr).Return(nil, testError)
 			pfVfs := map[int]netlink.VfInfo{
 				0: {ID: 0, Mac: parseMAC("aa:aa:aa:aa:aa:00")},
 				1: {ID: 1, Mac: parseMAC("aa:aa:aa:aa:aa:01")},
@@ -248,6 +250,7 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().TryGetInterfaceName(vfAddr).Return("enp216s0f0v1")
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0v1").Return(nil, testError)
 			hostMock.EXPECT().GetNetDevNodeGUID(vfAddr).Return("")
+			hostMock.EXPECT().GetDevlinkDeviceParams(vfAddr).Return(nil, testError)
 
 			vf, valid := s.(*sriov).getVfInfo(context.Background(), vfAddr, "enp216s0f0np0",
 				sriovnetworkv1.ESwithModeSwitchDev, nil, map[int]netlink.VfInfo{1: {ID: 1}})
@@ -318,6 +321,7 @@ var _ = Describe("SRIOV", func() {
 				hostMock.EXPECT().DiscoverVDPAType(addr).Return("")
 				hostMock.EXPECT().TryGetInterfaceName(addr).Return("")
 				hostMock.EXPECT().GetNetDevNodeGUID(addr).Return("")
+				hostMock.EXPECT().GetDevlinkDeviceParams(addr).Return(nil, testError)
 			}
 			dputilsLibMock.EXPECT().GetDriverName("0000:d8:00.3").Return("mlx5_core", nil)
 			dputilsLibMock.EXPECT().GetVFID("0000:d8:00.3").Return(-1, errors.New("unable to read VF id"))
@@ -1103,7 +1107,9 @@ var _ = Describe("SRIOV", func() {
 			hostMock.EXPECT().AddPersistPFNameUdevRule("0000:d8:00.0", "enp216s0f0np0").Return(nil)
 			hostMock.EXPECT().EnableHwTcOffload("enp216s0f0np0").Return(nil)
 			hostMock.EXPECT().GetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode").Return("", syscall.EINVAL)
-			hostMock.EXPECT().DetachUplinkAndVFRepresentorsFromManagedBridge("0000:d8:00.0").Return(nil)
+			// the PF is detached twice: once by the pre-reconcile bridge cleanup
+			// pre-pass and once in createVFs before the eSwitch mode change
+			hostMock.EXPECT().DetachUplinkAndVFRepresentorsFromManagedBridge("0000:d8:00.0").Return(nil).Times(2)
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").Return([]string{"0000:d8:00.2"}, nil).AnyTimes()
 			pfLinkMock := netlinkMockPkg.NewMockLink(testCtrl)
 			netlinkLibMock.EXPECT().LinkByName("enp216s0f0np0").Return(pfLinkMock, nil).Times(2)
@@ -1166,15 +1172,8 @@ var _ = Describe("SRIOV", func() {
 				Files: map[string][]byte{"/sys/bus/pci/devices/0000:d8:00.0/sriov_numvfs": {}},
 			})
 
-			dputilsLibMock.EXPECT().GetSriovVFcapacity("0000:d8:00.0").Return(1)
-			dputilsLibMock.EXPECT().GetVFconfigured("0000:d8:00.0").Return(0)
-			hostMock.EXPECT().RemoveDisableNMUdevRule("0000:d8:00.0").Return(nil)
-			hostMock.EXPECT().RemovePersistPFNameUdevRule("0000:d8:00.0").Return(nil)
-			hostMock.EXPECT().RemoveVfRepresentorUdevRule("0000:d8:00.0").Return(nil)
-			hostMock.EXPECT().AddDisableNMUdevRule("0000:d8:00.0").Return(nil)
-			hostMock.EXPECT().AddPersistPFNameUdevRule("0000:d8:00.0", "enp216s0f0np0").Return(nil)
-			hostMock.EXPECT().EnableHwTcOffload("enp216s0f0np0").Return(nil)
-			hostMock.EXPECT().GetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode").Return("", syscall.EINVAL)
+			// the pre-reconcile bridge cleanup pre-pass runs before any PF
+			// configuration, so its failure aborts before the udev rule setup
 			hostMock.EXPECT().DetachUplinkAndVFRepresentorsFromManagedBridge("0000:d8:00.0").Return(testError)
 
 			err := s.ConfigSriovInterfaces(storeManagerMode,
@@ -1410,6 +1409,20 @@ var _ = Describe("SRIOV", func() {
 		})
 
 		It("applies PF devlink params after switchdev mode and before VF config", func() {
+			helpers.GinkgoConfigureFakeFS(&fakefilesystem.FS{
+				Dirs:     []string{"/sys/bus/pci/devices/0000:d8:00.0", "/sys/bus/pci/devices/0000:d8:00.2"},
+				Files:    map[string][]byte{"/sys/bus/pci/devices/0000:d8:00.0/sriov_numvfs": {}},
+				Symlinks: map[string]string{"/sys/bus/pci/devices/0000:d8:00.2/physfn": "../../0000:d8:00.0"},
+			})
+			dputilsLibMock.EXPECT().GetSriovVFcapacity("0000:d8:00.0").Return(1).AnyTimes()
+			hostMock.EXPECT().EnableHwTcOffload("enp216s0f0np0").Return(nil)
+			dputilsLibMock.EXPECT().GetVFconfigured("0000:d8:00.0").Return(0).AnyTimes()
+			hostMock.EXPECT().RemoveDisableNMUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().RemovePersistPFNameUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().RemoveVfRepresentorUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().AddDisableNMUdevRule("0000:d8:00.0").Return(nil)
+			hostMock.EXPECT().AddPersistPFNameUdevRule("0000:d8:00.0", "enp216s0f0np0").Return(nil)
+			hostMock.EXPECT().GetDevlinkDeviceParam("0000:d8:00.0", "flow_steering_mode").Return("smfs", nil)
 			vfListCalls := 0
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").DoAndReturn(func(string) ([]string, error) {
 				vfListCalls++

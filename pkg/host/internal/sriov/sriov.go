@@ -988,7 +988,7 @@ func (s *sriov) ConfigSriovInterfaces(storeManager store.ManagerInterface,
 			if sriovnetworkv1.GetEswitchModeFromSpec(iface) != sriovnetworkv1.ESwithModeSwitchDev {
 				continue
 			}
-			if err := s.detachPFFromBridge(iface.PciAddress); err != nil {
+			if err := s.detachUplinkAndVFRepresentorsFromBridge(iface.PciAddress); err != nil {
 				return fmt.Errorf("pre-reconcile bridge cleanup failed for %s: %w", iface.PciAddress, err)
 			}
 		}
@@ -1501,7 +1501,7 @@ func (s *sriov) preparePFForVFCreation(iface *sriovnetworkv1.Interface) error {
 	configuredVFs := s.dputilsLib.GetVFconfigured(iface.PciAddress)
 
 	if currentEswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
-		if err := s.detachPFFromBridge(iface.PciAddress); err != nil {
+		if err := s.detachUplinkAndVFRepresentorsFromBridge(iface.PciAddress); err != nil {
 			return err
 		}
 	}
