@@ -1409,6 +1409,7 @@ var _ = Describe("SRIOV", func() {
 			helpers.GinkgoAssertFileContentsEquals("/sys/bus/pci/devices/0000:d8:00.0/sriov_numvfs", "1")
 		})
 
+		It("applies PF devlink params after switchdev mode and before VF config", func() {
 			vfListCalls := 0
 			dputilsLibMock.EXPECT().GetVFList("0000:d8:00.0").DoAndReturn(func(string) ([]string, error) {
 				vfListCalls++

@@ -672,7 +672,6 @@ func (s *sriov) preparePFForFlowSteeringChange(iface *sriovnetworkv1.Interface) 
 	if s.GetNicSriovMode(iface.PciAddress) != sriovnetworkv1.ESwithModeLegacy {
 		if err := s.setEswitchModeAndNumVFs(
 			iface.PciAddress,
-			iface.Name,
 			sriovnetworkv1.ESwithModeLegacy,
 			0,
 		); err != nil {
@@ -989,7 +988,7 @@ func (s *sriov) ConfigSriovInterfaces(storeManager store.ManagerInterface,
 			if sriovnetworkv1.GetEswitchModeFromSpec(iface) != sriovnetworkv1.ESwithModeSwitchDev {
 				continue
 			}
-			if err := s.detachPFFromBridge(iface.PciAddress, iface.Name, iface.NumVfs); err != nil {
+			if err := s.detachPFFromBridge(iface.PciAddress); err != nil {
 				return fmt.Errorf("pre-reconcile bridge cleanup failed for %s: %w", iface.PciAddress, err)
 			}
 		}
@@ -1502,7 +1501,7 @@ func (s *sriov) preparePFForVFCreation(iface *sriovnetworkv1.Interface) error {
 	configuredVFs := s.dputilsLib.GetVFconfigured(iface.PciAddress)
 
 	if currentEswitchMode == sriovnetworkv1.ESwithModeSwitchDev {
-		if err := s.detachPFFromBridge(iface.PciAddress, iface.Name, iface.NumVfs); err != nil {
+		if err := s.detachPFFromBridge(iface.PciAddress); err != nil {
 			return err
 		}
 	}
@@ -1591,7 +1590,7 @@ func (s *sriov) waitForVFRemoval(pciAddr string, maxTimeout time.Duration) error
 	return nil
 }
 
-type setEswitchModeAndNumVFsFn func(string, string, string, int) error
+type setEswitchModeAndNumVFsFn func(string, string, int) error
 
 func (s *sriov) setEswitchModeAndNumVFs(pciAddr string, desiredEswitchMode string, numVFs int) error {
 	pfDriverName, err := s.dputilsLib.GetDriverName(pciAddr)
