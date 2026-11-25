@@ -53,6 +53,12 @@ type VfGroup struct {
 	Mtu          int    `json:"mtu,omitempty"`
 	IsRdma       bool   `json:"isRdma,omitempty"`
 	VdpaType     string `json:"vdpaType,omitempty"`
+	// ExcludeTopology is copied from the policy's spec.excludeTopology.
+	// It only affects the device-plugin configuration, which is consumed
+	// when a pod allocates a VF. A change therefore requires evicting pods
+	// that already hold VFs of the affected resource (partial node drain),
+	// in addition to restarting the device plugin.
+	ExcludeTopology bool `json:"excludeTopology,omitempty"`
 }
 
 type InterfaceExt struct {

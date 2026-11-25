@@ -535,13 +535,14 @@ func (p *SriovNetworkNodePolicy) generatePfNameVfGroup(iface *InterfaceExt) (*Vf
 	}
 	rng := strconv.Itoa(rngStart) + "-" + strconv.Itoa(rngEnd)
 	return &VfGroup{
-		ResourceName: p.Spec.ResourceName,
-		DeviceType:   p.Spec.DeviceType,
-		VfRange:      rng,
-		PolicyName:   p.GetName(),
-		Mtu:          p.Spec.Mtu,
-		IsRdma:       p.Spec.IsRdma,
-		VdpaType:     p.Spec.VdpaType,
+		ResourceName:    p.Spec.ResourceName,
+		DeviceType:      p.Spec.DeviceType,
+		VfRange:         rng,
+		PolicyName:      p.GetName(),
+		Mtu:             p.Spec.Mtu,
+		IsRdma:          p.Spec.IsRdma,
+		VdpaType:        p.Spec.VdpaType,
+		ExcludeTopology: p.Spec.ExcludeTopology,
 	}, nil
 }
 

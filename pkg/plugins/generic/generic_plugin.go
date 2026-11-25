@@ -397,6 +397,11 @@ func (p *GenericPlugin) needToUpdateVFs(desired sriovnetworkv1.SriovNetworkNodeS
 						"address", iface.PciAddress)
 					return true
 				}
+				if p.excludeTopologyNeedsDrain(&iface) {
+					log.Log.V(2).Info("generic plugin needToUpdateVFs(): need drain, excludeTopology changed",
+						"address", iface.PciAddress)
+					return true
+				}
 				log.Log.V(2).Info("generic plugin needToUpdateVFs(): no need drain,for PCI address",
 					"address", iface.PciAddress, "expected-vfs", iface.NumVfs, "current-vfs", ifaceStatus.NumVfs)
 			}
@@ -426,6 +431,44 @@ func (p *GenericPlugin) needToUpdateVFs(desired sriovnetworkv1.SriovNetworkNodeS
 
 			log.Log.V(2).Info("generic plugin needToUpdateVFs(): need drain since interface needs to be reset",
 				"interface", ifaceStatus)
+			return true
+		}
+	}
+	return false
+}
+
+// excludeTopologyNeedsDrain reports whether the desired VF groups request a
+// different excludeTopology value than the one recorded as last applied for
+// this PF. excludeTopology only affects the device-plugin configuration,
+// which is consumed when a pod allocates a VF, so a change requires evicting
+// pods that already hold VFs from the affected resource (partial node drain).
+// The applied value is read from the PF status file persisted by the config
+// daemon (/etc/sriov-operator/pci/<pci-address>).
+func (p *GenericPlugin) excludeTopologyNeedsDrain(iface *sriovnetworkv1.Interface) bool {
+	if len(iface.VfGroups) == 0 {
+		return false
+	}
+	pfStatus, exist, err := p.helpers.LoadPfsStatus(iface.PciAddress)
+	if err != nil {
+		log.Log.Error(err, "excludeTopologyNeedsDrain(): failed to load applied PF status",
+			"address", iface.PciAddress)
+		return false
+	}
+	if !exist {
+		// No recorded applied state (first application of this PF): the
+		// device plugin will start with the current config, there are no
+		// in-flight allocations configured under a previous value.
+		return false
+	}
+	applied := map[string]bool{}
+	for _, gr := range pfStatus.VfGroups {
+		applied[gr.ResourceName] = gr.ExcludeTopology
+	}
+	for _, gr := range iface.VfGroups {
+		if appliedVal, ok := applied[gr.ResourceName]; ok && appliedVal != gr.ExcludeTopology {
+			log.Log.Info("excludeTopologyNeedsDrain(): excludeTopology changed for resource",
+				"address", iface.PciAddress, "resource", gr.ResourceName,
+				"desired", gr.ExcludeTopology, "applied", appliedVal)
 			return true
 		}
 	}
