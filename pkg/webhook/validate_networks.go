@@ -3,32 +3,63 @@ package webhook
 import (
 	"fmt"
 
-	v1 "k8s.io/api/admission/v1"
-
 	sriovnetworkv1 "github.com/k8snetworkplumbingwg/sriov-network-operator/api/v1"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/controllers"
 	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/vars"
 )
 
-func validateSriovNetwork(cr *sriovnetworkv1.SriovNetwork, operation v1.Operation) (bool, []string, error) {
-	err := validateNetworkNamespace(cr)
-	if err != nil {
+func validateSriovNetwork(cr *sriovnetworkv1.SriovNetwork) (bool, []string, error) {
+	if err := validateNetworkNamespace(cr); err != nil {
+		return false, nil, err
+	}
+	if err := validateCapabilities(cr.Spec.Capabilities); err != nil {
+		return false, nil, err
+	}
+	if err := validateIPAM(cr.Spec.IPAM); err != nil {
+		return false, nil, err
+	}
+	if err := validateMetaPlugins(cr.Spec.MetaPluginsConfig); err != nil {
+		return false, nil, err
+	}
+	if err := validateLogFile(cr.Spec.LogFile); err != nil {
 		return false, nil, err
 	}
 	return true, nil, nil
 }
 
-func validateSriovIBNetwork(cr *sriovnetworkv1.SriovIBNetwork, operation v1.Operation) (bool, []string, error) {
-	err := validateNetworkNamespace(cr)
-	if err != nil {
+func validateSriovIBNetwork(cr *sriovnetworkv1.SriovIBNetwork) (bool, []string, error) {
+	if err := validateNetworkNamespace(cr); err != nil {
+		return false, nil, err
+	}
+	if err := validateCapabilities(cr.Spec.Capabilities); err != nil {
+		return false, nil, err
+	}
+	if err := validateIPAM(cr.Spec.IPAM); err != nil {
+		return false, nil, err
+	}
+	if err := validateMetaPlugins(cr.Spec.MetaPluginsConfig); err != nil {
 		return false, nil, err
 	}
 	return true, nil, nil
 }
 
-func validateOVSNetwork(cr *sriovnetworkv1.OVSNetwork, operation v1.Operation) (bool, []string, error) {
-	err := validateNetworkNamespace(cr)
-	if err != nil {
+func validateOVSNetwork(cr *sriovnetworkv1.OVSNetwork) (bool, []string, error) {
+	if err := validateNetworkNamespace(cr); err != nil {
+		return false, nil, err
+	}
+	if err := validateCapabilities(cr.Spec.Capabilities); err != nil {
+		return false, nil, err
+	}
+	if err := validateIPAM(cr.Spec.IPAM); err != nil {
+		return false, nil, err
+	}
+	if err := validateMetaPlugins(cr.Spec.MetaPluginsConfig); err != nil {
+		return false, nil, err
+	}
+	if err := validateBridgeName(cr.Spec.Bridge); err != nil {
+		return false, nil, err
+	}
+	if err := validateInterfaceType(cr.Spec.InterfaceType); err != nil {
 		return false, nil, err
 	}
 	return true, nil, nil
