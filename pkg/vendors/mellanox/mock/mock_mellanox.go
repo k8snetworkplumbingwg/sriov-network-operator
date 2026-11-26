@@ -72,6 +72,18 @@ func (mr *MockMellanoxInterfaceMockRecorder) GetMlxNicFwData(pciAddress any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMlxNicFwData", reflect.TypeOf((*MockMellanoxInterface)(nil).GetMlxNicFwData), pciAddress)
 }
 
+// InvalidateCache mocks base method.
+func (m *MockMellanoxInterface) InvalidateCache() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "InvalidateCache")
+}
+
+// InvalidateCache indicates an expected call of InvalidateCache.
+func (mr *MockMellanoxInterfaceMockRecorder) InvalidateCache() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InvalidateCache", reflect.TypeOf((*MockMellanoxInterface)(nil).InvalidateCache))
+}
+
 // MlxConfigFW mocks base method.
 func (m *MockMellanoxInterface) MlxConfigFW(attributesToChange map[string]mlxutils.MlxNic) error {
 	m.ctrl.T.Helper()
@@ -114,4 +126,16 @@ func (m *MockMellanoxInterface) MstConfigReadData(arg0 string) (string, string, 
 func (mr *MockMellanoxInterfaceMockRecorder) MstConfigReadData(arg0 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MstConfigReadData", reflect.TypeOf((*MockMellanoxInterface)(nil).MstConfigReadData), arg0)
+}
+
+// SetGeneration mocks base method.
+func (m *MockMellanoxInterface) SetGeneration(gen int64) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetGeneration", gen)
+}
+
+// SetGeneration indicates an expected call of SetGeneration.
+func (mr *MockMellanoxInterfaceMockRecorder) SetGeneration(gen any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetGeneration", reflect.TypeOf((*MockMellanoxInterface)(nil).SetGeneration), gen)
 }
