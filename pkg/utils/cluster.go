@@ -2,11 +2,13 @@ package utils
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -174,7 +176,8 @@ func RemoveLabelFromNode(ctx context.Context, nodeName string, key string, c cli
 	return removeLabelObject(ctx, node, key, c)
 }
 
-// RemoveAnnotationFromObject removes an annotation from a kubernetes object
+// RemoveAnnotationFromObject removes only the requested annotation, preserving concurrent unrelated annotations.
+// The caller object is left unchanged.
 func RemoveAnnotationFromObject(ctx context.Context, obj client.Object, key string, c client.Client) error {
 	newObj := obj.DeepCopyObject().(client.Object)
 	if newObj.GetAnnotations() == nil {
@@ -187,10 +190,17 @@ func RemoveAnnotationFromObject(ctx context.Context, obj client.Object, key stri
 			"objectName", obj.GetName(),
 			"objectKind", obj.GetObjectKind(),
 			"annotationKey", key)
-		delete(newObj.GetAnnotations(), key)
-		patch := client.MergeFrom(obj)
-		err := c.Patch(ctx,
-			newObj, patch)
+		// A diff that removes the final annotation can clear the whole map.
+		// Scope the merge patch to this key even when the fetched map has only one entry.
+		data, err := json.Marshal(map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"annotations": map[string]interface{}{key: nil},
+			},
+		})
+		if err != nil {
+			return err
+		}
+		err = c.Patch(ctx, newObj, client.RawPatch(types.MergePatchType, data))
 		if err != nil {
 			log.Log.Error(err, "RemoveAnnotationFromObject(): Failed to patch object")
 			return err
