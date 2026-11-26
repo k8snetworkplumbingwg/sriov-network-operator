@@ -44,6 +44,10 @@ spec:
             memory: 100Mi
             cpu: 100m
         securityContext:
+          {{- if .MetricsExporterSELinuxType }}
+          seLinuxOptions:
+            type: {{ .MetricsExporterSELinuxType | quote }}
+          {{- end }}
           capabilities:
             drop:
               - ALL

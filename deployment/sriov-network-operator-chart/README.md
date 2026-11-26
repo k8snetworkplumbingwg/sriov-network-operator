@@ -87,10 +87,14 @@ We have introduced the following Chart parameters.
 | `operator.clustertype` | string | `kubernetes` | Cluster environment type |
 | `operator.metricsExporter.port` | string | `9110` | Port where the Network Metrics Exporter listen |
 | `operator.metricsExporter.certificates.secretName` | string | `metrics-exporter-cert` | Secret name to serve metrics via TLS. The secret must have the same fields as `operator.admissionControllers.certificates.secretNames` |
+| `operator.metricsExporter.seLinuxType` | string | `""` | Optional SELinux type for the metrics-exporter container. Leave empty to use the runtime default; use a type permitted by the node's SELinux policy to access the exporter's host files. |
 | `operator.metricsExporter.prometheusOperator.enabled` | bool | false | Wheter the operator shoud configure Prometheus resources or not (e.g. `ServiceMonitors`). |
 | `operator.metricsExporter.prometheusOperator.serviceAccount` | string | `prometheus-k8s` | The service account used by the Prometheus Operator. This is used to give Prometheus the permission to list resource in the SR-IOV operator namespace |
 | `operator.metricsExporter.prometheusOperator.namespace` | string | `monitoring` | The namespace where the Prometheus Operator is installed. Setting this variable makes the operator deploy `monitoring.coreos.com` resources. |
 | `operator.metricsExporter.prometheusOperator.deployRules` | bool | false | Whether the operator should deploy `PrometheusRules` to scrape namespace version of metrics. |
+
+For non-Helm deployments, the operator's `METRICS_EXPORTER_SELINUX_TYPE` environment variable provides the same optional
+SELinux type setting for the metrics-exporter container.
 
 #### Admission Controllers parameters
 
