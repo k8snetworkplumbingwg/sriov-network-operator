@@ -54,8 +54,11 @@ You need to tell the cluster type for ocp `CLUSTER_TYPE=openshift` and for k8s `
 
 ## Switchdev mock driver on Kubernetes
 
-The virtual runner clones the `main` branch of [switchdev-mock-driver](https://github.com/SchSeba/switchdev-mock-driver)
-on each worker, records its commit and runs its installer. Setup builds for the
+The virtual runner uses the sibling `switchdev-mock-driver` checkout when present,
+otherwise clones the `main` branch of [switchdev-mock-driver](https://github.com/SchSeba/switchdev-mock-driver).
+Set `MOCK_DRIVER_SOURCE` to use another checkout or `MOCK_SMARTNIC_REPO` to clone
+another HTTPS repository. The runner records the commit, copies the source to
+each worker and runs its installer. Setup builds for the
 running guest kernel using matching headers; no fixed release is required. The runner attests the dedicated QEMU
 NICs on the same test network in libvirt XML using explicit MACs. Each worker
 has three NICs: management `igb`, secondary `igb` (`sriovtest0`) for regular tests, and
@@ -67,7 +70,6 @@ The operator and CNI create the final VFs, bridges, NADs and representor ports.
 Run on the libvirt host; this deletes and recreates the named cluster:
 
 ```bash
-MOCK_SMARTNIC_REPO=https://github.com/SchSeba/switchdev-mock-driver.git \
 OVS_CNI_IMAGE=quay.io/schseba/ovs-cni-plugin:latest \
 CLUSTER_TYPE=kubernetes SKIP_DELETE=TRUE \
 make test-e2e-conformance-virtual-k8s-cluster

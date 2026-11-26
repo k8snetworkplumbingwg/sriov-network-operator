@@ -156,16 +156,22 @@ func WriteFileWithTimeout(path string, data []byte, perm os.FileMode, timeout ti
 	}
 }
 
-// ValidateOvsConfig checks that all OVS other_config keys and values are safe
-// for embedding in a shell command. Call this at admission time to surface
-// errors before they reach RenderOtherOvsConfigOption.
+// ValidateOvsConfig checks that all OVS other_config keys and values can be
+// represented in the ovs-vswitchd drop-in. Call this at admission time to
+// surface errors before they reach RenderOtherOvsConfigOption.
 func ValidateOvsConfig(ovsConfig map[string]string) error {
 	for key, value := range ovsConfig {
 		if !ovsKeyRegexp.MatchString(key) {
 			return fmt.Errorf("OVS config key %q is invalid: use only alphanumeric characters, underscores and hyphens", key)
 		}
-		if strings.Contains(value, "'") {
-			return fmt.Errorf("OVS config value for key %q must not contain a single quote", key)
+		// Everything else is quoted by RenderOtherOvsConfigOption. systemd refuses
+		// to unescape a NUL in an Exec* argument, and a line break has no use in an
+		// OVS value but would turn the drop-in into a multi-line command.
+		if strings.ContainsAny(value, "\n\r") {
+			return fmt.Errorf("OVS config value for key %q must not contain a line break", key)
+		}
+		if strings.ContainsRune(value, 0) {
+			return fmt.Errorf("OVS config value for key %q must not contain a NUL byte", key)
 		}
 	}
 	return nil
