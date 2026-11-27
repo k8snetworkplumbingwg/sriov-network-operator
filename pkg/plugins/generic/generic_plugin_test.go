@@ -404,7 +404,7 @@ var _ = Describe("Generic plugin", func() {
 			Expect(needDrain).To(BeTrue())
 		})
 
-		It("should drain because GUID address value is the default one on VF of type netdevice, rdma enabled and link type ETH", func() {
+		DescribeTable("checks VF GUIDs for RDMA Ethernet", func(guid string, wantUpdate bool) {
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -444,7 +444,7 @@ var _ = Describe("Generic plugin", func() {
 							Mtu:        1500,
 							Driver:     "mlx5_core",
 							Mac:        "0c:42:a1:55:ee:46",
-							GUID:       "0000:0000:0000:0000",
+							GUID:       guid,
 						}},
 					}},
 				},
@@ -453,8 +453,18 @@ var _ = Describe("Generic plugin", func() {
 			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(networkNodeState)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(needReboot).To(BeFalse())
-			Expect(needDrain).To(BeTrue())
-		})
+			Expect(needDrain).To(Equal(wantUpdate))
+
+			changed, err := genericPlugin.CheckStatusChanges(networkNodeState)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(changed).To(Equal(wantUpdate))
+		},
+			Entry("zero GUID in sysfs format", "0000:0000:0000:0000", true),
+			Entry("zero GUID in netlink format", "00:00:00:00:00:00:00:00", true),
+			Entry("initialized GUID in sysfs format", "0000:0000:0000:0001", false),
+			Entry("initialized GUID in netlink format", "00:00:00:00:00:00:00:01", false),
+			Entry("unavailable GUID", "", false),
+		)
 
 		It("should not drain if GUID address value is not set on VF of type netdevice, rdma enabled and link type ETH", func() {
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
@@ -507,7 +517,7 @@ var _ = Describe("Generic plugin", func() {
 			Expect(needDrain).To(BeFalse())
 		})
 
-		It("should not drain if GUID address value is the default one on VF of type netdevice, rdma disabled and link type ETH", func() {
+		DescribeTable("ignores VF GUIDs for non-RDMA Ethernet", func(guid string, wantUpdate bool) {
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -546,7 +556,7 @@ var _ = Describe("Generic plugin", func() {
 							Mtu:        1500,
 							Driver:     "mlx5_core",
 							Mac:        "0c:42:a1:55:ee:46",
-							GUID:       "0000:0000:0000:0000",
+							GUID:       guid,
 						}},
 					}},
 				},
@@ -555,10 +565,20 @@ var _ = Describe("Generic plugin", func() {
 			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(networkNodeState)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(needReboot).To(BeFalse())
-			Expect(needDrain).To(BeFalse())
-		})
+			Expect(needDrain).To(Equal(wantUpdate))
 
-		It("should drain because GUID address value is the default one on VF of type netdevice and link type IB", func() {
+			changed, err := genericPlugin.CheckStatusChanges(networkNodeState)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(changed).To(Equal(wantUpdate))
+		},
+			Entry("zero GUID in sysfs format", "0000:0000:0000:0000", false),
+			Entry("zero GUID in netlink format", "00:00:00:00:00:00:00:00", false),
+			Entry("initialized GUID in sysfs format", "0000:0000:0000:0001", false),
+			Entry("initialized GUID in netlink format", "00:00:00:00:00:00:00:01", false),
+			Entry("unavailable GUID", "", false),
+		)
+
+		DescribeTable("checks VF GUIDs for InfiniBand", func(guid string, wantUpdate bool) {
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{
 				Spec: sriovnetworkv1.SriovNetworkNodeStateSpec{
 					Interfaces: sriovnetworkv1.Interfaces{{
@@ -596,7 +616,7 @@ var _ = Describe("Generic plugin", func() {
 							Name:       "sriovif1v0",
 							Mtu:        1500,
 							Driver:     "mlx5_core",
-							GUID:       "0000:0000:0000:0000",
+							GUID:       guid,
 						}},
 					}},
 				},
@@ -605,8 +625,18 @@ var _ = Describe("Generic plugin", func() {
 			needDrain, needReboot, err := genericPlugin.OnNodeStateChange(networkNodeState)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(needReboot).To(BeFalse())
-			Expect(needDrain).To(BeTrue())
-		})
+			Expect(needDrain).To(Equal(wantUpdate))
+
+			changed, err := genericPlugin.CheckStatusChanges(networkNodeState)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(changed).To(Equal(wantUpdate))
+		},
+			Entry("zero GUID in sysfs format", "0000:0000:0000:0000", true),
+			Entry("zero GUID in netlink format", "00:00:00:00:00:00:00:00", true),
+			Entry("initialized GUID in sysfs format", "0000:0000:0000:0001", false),
+			Entry("initialized GUID in netlink format", "00:00:00:00:00:00:00:01", false),
+			Entry("unavailable GUID", "", false),
+		)
 
 		It("should not drain if GUID address value is not set on VF of type netdevice and link type IB", func() {
 			networkNodeState := &sriovnetworkv1.SriovNetworkNodeState{

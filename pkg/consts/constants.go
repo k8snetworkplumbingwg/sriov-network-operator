@@ -89,7 +89,8 @@ const (
 	LinkAdminStateUp   = "up"
 	LinkAdminStateDown = "down"
 
-	UninitializedNodeGUID = "0000:0000:0000:0000"
+	UninitializedNodeGUID        = "0000:0000:0000:0000"
+	UninitializedNodeGUIDNetlink = "00:00:00:00:00:00:00:00"
 
 	DeviceTypeVfioPci   = "vfio-pci"
 	DeviceTypeNetDevice = "netdevice"
