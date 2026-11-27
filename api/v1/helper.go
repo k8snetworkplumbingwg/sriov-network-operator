@@ -216,6 +216,48 @@ func GetEswitchModeFromStatus(ifaceStatus *InterfaceExt) string {
 	return ifaceStatus.EswitchMode
 }
 
+func normalizedDevlinkApplyOn(applyOn string) string {
+	if applyOn == "" {
+		return consts.DevlinkParamApplyOnPf
+	}
+	return strings.ToUpper(applyOn)
+}
+
+func NeedToUpdateDevlinkParams(desired *DevlinkParams, current *DevlinkParams) bool {
+	for _, dParam := range desired.Params {
+		found := false
+		for _, cParam := range current.Params {
+			if dParam.Name == cParam.Name &&
+				normalizedDevlinkApplyOn(dParam.ApplyOn) == normalizedDevlinkApplyOn(cParam.ApplyOn) {
+				found = true
+				if dParam.Value != cParam.Value {
+					log.V(0).Info("NeedToUpdateDevlinkParams(): DevlinkParam needs update",
+						"name", dParam.Name, "applyOn", normalizedDevlinkApplyOn(dParam.ApplyOn),
+						"desired", dParam.Value, "current", cParam.Value)
+					return true
+				}
+				break
+			}
+		}
+		if !found {
+			log.V(0).Info("NeedToUpdateDevlinkParams(): DevlinkParam needs update - not found in status",
+				"name", dParam.Name, "desired", dParam.Value)
+			return true
+		}
+	}
+	return false
+}
+
+func devlinkParamsForTarget(params *DevlinkParams, target string) DevlinkParams {
+	filtered := DevlinkParams{Params: make([]DevlinkParam, 0)}
+	for _, param := range params.Params {
+		if normalizedDevlinkApplyOn(param.ApplyOn) == target {
+			filtered.Params = append(filtered.Params, param)
+		}
+	}
+	return filtered
+}
+
 func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
 	if ifaceSpec.Mtu > 0 {
 		mtu := ifaceSpec.Mtu
@@ -306,6 +348,23 @@ func NeedToUpdateSriov(ifaceSpec *Interface, ifaceStatus *InterfaceExt) bool {
 			}
 		}
 	}
+
+	desiredPFParams := devlinkParamsForTarget(&ifaceSpec.DevlinkParams, consts.DevlinkParamApplyOnPf)
+	if NeedToUpdateDevlinkParams(&desiredPFParams, &ifaceStatus.DevlinkParams) {
+		return true
+	}
+	desiredVFParams := devlinkParamsForTarget(&ifaceSpec.DevlinkParams, consts.DevlinkParamApplyOnVf)
+	if len(desiredVFParams.Params) > 0 {
+		if len(ifaceStatus.VFs) < ifaceSpec.NumVfs {
+			return true
+		}
+		for i := range ifaceStatus.VFs {
+			if NeedToUpdateDevlinkParams(&desiredVFParams, &ifaceStatus.VFs[i].DevlinkParams) {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -400,6 +459,7 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 				EswitchMode:       p.Spec.EswitchMode,
 				NumVfs:            p.Spec.NumVfs,
 				ExternallyManaged: p.Spec.ExternallyManaged,
+				DevlinkParams:     p.Spec.DevlinkParams,
 			}
 			if p.Spec.NumVfs > 0 {
 				group, err := p.generatePfNameVfGroup(&iface)
@@ -443,6 +503,18 @@ func (p *SriovNetworkNodePolicy) ApplyBridgeConfig(state *SriovNetworkNodeState)
 			return fmt.Errorf("software bridge management can't be used when link is externally managed")
 		}
 	}
+
+	// Set GroupingPolicy from policy to state
+	if p.Spec.Bridge.GroupingPolicy != "" {
+		state.Spec.Bridges.GroupingPolicy = p.Spec.Bridge.GroupingPolicy
+	}
+
+	// When groupingPolicy is "all", create a single bridge entry with all matching interfaces as uplinks.
+	// The daemon will use this to create the grouped bridge.
+	if p.Spec.Bridge.GroupingPolicy == consts.OvsGroupingPolicyAll {
+		return p.applyGroupedBridgeConfig(state)
+	}
+
 	for _, iface := range state.Status.Interfaces {
 		if p.Spec.NicSelector.Selected(&iface) {
 			if p.Spec.Bridge.OVS == nil {
@@ -486,6 +558,75 @@ func (p *SriovNetworkNodePolicy) ApplyBridgeConfig(state *SriovNetworkNodeState)
 			}
 		}
 	}
+	return nil
+}
+
+// applyGroupedBridgeConfig creates a single OVS bridge entry with all matching interfaces as uplinks
+// when groupingPolicy is "all". The first uplink will be used to create the bridge,
+// and the remaining uplinks will be added by the daemon using AddInterfaceToOVSBridge.
+func (p *SriovNetworkNodePolicy) applyGroupedBridgeConfig(state *SriovNetworkNodeState) error {
+	if p.Spec.Bridge.OVS == nil {
+		// No OVS config, nothing to do
+		return nil
+	}
+
+	// Collect all matching interfaces as uplinks
+	var uplinks []OVSUplinkConfigExt
+	for _, iface := range state.Status.Interfaces {
+		if p.Spec.NicSelector.Selected(&iface) {
+			uplink := OVSUplinkConfigExt{
+				PciAddress: iface.PciAddress,
+				Name:       iface.Name,
+				Interface:  p.Spec.Bridge.OVS.Uplink.Interface,
+			}
+			if p.Spec.Mtu > 0 {
+				mtu := p.Spec.Mtu
+				uplink.Interface.MTURequest = &mtu
+			}
+			uplinks = append(uplinks, uplink)
+		}
+	}
+
+	if len(uplinks) == 0 {
+		// No matching interfaces
+		return nil
+	}
+
+	// Sort uplinks by PciAddress for consistent ordering
+	sort.Slice(uplinks, func(i, j int) bool {
+		return uplinks[i].PciAddress < uplinks[j].PciAddress
+	})
+
+	// Create a single bridge with all uplinks
+	// Use the policy name as part of the bridge name for grouped bridges
+	brName := "br-" + p.Name
+	ovsBridge := OVSConfigExt{
+		Name:    brName,
+		Bridge:  p.Spec.Bridge.OVS.Bridge,
+		Uplinks: uplinks,
+	}
+
+	log.Info("Update grouped bridge for policy", "policy", p.Name, "bridge", brName, "uplinks", len(uplinks))
+
+	// Remove any existing individual per-PF bridges for the matching interfaces
+	for _, uplink := range uplinks {
+		state.Spec.Bridges.OVS = slices.DeleteFunc(state.Spec.Bridges.OVS, func(br OVSConfigExt) bool {
+			return slices.ContainsFunc(br.Uplinks, func(u OVSUplinkConfigExt) bool {
+				return u.PciAddress == uplink.PciAddress
+			})
+		})
+	}
+
+	// Add or update the grouped bridge
+	pos, exist := slices.BinarySearchFunc(state.Spec.Bridges.OVS, ovsBridge, func(x, y OVSConfigExt) int {
+		return strings.Compare(x.Name, y.Name)
+	})
+	if exist {
+		state.Spec.Bridges.OVS[pos] = ovsBridge
+	} else {
+		state.Spec.Bridges.OVS = slices.Insert(state.Spec.Bridges.OVS, pos, ovsBridge)
+	}
+
 	return nil
 }
 
@@ -1174,7 +1315,9 @@ func GenerateBridgeName(iface *InterfaceExt) string {
 
 // NeedToUpdateBridges returns true if bridge for the host requires update
 func NeedToUpdateBridges(bridgeSpec, bridgeStatus *Bridges) bool {
-	return !equality.Semantic.DeepEqual(bridgeSpec, bridgeStatus)
+	// Compare only OVS configurations, not GroupingPolicy which is a policy directive
+	// and not something that exists in the actual OVS state
+	return !equality.Semantic.DeepEqual(bridgeSpec.OVS, bridgeStatus.OVS)
 }
 
 // SetKeepUntilTime sets an annotation to hold the "keep until time" for the node’s state.

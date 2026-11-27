@@ -1134,6 +1134,45 @@ func TestNeedToUpdateSriov(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "VF devlink parameter already configured",
+			args: args{
+				ifaceSpec: &v1.Interface{
+					NumVfs: 1,
+					DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+						{Name: "test", Value: "1", ApplyOn: "VF"},
+					}},
+				},
+				ifaceStatus: &v1.InterfaceExt{
+					NumVfs: 1,
+					VFs: []v1.VirtualFunction{{
+						DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+							{Name: "test", Value: "1", ApplyOn: "VF"},
+						}},
+					}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "VF devlink parameter missing",
+			args: args{
+				ifaceSpec: &v1.Interface{
+					NumVfs: 1,
+					DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+						{Name: "test", Value: "1", ApplyOn: "VF"},
+					}},
+				},
+				ifaceStatus: &v1.InterfaceExt{
+					NumVfs: 1,
+					DevlinkParams: v1.DevlinkParams{Params: []v1.DevlinkParam{
+						{Name: "test", Value: "1", ApplyOn: "PF"},
+					}},
+					VFs: []v1.VirtualFunction{{}},
+				},
+			},
+			want: true,
+		},
+		{
 			name: "vfio-pci VF is not configured for any group",
 			args: args{
 				ifaceSpec: &v1.Interface{
@@ -1255,6 +1294,72 @@ func TestNeedToUpdateSriov(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := v1.NeedToUpdateSriov(tt.args.ifaceSpec, tt.args.ifaceStatus); got != tt.want {
 				t.Errorf("NeedToUpdateSriov() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNeedToUpdateDevlinkParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		desired v1.DevlinkParams
+		current v1.DevlinkParams
+		want    bool
+	}{
+		{
+			name: "empty target and cmode use PF runtime defaults",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "PF", Cmode: "runtime"},
+			}},
+			want: false,
+		},
+		{
+			name: "target comparison is case insensitive",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "vf"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "VF"},
+			}},
+			want: false,
+		},
+		{
+			name: "value changed",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "2", ApplyOn: "PF"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1"},
+			}},
+			want: true,
+		},
+		{
+			name: "target changed",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "VF"},
+			}},
+			current: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "PF"},
+			}},
+			want: true,
+		},
+		{
+			name: "desired parameter missing from status",
+			desired: v1.DevlinkParams{Params: []v1.DevlinkParam{
+				{Name: "test", Value: "1", ApplyOn: "PF"},
+			}},
+			current: v1.DevlinkParams{},
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := v1.NeedToUpdateDevlinkParams(&tt.desired, &tt.current); got != tt.want {
+				t.Errorf("NeedToUpdateDevlinkParams() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1618,6 +1723,156 @@ func TestSriovNetworkNodePolicyApplyBridgeConfig(t *testing.T) {
 				},
 			}},
 		},
+		{
+			tname:        "groupingPolicy all - creates single bridge with all uplinks",
+			currentState: newNodeState(),
+			policy: &v1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "rail-1",
+				},
+				Spec: v1.SriovNetworkNodePolicySpec{
+					DeviceType: consts.DeviceTypeNetDevice,
+					NicSelector: v1.SriovNetworkNicSelector{
+						RootDevices: []string{"0000:86:00.0", "0000:86:00.2"},
+					},
+					NodeSelector: map[string]string{
+						"feature.node.kubernetes.io/network-sriov.capable": "true",
+					},
+					NumVfs:       2,
+					Priority:     99,
+					EswitchMode:  "switchdev",
+					ResourceName: "p1res",
+					Bridge: v1.Bridge{
+						GroupingPolicy: consts.OvsGroupingPolicyAll,
+						OVS: &v1.OVSConfig{
+							Bridge: v1.OVSBridgeConfig{DatapathType: "netdev", FailMode: "secure"},
+							Uplink: v1.OVSUplinkConfig{
+								Interface: v1.OVSInterfaceConfig{
+									Type: "dpdk",
+								}},
+						}},
+				},
+			},
+			expectedBridges: v1.Bridges{
+				GroupingPolicy: consts.OvsGroupingPolicyAll,
+				OVS: []v1.OVSConfigExt{
+					{
+						Name:   "br-rail-1",
+						Bridge: v1.OVSBridgeConfig{DatapathType: "netdev", FailMode: "secure"},
+						Uplinks: []v1.OVSUplinkConfigExt{
+							{
+								Name:       "ens803f0",
+								PciAddress: "0000:86:00.0",
+								Interface:  v1.OVSInterfaceConfig{Type: "dpdk"},
+							},
+							{
+								Name:       "ens803f2",
+								PciAddress: "0000:86:00.2",
+								Interface:  v1.OVSInterfaceConfig{Type: "dpdk"},
+							},
+						},
+					},
+				}},
+		},
+		{
+			tname: "groupingPolicy all - removes existing per-PF bridges",
+			currentState: &v1.SriovNetworkNodeState{
+				Spec: v1.SriovNetworkNodeStateSpec{
+					Bridges: v1.Bridges{OVS: []v1.OVSConfigExt{
+						{
+							Name:   "br-0000_86_00.0",
+							Bridge: v1.OVSBridgeConfig{DatapathType: "old"},
+							Uplinks: []v1.OVSUplinkConfigExt{{
+								Name:       "ens803f0",
+								PciAddress: "0000:86:00.0",
+								Interface:  v1.OVSInterfaceConfig{Type: "old"},
+							}},
+						},
+						{
+							Name:   "br-0000_86_00.2",
+							Bridge: v1.OVSBridgeConfig{DatapathType: "old"},
+							Uplinks: []v1.OVSUplinkConfigExt{{
+								Name:       "ens803f2",
+								PciAddress: "0000:86:00.2",
+								Interface:  v1.OVSInterfaceConfig{Type: "old"},
+							}},
+						},
+					}},
+				},
+				Status: v1.SriovNetworkNodeStateStatus{
+					Interfaces: []v1.InterfaceExt{
+						{
+							VFs:        []v1.VirtualFunction{{}},
+							DeviceID:   "158b",
+							Driver:     "i40e",
+							Mtu:        1500,
+							Name:       "ens803f0",
+							PciAddress: "0000:86:00.0",
+							Vendor:     "8086",
+							NumVfs:     4,
+							TotalVfs:   64,
+						},
+						{
+							VFs:        []v1.VirtualFunction{{}},
+							DeviceID:   "158b",
+							Driver:     "i40e",
+							Mtu:        1500,
+							Name:       "ens803f2",
+							PciAddress: "0000:86:00.2",
+							Vendor:     "8086",
+							NumVfs:     4,
+							TotalVfs:   64,
+						},
+					},
+				}},
+			policy: &v1.SriovNetworkNodePolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "grouped-bridge",
+				},
+				Spec: v1.SriovNetworkNodePolicySpec{
+					DeviceType: consts.DeviceTypeNetDevice,
+					NicSelector: v1.SriovNetworkNicSelector{
+						RootDevices: []string{"0000:86:00.0", "0000:86:00.2"},
+					},
+					NodeSelector: map[string]string{
+						"feature.node.kubernetes.io/network-sriov.capable": "true",
+					},
+					NumVfs:       2,
+					Priority:     99,
+					EswitchMode:  "switchdev",
+					ResourceName: "p1res",
+					Bridge: v1.Bridge{
+						GroupingPolicy: consts.OvsGroupingPolicyAll,
+						OVS: &v1.OVSConfig{
+							Bridge: v1.OVSBridgeConfig{DatapathType: "netdev"},
+							Uplink: v1.OVSUplinkConfig{
+								Interface: v1.OVSInterfaceConfig{
+									Type: "dpdk",
+								}},
+						}},
+				},
+			},
+			expectedBridges: v1.Bridges{
+				GroupingPolicy: consts.OvsGroupingPolicyAll,
+				OVS: []v1.OVSConfigExt{
+					{
+						Name:   "br-grouped-bridge",
+						Bridge: v1.OVSBridgeConfig{DatapathType: "netdev"},
+						Uplinks: []v1.OVSUplinkConfigExt{
+							{
+								Name:       "ens803f0",
+								PciAddress: "0000:86:00.0",
+								Interface:  v1.OVSInterfaceConfig{Type: "dpdk"},
+							},
+							{
+								Name:       "ens803f2",
+								PciAddress: "0000:86:00.2",
+								Interface:  v1.OVSInterfaceConfig{Type: "dpdk"},
+							},
+						},
+					},
+				}},
+		},
 	}
 	for _, tc := range testtable {
 		t.Run(tc.tname, func(t *testing.T) {
@@ -1660,6 +1915,18 @@ func TestNeedToUpdateBridges(t *testing.T) {
 			specBridge:     &v1.Bridges{OVS: []v1.OVSConfigExt{{Bridge: v1.OVSBridgeConfig{DatapathType: "test"}}}},
 			statusBridge:   &v1.Bridges{OVS: []v1.OVSConfigExt{}},
 			expectedResult: true,
+		},
+		{
+			tname: "no update required - groupingPolicy difference should be ignored",
+			specBridge: &v1.Bridges{
+				GroupingPolicy: "all",
+				OVS:            []v1.OVSConfigExt{{Name: "br-test", Bridge: v1.OVSBridgeConfig{DatapathType: "netdev"}}},
+			},
+			statusBridge: &v1.Bridges{
+				// Status doesn't have GroupingPolicy since it's not stored in OVS
+				OVS: []v1.OVSConfigExt{{Name: "br-test", Bridge: v1.OVSBridgeConfig{DatapathType: "netdev"}}},
+			},
+			expectedResult: false,
 		},
 	}
 	for _, tc := range testtable {

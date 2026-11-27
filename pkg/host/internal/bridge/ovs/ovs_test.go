@@ -593,6 +593,199 @@ var _ = Describe("OVS", func() {
 				Expect(ret[0].Bridge.OtherConfig).To(BeEmpty())
 				Expect(ret[0].Uplinks[0].Interface.MTURequest).To(BeNil())
 			})
+			It("Should return all uplinks for bridge with multiple uplinks", func() {
+				mtu := 1500
+				// Create interfaces for multiple uplinks
+				iface1 := &InterfaceEntry{
+					Name:       "p0",
+					UUID:       uuid.NewString(),
+					Type:       "dpdk",
+					MTURequest: &mtu,
+				}
+				iface2 := &InterfaceEntry{
+					Name:       "p1",
+					UUID:       uuid.NewString(),
+					Type:       "dpdk",
+					MTURequest: &mtu,
+				}
+				iface3 := &InterfaceEntry{
+					Name:       "p2",
+					UUID:       uuid.NewString(),
+					Type:       "dpdk",
+					MTURequest: &mtu,
+				}
+				iface4 := &InterfaceEntry{
+					Name:       "p3",
+					UUID:       uuid.NewString(),
+					Type:       "dpdk",
+					MTURequest: &mtu,
+				}
+				// Create ports for each interface
+				port1 := &PortEntry{
+					Name:       "p0",
+					UUID:       uuid.NewString(),
+					Interfaces: []string{iface1.UUID},
+				}
+				port2 := &PortEntry{
+					Name:       "p1",
+					UUID:       uuid.NewString(),
+					Interfaces: []string{iface2.UUID},
+				}
+				port3 := &PortEntry{
+					Name:       "p2",
+					UUID:       uuid.NewString(),
+					Interfaces: []string{iface3.UUID},
+				}
+				port4 := &PortEntry{
+					Name:       "p3",
+					UUID:       uuid.NewString(),
+					Interfaces: []string{iface4.UUID},
+				}
+				// Create bridge with all ports
+				br := &BridgeEntry{
+					Name:         "br-rail-1",
+					UUID:         uuid.NewString(),
+					Ports:        []string{port1.UUID, port2.UUID, port3.UUID, port4.UUID},
+					DatapathType: "netdev",
+				}
+				ovsEntry := &OpenvSwitchEntry{
+					UUID:    uuid.NewString(),
+					Bridges: []string{br.UUID},
+				}
+				initialDBContent := &testDBEntries{
+					OpenVSwitch: []*OpenvSwitchEntry{ovsEntry},
+					Bridge:      []*BridgeEntry{br},
+					Port:        []*PortEntry{port1, port2, port3, port4},
+					Interface:   []*InterfaceEntry{iface1, iface2, iface3, iface4},
+				}
+				createInitialDBContent(ctx, ovsClient, initialDBContent)
+
+				// Create managed bridges config with multiple uplinks
+				conf := map[string]*sriovnetworkv1.OVSConfigExt{
+					"br-rail-1": {
+						Name: "br-rail-1",
+						Bridge: sriovnetworkv1.OVSBridgeConfig{
+							DatapathType: "netdev",
+						},
+						Uplinks: []sriovnetworkv1.OVSUplinkConfigExt{
+							{
+								PciAddress: "0000:08:00.0",
+								Name:       "p0",
+								Interface: sriovnetworkv1.OVSInterfaceConfig{
+									Type:       "dpdk",
+									MTURequest: &mtu,
+								},
+							},
+							{
+								PciAddress: "0000:08:00.1",
+								Name:       "p1",
+								Interface: sriovnetworkv1.OVSInterfaceConfig{
+									Type:       "dpdk",
+									MTURequest: &mtu,
+								},
+							},
+							{
+								PciAddress: "0000:08:00.2",
+								Name:       "p2",
+								Interface: sriovnetworkv1.OVSInterfaceConfig{
+									Type:       "dpdk",
+									MTURequest: &mtu,
+								},
+							},
+							{
+								PciAddress: "0000:08:00.3",
+								Name:       "p3",
+								Interface: sriovnetworkv1.OVSInterfaceConfig{
+									Type:       "dpdk",
+									MTURequest: &mtu,
+								},
+							},
+						},
+					},
+				}
+				store.EXPECT().GetManagedOVSBridges().Return(conf, nil)
+				ret, err := ovs.GetOVSBridges(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ret).To(HaveLen(1))
+				Expect(ret[0].Name).To(Equal("br-rail-1"))
+				Expect(ret[0].Uplinks).To(HaveLen(4))
+				// Verify all uplinks are returned
+				uplinkNames := make([]string, 0, 4)
+				for _, uplink := range ret[0].Uplinks {
+					uplinkNames = append(uplinkNames, uplink.Name)
+				}
+				Expect(uplinkNames).To(ContainElements("p0", "p1", "p2", "p3"))
+			})
+			It("Should return partial uplinks when some interfaces are missing", func() {
+				mtu := 1500
+				// Create only 2 of 4 interfaces
+				iface1 := &InterfaceEntry{
+					Name:       "p0",
+					UUID:       uuid.NewString(),
+					Type:       "dpdk",
+					MTURequest: &mtu,
+				}
+				iface2 := &InterfaceEntry{
+					Name:       "p1",
+					UUID:       uuid.NewString(),
+					Type:       "dpdk",
+					MTURequest: &mtu,
+				}
+				port1 := &PortEntry{
+					Name:       "p0",
+					UUID:       uuid.NewString(),
+					Interfaces: []string{iface1.UUID},
+				}
+				port2 := &PortEntry{
+					Name:       "p1",
+					UUID:       uuid.NewString(),
+					Interfaces: []string{iface2.UUID},
+				}
+				br := &BridgeEntry{
+					Name:         "br-rail-1",
+					UUID:         uuid.NewString(),
+					Ports:        []string{port1.UUID, port2.UUID},
+					DatapathType: "netdev",
+				}
+				ovsEntry := &OpenvSwitchEntry{
+					UUID:    uuid.NewString(),
+					Bridges: []string{br.UUID},
+				}
+				initialDBContent := &testDBEntries{
+					OpenVSwitch: []*OpenvSwitchEntry{ovsEntry},
+					Bridge:      []*BridgeEntry{br},
+					Port:        []*PortEntry{port1, port2},
+					Interface:   []*InterfaceEntry{iface1, iface2},
+				}
+				createInitialDBContent(ctx, ovsClient, initialDBContent)
+
+				// Config expects 4 uplinks but only 2 exist
+				conf := map[string]*sriovnetworkv1.OVSConfigExt{
+					"br-rail-1": {
+						Name: "br-rail-1",
+						Bridge: sriovnetworkv1.OVSBridgeConfig{
+							DatapathType: "netdev",
+						},
+						Uplinks: []sriovnetworkv1.OVSUplinkConfigExt{
+							{PciAddress: "0000:08:00.0", Name: "p0", Interface: sriovnetworkv1.OVSInterfaceConfig{Type: "dpdk", MTURequest: &mtu}},
+							{PciAddress: "0000:08:00.1", Name: "p1", Interface: sriovnetworkv1.OVSInterfaceConfig{Type: "dpdk", MTURequest: &mtu}},
+							{PciAddress: "0000:08:00.2", Name: "p2", Interface: sriovnetworkv1.OVSInterfaceConfig{Type: "dpdk", MTURequest: &mtu}},
+							{PciAddress: "0000:08:00.3", Name: "p3", Interface: sriovnetworkv1.OVSInterfaceConfig{Type: "dpdk", MTURequest: &mtu}},
+						},
+					},
+				}
+				store.EXPECT().GetManagedOVSBridges().Return(conf, nil)
+				ret, err := ovs.GetOVSBridges(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ret).To(HaveLen(1))
+				// Should only return the 2 existing uplinks
+				Expect(ret[0].Uplinks).To(HaveLen(2))
+				uplinkNames := make([]string, 0, 2)
+				for _, uplink := range ret[0].Uplinks {
+					uplinkNames = append(uplinkNames, uplink.Name)
+				}
+				Expect(uplinkNames).To(ContainElements("p0", "p1"))
+			})
 		})
 		Context("RemoveOVSBridge", func() {
 			It("No config", func() {

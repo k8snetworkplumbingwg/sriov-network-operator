@@ -80,6 +80,8 @@ type NetworkInterface interface {
 	// GetDevlinkDeviceParam returns devlink parameter for the device as a string, if the parameter has multiple values
 	// then the function will return only first one from the list.
 	GetDevlinkDeviceParam(pciAddr, paramName string) (string, error)
+	// GetDevlinkDeviceParams returns all configured devlink parameters
+	GetDevlinkDeviceParams(pciAddr string) ([]sriovnetworkv1.DevlinkParam, error)
 	// SetDevlinkDeviceParam set devlink parameter for the device, accepts paramName and value
 	// as a string. Automatically set CMODE for the parameter and converts the value to the right
 	// type before submitting it.
@@ -190,11 +192,17 @@ type VdpaInterface interface {
 type BridgeInterface interface {
 	// DiscoverBridges returns information about managed bridges on the host
 	DiscoverBridges() (sriovnetworkv1.Bridges, error)
-	// ConfigureBridge configure managed bridges for the host
+	// ConfigureBridges configure managed bridges for the host.
+	// When groupingPolicy is "all", the bridges spec will contain a single bridge
+	// with multiple uplinks (created by the controller in ApplyBridgeConfig).
 	ConfigureBridges(bridgesSpec sriovnetworkv1.Bridges, bridgesStatus sriovnetworkv1.Bridges) error
 	// DetachUplinkAndVFRepresentorsFromManagedBridge detaches a PF uplink and all of
 	// its VF representors from a managed bridge.
 	DetachUplinkAndVFRepresentorsFromManagedBridge(pciAddr string) error
+	// DetachInterfaceFromManagedBridge detach interface from a managed bridge,
+	// this step is required before applying some configurations to PF, e.g. changing of eSwitch mode.
+	// The function detach interface from managed bridges only.
+	DetachInterfaceFromManagedBridge(pciAddr string) error
 }
 
 type InfinibandInterface interface {

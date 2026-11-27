@@ -193,6 +193,19 @@ const (
 		`IMPORT{program}="/etc/udev/switchdev-vf-link-name.sh $attr{phys_port_name}", ` +
 		`NAME="%s_$env{NUMBER}"`
 
+	DevlinkParamApplyOnPf = "PF"
+	DevlinkParamApplyOnVf = "VF"
+	DevlinkParamApplyOnSf = "SF"
+
+	DevlinkParamFlowSteeringMode = "flow_steering_mode"
+
+	FlowSteeringModeSmfs = "smfs"
+	FlowSteeringModeHmfs = "hmfs"
+
+	OvsGroupingPolicyPerPF = "perPF"
+	OvsGroupingPolicyPerVF = "perVF"
+	OvsGroupingPolicyAll   = "all"
+
 	KernelArgPciRealloc    = "pci=realloc"
 	KernelArgIntelIommu    = "intel_iommu=on"
 	KernelArgIommuPt       = "iommu=pt"
