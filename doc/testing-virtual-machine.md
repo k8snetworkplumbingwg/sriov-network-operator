@@ -32,6 +32,11 @@ example:
 SKIP_DELETE=TRUE make test-e2e-conformance-virtual-k8s-cluster 
 ```
 
+Extra ginkgo flags can be passed with `GINKGO_ARGS`, for example to run only the DRA tests:
+```
+GINKGO_ARGS='--focus=DRA' make test-e2e-conformance-virtual-k8s-cluster
+```
+
 It's also possible to skip the tests and only deploy the cluster running
 
 ```

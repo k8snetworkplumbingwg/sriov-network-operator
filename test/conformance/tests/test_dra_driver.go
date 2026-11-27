@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	runtimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -43,6 +44,8 @@ const (
 	devicePluginDSName   = "sriov-device-plugin"
 	draDriverAppLabel    = "app=sriov-dra-driver"
 	devicePluginAppLabel = "app=sriov-device-plugin"
+	// draClaimRefName is the pod-level claim reference name used by test pods.
+	draClaimRefName = "claim-ref"
 )
 
 // isDeviceClassAPIAvailable reports whether resource.k8s.io/v1 is discoverable.
@@ -92,30 +95,45 @@ func listDRADriverPods(ctx context.Context) []corev1.Pod {
 	return pods.Items
 }
 
-func countAdvertisedDRADevices(ctx context.Context, nodeName, resourceAttribute string) (int, error) {
+// currentDRASlices lists the SR-IOV DRA driver's ResourceSlices. During a pool update the
+// driver may publish the old and new generations together, so only the highest generation
+// of each pool is returned.
+func currentDRASlices(ctx context.Context) ([]*resourceapi.ResourceSlice, error) {
 	list := &resourceapi.ResourceSliceList{}
 	if err := clients.List(ctx, list); err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	// During a pool update the driver may publish the old and new generations together.
-	// Count only the highest generation for each pool on this node.
 	generation := map[string]int64{}
 	for i := range list.Items {
 		slice := &list.Items[i]
-		if !draSliceForNode(slice, nodeName) {
-			continue
-		}
-		if slice.Spec.Pool.Generation > generation[slice.Spec.Pool.Name] {
+		if slice.Spec.Driver == consts.DRADriverBaseDeviceClassName &&
+			slice.Spec.Pool.Generation > generation[slice.Spec.Pool.Name] {
 			generation[slice.Spec.Pool.Name] = slice.Spec.Pool.Generation
 		}
 	}
 
-	count := 0
-	attrKey := resourceapi.QualifiedName(consts.DRAResourceNameAttributeKey)
+	var current []*resourceapi.ResourceSlice
 	for i := range list.Items {
 		slice := &list.Items[i]
-		if !draSliceForNode(slice, nodeName) || slice.Spec.Pool.Generation != generation[slice.Spec.Pool.Name] {
+		if slice.Spec.Driver == consts.DRADriverBaseDeviceClassName &&
+			slice.Spec.Pool.Generation == generation[slice.Spec.Pool.Name] {
+			current = append(current, slice)
+		}
+	}
+	return current, nil
+}
+
+func countAdvertisedDRADevices(ctx context.Context, nodeName, resourceAttribute string) (int, error) {
+	slices, err := currentDRASlices(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	attrKey := resourceapi.QualifiedName(consts.DRAResourceNameAttributeKey)
+	for _, slice := range slices {
+		if !draSliceForNode(slice, nodeName) {
 			continue
 		}
 		for _, device := range slice.Spec.Devices {
@@ -299,9 +317,274 @@ func testDRAVFIOExtendedResource(ctx SpecContext, policyName string) {
 	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("VFIO device access failed: %s", stderr))
 }
 
+// cleanDRAClaims deletes the ResourceClaims and ResourceClaimTemplates of the namespace.
+// Callers remove the pods consuming them first.
+func cleanDRAClaims(ctx context.Context, namespace string) {
+	// Best effort: this runs during teardown, so failures are logged rather than asserted.
+	logErr := func(action string, err error) {
+		if err != nil && !errors.IsNotFound(err) {
+			GinkgoWriter.Printf("DRA cleanup: %s in namespace %s failed: %v\n", action, namespace, err)
+		}
+	}
+
+	claimList := &resourceapi.ResourceClaimList{}
+	err := clients.List(ctx, claimList, runtimeclient.InNamespace(namespace))
+	logErr("listing ResourceClaims", err)
+	for i := range claimList.Items {
+		logErr("deleting ResourceClaim "+claimList.Items[i].Name, clients.Delete(ctx, &claimList.Items[i]))
+	}
+
+	templateList := &resourceapi.ResourceClaimTemplateList{}
+	err = clients.List(ctx, templateList, runtimeclient.InNamespace(namespace))
+	logErr("listing ResourceClaimTemplates", err)
+	for i := range templateList.Items {
+		logErr("deleting ResourceClaimTemplate "+templateList.Items[i].Name, clients.Delete(ctx, &templateList.Items[i]))
+	}
+}
+
+// deleteAndWait deletes obj (identified by its name and namespace) and waits until it is gone.
+// A missing object is not an error.
+func deleteAndWait(ctx context.Context, obj runtimeclient.Object, opts ...runtimeclient.DeleteOption) {
+	key := runtimeclient.ObjectKeyFromObject(obj)
+	Expect(runtimeclient.IgnoreNotFound(clients.Delete(ctx, obj, opts...))).To(Succeed())
+	Eventually(ctx, func(g Gomega) {
+		err := clients.Get(ctx, key, obj)
+		g.Expect(errors.IsNotFound(err)).To(BeTrue(), "%T %s still exists (err: %v)", obj, key, err)
+	}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+}
+
+// deletePodSync deletes the pod gracefully: a forced deletion removes the object without
+// waiting for the kubelet, which would release its claims while the container may still run.
+func deletePodSync(ctx context.Context, namespace, name string) {
+	deleteAndWait(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}})
+}
+
+func deleteClaimSync(ctx context.Context, namespace, name string) {
+	deleteAndWait(ctx, &resourceapi.ResourceClaim{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}})
+}
+
+func deleteClaimTemplateSync(ctx context.Context, namespace, name string) {
+	deleteAndWait(ctx, &resourceapi.ResourceClaimTemplate{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}})
+}
+
+func deletePolicySync(ctx context.Context, name string) {
+	deleteAndWait(ctx, &sriovv1.SriovNetworkNodePolicy{ObjectMeta: metav1.ObjectMeta{Namespace: operatorNamespace, Name: name}})
+}
+
+func isOperatorWebhookEnabled(ctx context.Context) bool {
+	cfg := &sriovv1.SriovOperatorConfig{}
+	Expect(clients.Get(ctx, runtimeclient.ObjectKey{Name: "default", Namespace: operatorNamespace}, cfg)).To(Succeed())
+	return cfg.Spec.EnableOperatorWebhook
+}
+
+// draResourceNameSelector returns a CEL expression selecting devices by SR-IOV resource name.
+// The has() guard keeps a device without the attribute from aborting the allocation, so
+// "no device matches" is not confused with an evaluation error.
+func draResourceNameSelector(resourceName string) string {
+	domain, name, _ := strings.Cut(consts.DRAResourceNameAttributeKey, "/")
+	return fmt.Sprintf(`has(device.attributes["%s"].%s) && device.attributes["%s"].%s == "%s"`,
+		domain, name, domain, name, resourceName)
+}
+
+// newDRAClaimSpec builds a ResourceClaimSpec with a single request for count devices of
+// deviceClassName, optionally narrowed by a CEL expression.
+func newDRAClaimSpec(deviceClassName string, count int64, celExpression string) resourceapi.ResourceClaimSpec {
+	request := &resourceapi.ExactDeviceRequest{
+		DeviceClassName: deviceClassName,
+		Count:           count,
+	}
+	if celExpression != "" {
+		request.Selectors = []resourceapi.DeviceSelector{
+			{CEL: &resourceapi.CELDeviceSelector{Expression: celExpression}},
+		}
+	}
+	return resourceapi.ResourceClaimSpec{
+		Devices: resourceapi.DeviceClaim{
+			Requests: []resourceapi.DeviceRequest{{Name: "req-device", Exactly: request}},
+		},
+	}
+}
+
+func createDRAClaim(ctx context.Context, name, deviceClassName string, count int64, celExpression string) {
+	claim := &resourceapi.ResourceClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespaces.Test},
+		Spec:       newDRAClaimSpec(deviceClassName, count, celExpression),
+	}
+	Expect(clients.Create(ctx, claim)).To(Succeed())
+}
+
+// createDRAPod creates a test pod pinned to node whose container consumes the given claim
+// source (a ResourceClaim or a ResourceClaimTemplate) under the draClaimRefName reference.
+func createDRAPod(ctx context.Context, name, node string, claimSource corev1.PodResourceClaim) *corev1.Pod {
+	claimSource.Name = draClaimRefName
+	podObj := pod.GetDefinition()
+	podObj.Name = name
+	podObj.GenerateName = ""
+	podObj.Namespace = namespaces.Test
+	podObj.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": node}
+	podObj.Spec.ResourceClaims = []corev1.PodResourceClaim{claimSource}
+	podObj.Spec.Containers[0].Resources.Claims = []corev1.ResourceClaim{{Name: draClaimRefName}}
+	created, err := clients.Pods(namespaces.Test).Create(ctx, podObj, metav1.CreateOptions{})
+	Expect(err).ToNot(HaveOccurred())
+	return created
+}
+
+func isClaimReservedFor(claim *resourceapi.ResourceClaim, uid types.UID) bool {
+	for _, res := range claim.Status.ReservedFor {
+		if res.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForDRAClaimAllocated waits until the claim is allocated count distinct devices from the
+// SR-IOV DRA driver.
+func waitForDRAClaimAllocated(ctx context.Context, name string, count int) {
+	Eventually(ctx, func(g Gomega) {
+		c := &resourceapi.ResourceClaim{}
+		g.Expect(clients.Get(ctx, runtimeclient.ObjectKey{Namespace: namespaces.Test, Name: name}, c)).To(Succeed())
+		g.Expect(c.Status.Allocation).ToNot(BeNil())
+		g.Expect(c.Status.Allocation.Devices.Results).To(HaveLen(count))
+		devices := map[string]struct{}{}
+		for _, result := range c.Status.Allocation.Devices.Results {
+			g.Expect(result.Driver).To(Equal(consts.DRADriverBaseDeviceClassName))
+			g.Expect(result.Device).ToNot(BeEmpty())
+			g.Expect(result.Pool).ToNot(BeEmpty())
+			devices[result.Pool+"/"+result.Device] = struct{}{}
+		}
+		g.Expect(devices).To(HaveLen(count), "Allocated devices must be distinct")
+	}).WithTimeout(waitingTime).WithPolling(5 * time.Second).Should(Succeed())
+}
+
+func waitForDRAClaimReservedFor(ctx context.Context, name string, podUID types.UID) {
+	Eventually(ctx, func(g Gomega) {
+		c := &resourceapi.ResourceClaim{}
+		g.Expect(clients.Get(ctx, runtimeclient.ObjectKey{Namespace: namespaces.Test, Name: name}, c)).To(Succeed())
+		g.Expect(isClaimReservedFor(c, podUID)).To(BeTrue(), "ResourceClaim %s not reserved for pod %s", name, podUID)
+	}).WithTimeout(1 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+}
+
+func waitForPodRunningOnNode(ctx context.Context, name, node string) *corev1.Pod {
+	var running *corev1.Pod
+	Eventually(ctx, func(g Gomega) {
+		p, err := clients.Pods(namespaces.Test).Get(ctx, name, metav1.GetOptions{})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(p.Spec.NodeName).To(Equal(node))
+		g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning))
+		// Callers exec into the container, so Running alone is not enough.
+		g.Expect(pod.AssertContainerReady(*p, p.Spec.Containers[0].Name)).To(Succeed())
+		running = p
+	}).WithTimeout(waitingTime).WithPolling(5 * time.Second).Should(Succeed())
+	return running
+}
+
+// expectDRADevicesInPod verifies that every device allocated to the claim is published by the
+// driver with the expected SR-IOV resource name, and that the driver exposed it to the pod's
+// container through the SRIOVNETWORK_VF_DEVICE_<device> variable set by its CDI edits.
+func expectDRADevicesInPod(ctx context.Context, p *corev1.Pod, claimName, resourceName string) {
+	claim := &resourceapi.ResourceClaim{}
+	Expect(clients.Get(ctx, runtimeclient.ObjectKey{Namespace: namespaces.Test, Name: claimName}, claim)).To(Succeed())
+	Expect(claim.Status.Allocation).ToNot(BeNil())
+
+	slices, err := currentDRASlices(ctx)
+	Expect(err).ToNot(HaveOccurred())
+	published := map[string]string{}
+	attrKey := resourceapi.QualifiedName(consts.DRAResourceNameAttributeKey)
+	for _, slice := range slices {
+		for _, device := range slice.Spec.Devices {
+			if attr, ok := device.Attributes[attrKey]; ok && attr.StringValue != nil {
+				published[slice.Spec.Pool.Name+"/"+device.Name] = *attr.StringValue
+			}
+		}
+	}
+
+	stdout, stderr, err := pod.ExecCommandWithContext(ctx, clients, p, "env")
+	Expect(err).ToNot(HaveOccurred(), stderr)
+	env := map[string]string{}
+	for _, line := range strings.Split(stdout, "\n") {
+		if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			env[key] = value
+		}
+	}
+
+	for _, result := range claim.Status.Allocation.Devices.Results {
+		Expect(published).To(HaveKeyWithValue(result.Pool+"/"+result.Device, resourceName),
+			"device %s/%s allocated to ResourceClaim %s is not published as %s", result.Pool, result.Device, claimName, resourceName)
+		Expect(env).To(HaveKeyWithValue("SRIOVNETWORK_VF_DEVICE_"+strings.ReplaceAll(result.Device, "-", "_"), Not(BeEmpty())),
+			"device %s allocated to ResourceClaim %s is not exposed to pod %s", result.Device, claimName, p.Name)
+	}
+}
+
+// newDRATestPolicy returns a policy selecting the given PF on node, to be customized by the
+// admission webhook specs.
+func newDRATestPolicy(name, node, pfName, resourceName string) *sriovv1.SriovNetworkNodePolicy {
+	return &sriovv1.SriovNetworkNodePolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: operatorNamespace},
+		Spec: sriovv1.SriovNetworkNodePolicySpec{
+			NodeSelector: map[string]string{"kubernetes.io/hostname": node},
+			NumVfs:       initialVFs,
+			ResourceName: resourceName,
+			Priority:     99,
+			NicSelector:  sriovv1.SriovNetworkNicSelector{PfNames: []string{pfName}},
+			DeviceType:   consts.DeviceTypeNetDevice,
+		},
+	}
+}
+
+// expectDRAPolicyRejected creates the policy and expects the admission webhook to reject it
+// with a message containing reason.
+func expectDRAPolicyRejected(ctx context.Context, policy *sriovv1.SriovNetworkNodePolicy, reason string) {
+	DeferCleanup(func(cleanupCtx context.Context) {
+		// Only reached with an existing policy when the webhook wrongly admitted it:
+		// remove it and let the nodes settle before the next spec.
+		err := clients.Delete(cleanupCtx, policy)
+		if err == nil {
+			WaitForSRIOVStable()
+			return
+		}
+		Expect(runtimeclient.IgnoreNotFound(err)).To(Succeed())
+	})
+
+	err := clients.Create(ctx, policy)
+	Expect(err).To(HaveOccurred(), "Admission webhook must reject policy %s", policy.Name)
+	Expect(err.Error()).To(ContainSubstring(reason))
+}
+
+// expectDRAPodUnschedulable waits until the scheduler has reported the pod as not schedulable
+// (so the check below is not trivially true for a pod it has not looked at yet), then verifies
+// the pod stays Pending and its claim stays unallocated.
+func expectDRAPodUnschedulable(ctx context.Context, podName, claimName string) {
+	Eventually(ctx, func(g Gomega) {
+		p, err := clients.Pods(namespaces.Test).Get(ctx, podName, metav1.GetOptions{})
+		g.Expect(err).ToNot(HaveOccurred())
+		rejected := false
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable {
+				rejected = true
+			}
+		}
+		g.Expect(rejected).To(BeTrue(), "scheduler has not reported pod %s as unschedulable: %v", podName, p.Status.Conditions)
+	}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+
+	Consistently(ctx, func(g Gomega) {
+		c := &resourceapi.ResourceClaim{}
+		g.Expect(clients.Get(ctx, runtimeclient.ObjectKey{Namespace: namespaces.Test, Name: claimName}, c)).To(Succeed())
+		g.Expect(c.Status.Allocation).To(BeNil())
+
+		p, err := clients.Pods(namespaces.Test).Get(ctx, podName, metav1.GetOptions{})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(p.Spec.NodeName).To(BeEmpty())
+		g.Expect(p.Status.Phase).To(Equal(corev1.PodPending))
+	}).WithTimeout(15 * time.Second).WithPolling(2 * time.Second).Should(Succeed())
+}
+
 // Ordered is required: later specs depend on earlier ones (enable DRA => create
 // SriovNetworkNodePolicy / unblock init => ResourceSlices publish initial VFs =>
-// NumVfs change updates ResourceSlices => drain on policy deletion => disable and clean up).
+// NumVfs change updates ResourceSlices => pods allocate the VFs through
+// ResourceClaims / ResourceClaimTemplates => a second policy is created and deleted
+// while DRA stays active => VFIO extended-resource consumer => drain on policy
+// deletion => disable and clean up).
 var _ = Describe("[sriov] DRA", Ordered, func() {
 	var (
 		node             string
@@ -312,7 +595,7 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 		extendedResource string
 	)
 
-	BeforeAll(func() {
+	BeforeAll(func(ctx SpecContext) {
 		if discovery.Enabled() {
 			Skip("DRA conformance suite changes the resource provider, which is unsuitable for discovery mode")
 		}
@@ -332,6 +615,20 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 		WaitForSRIOVStable()
 
+		// An interrupted run leaves its fixed-name claims behind, and namespaces.Clean
+		// does not remove them.
+		By("Removing ResourceClaims and ResourceClaimTemplates left by a previous run")
+		Eventually(ctx, func(g Gomega) {
+			// cleanDRAClaims is best effort, so repeat it until nothing is left.
+			cleanDRAClaims(ctx, namespaces.Test)
+			claims := &resourceapi.ResourceClaimList{}
+			g.Expect(clients.List(ctx, claims, runtimeclient.InNamespace(namespaces.Test))).To(Succeed())
+			g.Expect(claims.Items).To(BeEmpty())
+			templates := &resourceapi.ResourceClaimTemplateList{}
+			g.Expect(clients.List(ctx, templates, runtimeclient.InNamespace(namespaces.Test))).To(Succeed())
+			g.Expect(templates.Items).To(BeEmpty())
+		}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+
 		featureFlagInitialValue := isFeatureFlagEnabled(consts.DynamicResourceAllocationFeatureGate)
 		DeferCleanup(func(ctx SpecContext) {
 			By("Restoring dynamicResourceAllocation feature flag and cleaning test state")
@@ -339,6 +636,7 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 			if err := namespaces.CleanPods(namespaces.Test, clients); err != nil {
 				AddReportEntry("DRA teardown pod cleanup failed", err.Error())
 			}
+			cleanDRAClaims(ctx, namespaces.Test)
 			if err := namespaces.CleanNetworks(operatorNamespace, clients); err != nil {
 				AddReportEntry("DRA teardown network cleanup failed", err.Error())
 			}
@@ -363,7 +661,8 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 			waitForDRAProviderSwitch(ctx, featureFlagInitialValue)
 		})
 
-		sriovInfos, err := cluster.DiscoverSriov(clients, operatorNamespace)
+		// Assign the package-level sriovInfos (no :=) so later specs use this discovery.
+		sriovInfos, err = cluster.DiscoverSriov(clients, operatorNamespace)
 		Expect(err).ToNot(HaveOccurred())
 		node, nic, err = sriovInfos.FindOneSriovNodeAndDevice()
 		if err == nil && (nic.TotalVfs < initialVFs || nic.TotalVfs < updatedVFs) {
@@ -492,6 +791,63 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 	})
 
+	It("should reject policies whose resourceName collides after DRA normalization via admission webhook", func(ctx SpecContext) {
+		if !isOperatorWebhookEnabled(ctx) {
+			Skip("Operator admission webhook is disabled (enableOperatorWebhook=false)")
+		}
+
+		collidingResourceName := strings.ToUpper(draResourceName)
+		By("Attempting to create a policy with resourceName " + collidingResourceName + " colliding with " + draResourceName)
+		expectDRAPolicyRejected(ctx,
+			newDRATestPolicy("test-dra-colliding-policy", node, nic.Name, collidingResourceName),
+			"normalizes to the same DRA device class name")
+	})
+
+	It("should reject policies that cannot be rendered in DRA mode via admission webhook", func(ctx SpecContext) {
+		if !isOperatorWebhookEnabled(ctx) {
+			Skip("Operator admission webhook is disabled (enableOperatorWebhook=false)")
+		}
+
+		By("Attempting to create a policy using a netFilter selector")
+		netFilterPolicy := newDRATestPolicy("test-dra-netfilter-policy", node, nic.Name, "testdranetfilter")
+		// netFilter cannot be combined with the other NIC selector fields.
+		netFilterPolicy.Spec.NicSelector = sriovv1.SriovNetworkNicSelector{NetFilter: "openstack/NetworkID:e48c7670-bd42-4eb8-ac0b-2f6f9a1c1a52"}
+		expectDRAPolicyRejected(ctx, netFilterPolicy, "netFilter selector is not supported in DRA mode")
+
+		By("Attempting to create a policy selecting a VF range")
+		expectDRAPolicyRejected(ctx,
+			newDRATestPolicy("test-dra-vf-range-policy", node, nic.Name+"#0-0", "testdravfrange"),
+			"VF range in pfNames selector")
+
+		By("Attempting to create a vfio-pci policy sharing resource " + draResourceName + " with a netdevice policy")
+		vfioPolicy := newDRATestPolicy("test-dra-mixed-type-policy", node, nic.Name, draResourceName)
+		vfioPolicy.Spec.DeviceType = consts.DeviceTypeVfioPci
+		expectDRAPolicyRejected(ctx, vfioPolicy, "vfio-pci and netdevice cannot share a DeviceClass")
+	})
+
+	It("should refuse to switch resource providers while policies exist via admission webhook", func(ctx SpecContext) {
+		if !isOperatorWebhookEnabled(ctx) {
+			Skip("Operator admission webhook is disabled (enableOperatorWebhook=false)")
+		}
+
+		cfg := &sriovv1.SriovOperatorConfig{}
+		Expect(clients.Get(ctx, runtimeclient.ObjectKey{Name: "default", Namespace: operatorNamespace}, cfg)).To(Succeed())
+		cfg.Spec.FeatureGates[consts.DynamicResourceAllocationFeatureGate] = false
+
+		DeferCleanup(func() {
+			// Only changes something when the webhook wrongly admitted the update.
+			if !isFeatureFlagEnabled(consts.DynamicResourceAllocationFeatureGate) {
+				setFeatureFlag(consts.DynamicResourceAllocationFeatureGate, true)
+				WaitForSRIOVStable()
+			}
+		})
+
+		By("Attempting to disable dynamicResourceAllocation while policy " + policyName + " exists")
+		err := clients.Update(ctx, cfg)
+		Expect(err).To(HaveOccurred(), "Admission webhook must reject the provider switch")
+		Expect(err.Error()).To(ContainSubstring("remove all policies before switching providers"))
+	})
+
 	It("should publish the initial VFs on ResourceSlices for the selected node", func(ctx SpecContext) {
 		By("Waiting for ResourceSlices to publish the initial VFs on " + node)
 		Eventually(ctx, func(g Gomega) {
@@ -549,6 +905,325 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 			Expect(count).To(Equal(before),
 				"ResourceSlice devices changed on %s", nodeName)
 		}
+	})
+
+	It("should allocate SR-IOV resources to a pod via ResourceClaim using the per-resource DeviceClass", func(ctx SpecContext) {
+		claimName := "test-dra-claim"
+		podName := "test-dra-claim-pod"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName)
+		})
+
+		By("Creating a ResourceClaim for DeviceClass " + deviceClassName)
+		createDRAClaim(ctx, claimName, deviceClassName, 1, "")
+
+		By("Creating a pod consuming the ResourceClaim")
+		createdPod := createDRAPod(ctx, podName, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName)})
+
+		By("Waiting for the ResourceClaim to be allocated")
+		waitForDRAClaimAllocated(ctx, claimName, 1)
+
+		By("Verifying the ResourceClaim is reserved for the pod")
+		waitForDRAClaimReservedFor(ctx, claimName, createdPod.UID)
+
+		By("Waiting for the pod to be Running on " + node)
+		runningPod := waitForPodRunningOnNode(ctx, podName, node)
+
+		By("Verifying the allocated device is exposed to the pod")
+		expectDRADevicesInPod(ctx, runningPod, claimName, extendedResource)
+
+		By("Deleting the pod and verifying reservation is released")
+		deletePodSync(ctx, namespaces.Test, podName)
+
+		Eventually(ctx, func(g Gomega) {
+			c := &resourceapi.ResourceClaim{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{Namespace: namespaces.Test, Name: claimName}, c)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(isClaimReservedFor(c, createdPod.UID)).To(BeFalse(),
+				"ResourceClaim %s still reserved for deleted pod %s", claimName, createdPod.UID)
+		}).WithTimeout(1 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+	})
+
+	It("should allocate SR-IOV resources to a pod via ResourceClaimTemplate", func(ctx SpecContext) {
+		templateName := "test-dra-template"
+		podName := "test-dra-template-pod"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName)
+			deleteClaimTemplateSync(cleanupCtx, namespaces.Test, templateName)
+		})
+
+		By("Creating a ResourceClaimTemplate for DeviceClass " + deviceClassName)
+		template := &resourceapi.ResourceClaimTemplate{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      templateName,
+				Namespace: namespaces.Test,
+			},
+			Spec: resourceapi.ResourceClaimTemplateSpec{
+				Spec: newDRAClaimSpec(deviceClassName, 1, ""),
+			},
+		}
+		Expect(clients.Create(ctx, template)).To(Succeed())
+
+		By("Creating a pod referencing the ResourceClaimTemplate")
+		createdPod := createDRAPod(ctx, podName, node, corev1.PodResourceClaim{ResourceClaimTemplateName: ptr.To(templateName)})
+
+		By("Waiting for the pod to be Running and checking generated ResourceClaim")
+		runningPod := waitForPodRunningOnNode(ctx, podName, node)
+		generatedClaimName := ""
+		for _, status := range runningPod.Status.ResourceClaimStatuses {
+			if status.Name == draClaimRefName && status.ResourceClaimName != nil {
+				generatedClaimName = *status.ResourceClaimName
+			}
+		}
+		Expect(generatedClaimName).ToNot(BeEmpty(), "pod %s has no generated ResourceClaim for %s: %v",
+			podName, draClaimRefName, runningPod.Status.ResourceClaimStatuses)
+
+		By("Verifying generated ResourceClaim " + generatedClaimName + " is allocated and reserved for the pod")
+		waitForDRAClaimAllocated(ctx, generatedClaimName, 1)
+		waitForDRAClaimReservedFor(ctx, generatedClaimName, createdPod.UID)
+
+		By("Verifying the allocated device is exposed to the pod")
+		expectDRADevicesInPod(ctx, runningPod, generatedClaimName, extendedResource)
+
+		By("Deleting the pod and verifying generated ResourceClaim is garbage-collected")
+		deletePodSync(ctx, namespaces.Test, podName)
+
+		Eventually(ctx, func(g Gomega) {
+			c := &resourceapi.ResourceClaim{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{Namespace: namespaces.Test, Name: generatedClaimName}, c)
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "generated ResourceClaim %s still exists", generatedClaimName)
+		}).WithTimeout(1 * time.Minute).WithPolling(2 * time.Second).Should(Succeed())
+	})
+
+	It("should allocate SR-IOV resources using the base DeviceClass with a CEL selector", func(ctx SpecContext) {
+		claimName := "test-dra-base-claim"
+		podName := "test-dra-base-pod"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName)
+		})
+
+		By("Creating a ResourceClaim referencing base DeviceClass with CEL selector")
+		createDRAClaim(ctx, claimName, consts.DRADriverBaseDeviceClassName, 1, draResourceNameSelector(extendedResource))
+
+		By("Creating a pod consuming the base DeviceClass ResourceClaim")
+		createDRAPod(ctx, podName, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName)})
+
+		By("Waiting for the pod to be Running and claim allocated")
+		runningPod := waitForPodRunningOnNode(ctx, podName, node)
+		waitForDRAClaimAllocated(ctx, claimName, 1)
+
+		By("Verifying the selected device belongs to resource " + extendedResource)
+		expectDRADevicesInPod(ctx, runningPod, claimName, extendedResource)
+	})
+
+	It("should not schedule a pod when a CEL selector matches no available devices", func(ctx SpecContext) {
+		claimName := "test-dra-unmatched-cel-claim"
+		podName := "test-dra-unmatched-cel-pod"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName)
+		})
+
+		By("Creating a ResourceClaim referencing base DeviceClass with an unmatchable CEL selector")
+		createDRAClaim(ctx, claimName, consts.DRADriverBaseDeviceClassName, 1, draResourceNameSelector("nonexistent-resource"))
+
+		By("Creating a pod consuming the unmatchable ResourceClaim")
+		createDRAPod(ctx, podName, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName)})
+
+		By("Verifying the claim remains unallocated and pod remains Pending")
+		expectDRAPodUnschedulable(ctx, podName, claimName)
+	})
+
+	It("should not schedule a pod when DRA resource requests exceed available capacity", func(ctx SpecContext) {
+		claimName := "test-dra-overcommit-claim"
+		podName := "test-dra-overcommit-pod"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName)
+		})
+
+		By("Creating a ResourceClaim requesting more devices than available on the node")
+		createDRAClaim(ctx, claimName, deviceClassName, int64(updatedVFs+1), "")
+
+		By("Creating a pod referencing the overcommitted ResourceClaim")
+		createDRAPod(ctx, podName, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName)})
+
+		By("Verifying the claim remains unallocated and pod remains Pending")
+		expectDRAPodUnschedulable(ctx, podName, claimName)
+	})
+
+	It("should allocate multiple SR-IOV devices to a single pod via ResourceClaim", func(ctx SpecContext) {
+		claimName := "test-dra-multi-device-claim"
+		podName := "test-dra-multi-device-pod"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName)
+		})
+
+		By("Creating a ResourceClaim requesting 2 devices for DeviceClass " + deviceClassName)
+		createDRAClaim(ctx, claimName, deviceClassName, 2, "")
+
+		By("Creating a pod consuming the multi-device ResourceClaim")
+		createdPod := createDRAPod(ctx, podName, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName)})
+
+		By("Waiting for the ResourceClaim to allocate 2 distinct devices")
+		waitForDRAClaimAllocated(ctx, claimName, 2)
+
+		By("Verifying the ResourceClaim is reserved for the pod")
+		waitForDRAClaimReservedFor(ctx, claimName, createdPod.UID)
+
+		By("Waiting for the pod to be Running on " + node)
+		runningPod := waitForPodRunningOnNode(ctx, podName, node)
+
+		By("Verifying both allocated devices are exposed to the pod")
+		expectDRADevicesInPod(ctx, runningPod, claimName, extendedResource)
+	})
+
+	It("should enforce capacity limits across multiple pods sharing the resource pool", func(ctx SpecContext) {
+		claimName1 := "test-dra-shared-claim-1"
+		claimName2 := "test-dra-shared-claim-2"
+		claimName3 := "test-dra-shared-claim-3"
+		podName1 := "test-dra-shared-pod-1"
+		podName2 := "test-dra-shared-pod-2"
+		podName3 := "test-dra-shared-pod-3"
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePodSync(cleanupCtx, namespaces.Test, podName3)
+			deletePodSync(cleanupCtx, namespaces.Test, podName2)
+			deletePodSync(cleanupCtx, namespaces.Test, podName1)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName3)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName2)
+			deleteClaimSync(cleanupCtx, namespaces.Test, claimName1)
+		})
+
+		// The first two pods split the whole pool, leaving nothing for the third one.
+		firstCount := updatedVFs / 2
+		secondCount := updatedVFs - firstCount
+
+		By(fmt.Sprintf("Creating first pod claiming %d devices", firstCount))
+		createDRAClaim(ctx, claimName1, deviceClassName, int64(firstCount), "")
+		createDRAPod(ctx, podName1, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName1)})
+		waitForPodRunningOnNode(ctx, podName1, node)
+
+		By(fmt.Sprintf("Creating second pod claiming %d devices (exhausting all %d node VFs)", secondCount, updatedVFs))
+		createDRAClaim(ctx, claimName2, deviceClassName, int64(secondCount), "")
+		createDRAPod(ctx, podName2, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName2)})
+		waitForPodRunningOnNode(ctx, podName2, node)
+
+		By("Creating third pod requesting 1 device when no capacity is left")
+		createDRAClaim(ctx, claimName3, deviceClassName, 1, "")
+		createDRAPod(ctx, podName3, node, corev1.PodResourceClaim{ResourceClaimName: ptr.To(claimName3)})
+		expectDRAPodUnschedulable(ctx, podName3, claimName3)
+
+		// Keep the first claim: its devices must be released by the pod going away.
+		By("Deleting first pod to free up capacity for the pending third pod")
+		deletePodSync(ctx, namespaces.Test, podName1)
+
+		By("Verifying third pod is now allocated and transitions to Running")
+		waitForDRAClaimAllocated(ctx, claimName3, 1)
+		waitForPodRunningOnNode(ctx, podName3, node)
+	})
+
+	// Note: End-to-end pod network attachment with data-plane verification (traffic/ping on net1)
+	// will be added once Multus CNI DRA support (k8snetworkplumbingwg/multus-cni#1455) is available in CI.
+
+	It("should clean up DeviceAttributes and DeviceClass when a policy is deleted while DRA remains active", func(ctx SpecContext) {
+		const secondPolicyVFs = 2
+		var secondNode string
+		var secondNic *sriovv1.InterfaceExt
+		for _, nName := range sriovInfos.Nodes {
+			devs, err := sriovInfos.FindSriovDevices(nName)
+			Expect(err).ToNot(HaveOccurred(), "finding SR-IOV devices on node %s", nName)
+			for _, d := range devs {
+				if d.TotalVfs < secondPolicyVFs {
+					continue
+				}
+				if nName != node || d.PciAddress != nic.PciAddress {
+					secondNode = nName
+					secondNic = d
+					break
+				}
+			}
+			if secondNic != nil {
+				break
+			}
+		}
+		if secondNic == nil {
+			Skip(fmt.Sprintf("Test requires a second SR-IOV device supporting at least %d VFs", secondPolicyVFs))
+		}
+
+		secondResource := "seconddraresource"
+		secondDCName := sriovv1.ResourceNameToDeviceClassName(secondResource)
+		secondAttrsName := secondDCName + "-attrs"
+
+		By("Creating secondary policy for resource " + secondResource + " on " + secondNode)
+		created, err := network.CreateSriovPolicy(clients, "test-dra-second-policy-", operatorNamespace, secondNic.Name, secondNode, secondPolicyVFs, secondResource, "netdevice")
+		Expect(err).ToNot(HaveOccurred())
+		secondPolicyName := created.Name
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deletePolicySync(cleanupCtx, secondPolicyName)
+			WaitForSRIOVStable()
+		})
+
+		WaitForSRIOVStable()
+
+		By("Waiting for secondary DeviceAttributes " + secondAttrsName + " to be created")
+		Eventually(ctx, func(g Gomega) {
+			attrs := &sriovdrav1alpha1.DeviceAttributes{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{
+				Namespace: operatorNamespace,
+				Name:      secondAttrsName,
+			}, attrs)
+			g.Expect(err).ToNot(HaveOccurred())
+		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+		By("Waiting for secondary DeviceClass " + secondDCName + " to be created")
+		Eventually(ctx, func(g Gomega) {
+			dc := &resourceapi.DeviceClass{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{Name: secondDCName}, dc)
+			g.Expect(err).ToNot(HaveOccurred())
+		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+		By("Deleting secondary policy " + secondPolicyName + " while DRA is still active")
+		deletePolicySync(ctx, secondPolicyName)
+		WaitForSRIOVStable()
+
+		By("Waiting for secondary DeviceAttributes " + secondAttrsName + " to be removed")
+		Eventually(ctx, func(g Gomega) {
+			attrs := &sriovdrav1alpha1.DeviceAttributes{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{
+				Namespace: operatorNamespace,
+				Name:      secondAttrsName,
+			}, attrs)
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "DeviceAttributes %s still exists", secondAttrsName)
+		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+		By("Waiting for secondary DeviceClass " + secondDCName + " to be removed")
+		Eventually(ctx, func(g Gomega) {
+			dc := &resourceapi.DeviceClass{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{Name: secondDCName}, dc)
+			g.Expect(errors.IsNotFound(err)).To(BeTrue(), "DeviceClass %s still exists", secondDCName)
+		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+		By("Verifying primary policy's DeviceClass " + deviceClassName + " is still present")
+		primaryDC := &resourceapi.DeviceClass{}
+		Expect(clients.Get(ctx, runtimeclient.ObjectKey{Name: deviceClassName}, primaryDC)).To(Succeed())
+
+		By("Verifying primary policy's DeviceAttributes " + deviceAttrsName + " is still present")
+		primaryAttrs := &sriovdrav1alpha1.DeviceAttributes{}
+		Expect(clients.Get(ctx, runtimeclient.ObjectKey{
+			Namespace: operatorNamespace,
+			Name:      deviceAttrsName,
+		}, primaryAttrs)).To(Succeed())
 	})
 
 	It("should expose VFIO device nodes to an unprivileged extended-resource consumer", func(ctx SpecContext) {
@@ -706,6 +1381,16 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 
 		waitForDRAProviderSwitch(ctx, false)
 
+		By("Waiting for the DRA driver's ResourceSlices to be withdrawn")
+		Eventually(ctx, func(g Gomega) {
+			list := &resourceapi.ResourceSliceList{}
+			g.Expect(clients.List(ctx, list)).To(Succeed())
+			for i := range list.Items {
+				g.Expect(list.Items[i].Spec.Driver).ToNot(Equal(consts.DRADriverBaseDeviceClassName),
+					"ResourceSlice %s is still published", list.Items[i].Name)
+			}
+		}).WithTimeout(waitingTime).WithPolling(5 * time.Second).Should(Succeed())
+
 		By("Recreating the policy in device-plugin mode")
 		_, err := network.CreateSriovPolicy(clients, "test-device-plugin-policy-", operatorNamespace, nic.Name, node, initialVFs, draResourceName, "netdevice")
 		Expect(err).ToNot(HaveOccurred())
@@ -736,6 +1421,27 @@ var _ = Describe("[sriov] DRA", Ordered, func() {
 				}
 			}
 			g.Expect(running).To(BeNumerically(">", 0))
+		}).WithTimeout(waitingTime).WithPolling(5 * time.Second).Should(Succeed())
+
+		By("Waiting for device-plugin-config ConfigMap to be restored")
+		Eventually(ctx, func(g Gomega) {
+			cfg := &corev1.ConfigMap{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{
+				Namespace: operatorNamespace,
+				Name:      consts.ConfigMapName,
+			}, cfg)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(cfg.Data).To(HaveKeyWithValue(node, ContainSubstring(draResourceName)))
+		}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+		By("Waiting for node " + node + " to advertise allocatable " + extendedResource)
+		Eventually(ctx, func(g Gomega) {
+			n := &corev1.Node{}
+			err := clients.Get(ctx, runtimeclient.ObjectKey{Name: node}, n)
+			g.Expect(err).ToNot(HaveOccurred())
+			qty, exists := n.Status.Allocatable[corev1.ResourceName(extendedResource)]
+			g.Expect(exists).To(BeTrue(), "Node %s does not advertise %s", node, extendedResource)
+			g.Expect(qty.Value()).To(BeNumerically("==", initialVFs))
 		}).WithTimeout(waitingTime).WithPolling(5 * time.Second).Should(Succeed())
 	})
 })
