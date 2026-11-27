@@ -498,12 +498,18 @@ func validatePfNames(current *sriovnetworkv1.SriovNetworkNodePolicy, previous *s
 					return err
 				}
 
+				// A PF name specified without a VF range selects all the VFs on
+				// the PF. ParseVfRange reports such a selector with a negative
+				// range, so it overlaps with any range configured on the same PF.
+				if curRngSt < 0 || preRngSt < 0 {
+					return fmt.Errorf("VF index range in %s is overlapped with existing policy %s", curPf, previous.GetName())
+				}
+
 				// Check for overlapping ranges
 				if curRngEnd < preRngSt || curRngSt > preRngEnd {
 					return nil
-				} else {
-					return fmt.Errorf("VF index range in %s is overlapped with existing policy %s", curPf, previous.GetName())
 				}
+				return fmt.Errorf("VF index range in %s is overlapped with existing policy %s", curPf, previous.GetName())
 			}
 		}
 	}
